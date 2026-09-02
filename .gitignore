@@ -1,0 +1,12 @@
+# Measured data — personal, machine-specific, never shared
+token-history.csv
+token-titles.tsv
+token-meta.tsv
+token-nicks.tsv
+token-projmap.tsv
+token-occupancy.state
+token-retune.state
+token-*.log
+checkpoints/
+*.bak
+*.bak-*
