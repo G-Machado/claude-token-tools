@@ -9,7 +9,9 @@ machine at once, and two **hooks** that speak up at the two moments where money 
 lost — a prompt cycle that pulled in far more than it needed, and a big session resumed after
 its prompt cache expired.
 
-Everything is bash + awk reading local files. **No API calls, no model tokens, no network.**
+Everything is bash + awk reading local files. **No API calls and no model tokens** — every
+number comes off disk. The only network call in the whole repo is an optional once-a-day
+version check, which downloads nothing without a keypress and can be turned off.
 
 ---
 

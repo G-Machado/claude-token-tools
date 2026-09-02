@@ -10,7 +10,8 @@
 - Optional: **mintty** for the styled desktop window, and `clip.exe` / `pbcopy` / `xclip`
   for the `y` key. Both degrade quietly when missing.
 
-Nothing here talks to the network or to the API. Every number comes off disk.
+Every number comes off disk — nothing here talks to the Claude API. The one network call in
+the repo is the optional version check described under *Staying up to date* below.
 
 ## 1. Run the installer
 
