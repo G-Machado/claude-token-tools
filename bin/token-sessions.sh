@@ -41,6 +41,9 @@
 #   token-sessions.sh --classic       the older rounded frame and softer palette
 #   token-sessions.sh --ascii         no box-drawing or block glyphs
 #   token-sessions.sh --no-color      plain text
+#   token-sessions.sh --version       what this copy is, and what is available
+#   token-sessions.sh --update        pull and reinstall from the clone
+#   token-sessions.sh --no-update-check   skip the once-a-day version check
 #   token-sessions.sh --help          this block
 #
 # The keys for --watch / --browse are printed at the end of this block, from the
@@ -73,6 +76,14 @@
 # prompt cache rings the terminal once, provided it is big enough for the lapse
 # to cost more than acting on it would. One ring per session per lapse, and it
 # re-arms when that window goes warm again. TOKEN_BELL=0 silences it for good.
+#
+# The one network call: once a day, detached, with a 4-second timeout, this asks
+# GitHub what the latest released version is and writes the answer to
+# token-version.state. If it is newer than this copy the pane offers it in the
+# footer - u takes it (git pull in the clone install.sh recorded, then that
+# installer again), U dismisses it for the run. Nothing is ever downloaded
+# without that keypress, every failure is silent, and TOKEN_UPDATE_CHECK=0 turns
+# the whole thing off. A one-shot run has no keys, so it only says so.
 #
 # There is no auto-renewal here and deliberately never will be. A print-mode
 # ping shares only ~18.7k of system prompt with an interactive session, so it
@@ -157,6 +168,20 @@ CL="$HOME/.claude"
 HIST="$CL/token-history.csv"
 TITLES="$CL/token-titles.tsv"
 META="$CL/token-meta.tsv"                # sid -> mtime, last activity, cwd
+# What version this copy is, where to ask whether there is a newer one, and
+# where the answer is remembered between runs. The check is the only thing in
+# this program that touches the network, and it is built so that it cannot cost
+# you anything you did not ask for: it runs detached with a 4-second timeout, it
+# runs at most once a day, it writes one small file, and every failure - no
+# curl, no network, a rate-limited CDN, a garbage answer - is silent and leaves
+# the previous answer in place. TOKEN_UPDATE_CHECK=0 turns it off for good.
+TSVER="1.0.0"
+UPDREPO="${TOKEN_UPDATE_REPO:-REPO_SLUG}"
+UPDBRANCH="${TOKEN_UPDATE_BRANCH:-master}"
+UPDSTATE="$CL/token-version.state"       # last check epoch <TAB> version seen
+SRCFILE="$CL/token-tools-src"            # the clone install.sh came from
+UPDCHECK="${TOKEN_UPDATE_CHECK:-1}"      # 0 disables the check entirely
+UPDEVERY="${TOKEN_UPDATE_EVERY:-86400}"  # seconds between checks
 NICKS="$CL/token-nicks.tsv"              # sid -> re-roll variant, and the name
                                          # typed with /n if there is one
 PROJMAP="$CL/token-projmap.tsv"          # short sid -> project label, for the analytics tab
@@ -490,6 +515,7 @@ t|analytics: the whole history|analytics
 w|analytics: daily or weekly buckets|
 a|include closed sessions|all
 c|compact rows, drop the prompt titles|compact
+u U|take an offered update, or dismiss the offer|
 b|mute or unmute the lapse bell|
 r|collect now rather than on the clock|refresh
 esc|back one step|back
@@ -508,6 +534,7 @@ show_help() {
 
 SHOW_ALL=0; WATCH=0; EVERY=60; ASCII=0; COLOR=1; SEL=0; COMPACT=0
 CKLIST=0; CKPROJ=""; ANALYTICS=0; BADARG=""; BUCKET=0
+VERSIONQ=0; UPDATEQ=0
 THEME="${TOKEN_THEME:-hud}"          # hud or classic; --classic switches back
 [ -n "${NO_COLOR:-}" ] && COLOR=0
 
@@ -528,6 +555,11 @@ for a in "$@"; do
     --analytics|--history|-t) ANALYTICS=1 ;;
     --weekly) BUCKET=1 ;; --daily) BUCKET=0 ;;
     --classic) THEME=classic ;; --hud) THEME=hud ;;
+    # Both exit rather than drawing anything: they are questions about the
+    # program, not about the sessions.
+    --version|-V) VERSIONQ=1 ;;
+    --update) UPDATEQ=1 ;;
+    --no-update-check) UPDCHECK=0 ;;
     --checkpoints|--parked) CKLIST=1; want_proj=1 ;;
     # The two view controls, as flags as well as keys, so a shortcut or a script
     # can open straight on the question it is asking.
@@ -1207,7 +1239,8 @@ render() {
     -v OLL_PROMPT="$OLL_PROMPT" -v OLL_EVAL="$OLL_EVAL" \
     -v OLL_CALLS="$OLL_CALLS" -v CL_OUT_7D="$CL_OUT_7D" \
     -v hud="$HUD" -v filt="${FILTER:-}" -v srtname="${SORTNAME:-}" \
-    -v keytab="$KEYTAB" -v flash="${FLASH:-}" -v ollrows="$OLL_SESSIONS" '
+    -v keytab="$KEYTAB" -v flash="${FLASH:-}" -v ollrows="$OLL_SESSIONS" \
+    -v upd="${UPDNEW:-}" -v tsver="$TSVER" '
   function rep(s, n,   i, o) { for (i = 0; i < n; i++) o = o s; return o }
   # Letter-spaced, for the panel titles only. A readout names itself with
   # room around its letters; a paragraph does not. length() stays honest
@@ -1806,6 +1839,11 @@ render() {
         if (!bell) kline = kline sprintf("%sbell off%s   ", D, R)
         # An action you just took reports back where you are looking, not in a
         # log you would have to go and find.
+        # An update sits to the LEFT of the key strip and stays there until it
+        # is taken or dismissed, because unlike a flash it is not reporting
+        # something you just did - it is asking for a decision.
+        if (upd != "") kline = sprintf("%s%s update %s available%s %su takes it, U dismisses%s   %s",
+                                       YEL, arrow, upd, R, D, R, kline)
         if (flash != "") kline = sprintf("%s%s%s   %s", GRN, flash, R, kline)
         printf "\n  %s\n", kline } }
     else printf "\n" }
@@ -3288,6 +3326,81 @@ delete_log() {
 # What this deliberately does NOT touch is sessions/<pid>.json: the CLI's name
 # for a session is the CLI's business, and a tool that reads state has no
 # business writing into the state it reads.
+# Is there a newer release, and would you like it. Three small functions, kept
+# apart because they fail in different ways and only the first one can hang.
+#
+# The check is DETACHED on purpose. A pane that blocks for four seconds on a
+# flaky network at startup is worse than a pane that never mentions updates at
+# all, so nothing here is ever waited on: the fetch writes a file, and whatever
+# is in that file is what the next frame reports. The first run of a day
+# therefore says nothing, and the run after it says what the fetch found. That
+# is the right trade for a background courtesy.
+version_check() {
+  [ "$UPDCHECK" = 1 ] || return 0
+  [ -n "$UPDREPO" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local now last=0
+  now=$(now_s)
+  [ -f "$UPDSTATE" ] && last=$(awk -F'\t' 'END { print $1 + 0 }' "$UPDSTATE" 2>/dev/null)
+  [ $(( now - last )) -ge "$UPDEVERY" ] || return 0
+  # Stamped BEFORE the fetch, so a network that hangs every time still only
+  # costs one attempt a day rather than one per launch.
+  printf '%s\t%s\n' "$now" "$(remote_version_cached)" > "$UPDSTATE" 2>/dev/null
+  {
+    v=$(curl -fsS -m 4 \
+      "https://raw.githubusercontent.com/$UPDREPO/$UPDBRANCH/VERSION" 2>/dev/null \
+      | tr -d ' \r\n')
+    # Only a plausible version replaces what is on disk. A captive-portal login
+    # page is a 200 with a body, and without this it would become the version.
+    case "$v" in
+      [0-9]*.[0-9]*.[0-9]*) printf '%s\t%s\n' "$(now_s)" "$v" > "$UPDSTATE" 2>/dev/null ;;
+    esac
+  } >/dev/null 2>&1 &
+}
+
+remote_version_cached() {
+  [ -f "$UPDSTATE" ] || return 0
+  awk -F'\t' 'END { print $2 }' "$UPDSTATE" 2>/dev/null
+}
+
+# The remote version if it is newer than this copy, and nothing otherwise.
+# Compared field by field as numbers - a string compare calls 1.10.0 older than
+# 1.9.0, which is exactly the release where you would want to hear about it.
+update_available() {
+  local r; r=$(remote_version_cached)
+  [ -n "$r" ] || return 1
+  [ "$r" != "$TSVER" ] || return 1
+  awk -v a="$TSVER" -v b="$r" '
+    BEGIN {
+      na = split(a, A, "."); nb = split(b, B, ".")
+      n = (na > nb) ? na : nb
+      for (i = 1; i <= n; i++) {
+        x = A[i] + 0; y = B[i] + 0
+        if (y > x) { print b; exit }
+        if (x > y) exit } }'
+}
+
+# Updating is a git pull in the clone plus a re-run of its installer, which is
+# only possible if we know where that clone is - install.sh records it. Without
+# that file there is nothing to pull, so this says what to type instead of
+# guessing at a path and failing halfway through an overwrite.
+do_update() {
+  local src out
+  [ -f "$SRCFILE" ] && src=$(head -1 "$SRCFILE" 2>/dev/null)
+  if [ -z "${src:-}" ] || [ ! -d "$src/.git" ]; then
+    FLASH="no clone recorded - update by hand: git pull, then ./install.sh"
+    return 0
+  fi
+  out=$(git -C "$src" pull --ff-only 2>&1) || {
+    FLASH="pull failed in $src - $(printf '%s' "$out" | tail -1)"; return 0; }
+  if bash "$src/install.sh" >/dev/null 2>&1; then
+    FLASH="updated - restart this pane to run the new version"
+    : > "$UPDSTATE"
+  else
+    FLASH="pulled, but install.sh failed - run it by hand in $src"
+  fi
+}
+
 # One writer for token-nicks.tsv, so the file can only ever hold one shape:
 #
 #   sid <TAB> variant <TAB> typed-name
@@ -3489,6 +3602,23 @@ term_cols() {
 # the height of the window.
 if [ "$ANALYTICS" = 1 ] && [ "$WATCH" = 0 ]; then term_cols; ROWS=99999; analytics; exit 0; fi
 
+# Asked and answered before anything is collected - neither question needs a
+# snapshot, and --update in particular should not spend a second reading the
+# disk before it replaces the very script doing the reading.
+if [ "$VERSIONQ" = 1 ]; then
+  printf 'token-sessions.sh %s\n' "$TSVER"
+  [ -n "$UPDREPO" ] && printf 'updates: https://github.com/%s\n' "$UPDREPO"
+  r=$(remote_version_cached)
+  [ -n "$r" ] && printf 'latest seen: %s\n' "$r"
+  exit 0
+fi
+if [ "$UPDATEQ" = 1 ]; then
+  FLASH=""
+  do_update
+  printf '%s\n' "$FLASH"
+  exit 0
+fi
+
 if [ "$WATCH" = 1 ]; then
   ESC=$(printf '\033')
   SNAP=$(mktemp 2>/dev/null) || SNAP="$CL/.token-sessions.snap.$$"
@@ -3508,6 +3638,10 @@ if [ "$WATCH" = 1 ]; then
   # and answers the same keys, so t and esc cost nothing to hold.
   DEADLINE=0; N=0; SECS=0; COLS=92; QUIT=0; VIEW=$ANALYTICS; HELPV="${TOKEN_KEYS:-0}"; DELCONF=""
   NUMBUF=""; FLASH=""; APAGE=1
+  # Fired once at startup and never waited on. What it finds is picked up on a
+  # later frame, or on a later day - see version_check for why that is the point.
+  version_check
+  UPDNEW=$(update_available); UPDDISMISS=0
   # TICK is the animation frame, ANYRUN whether anything is worth animating for.
   # Both are cheap: TICK is an increment, ANYRUN one pass over the snapshot that
   # was just written, so neither adds a disk read.
@@ -3686,6 +3820,11 @@ if [ "$WATCH" = 1 ]; then
         # Muting re-primes rather than just going quiet, so unmuting later does
         # not immediately ring for every window that lapsed while it was off.
         b)          BELL=$((1 - BELL)); BELL_PRIMED=0; RUNG=() ;;
+        # Both keys are no-ops when nothing is offered, so neither can surprise
+        # you by acting on a stale banner.
+        u)          [ -n "${UPDNEW:-}" ] && { VIEW=0; do_update; UPDNEW=""; UPDDISMISS=1; } ;;
+        U)          [ -n "${UPDNEW:-}" ] && { VIEW=0; UPDNEW=""; UPDDISMISS=1
+                      FLASH="update dismissed for now"; } ;;
         # Arms the fail-safe on the selected row. Takes effect on the next
         # collect, which is also when it could first fire.
         c)          COMPACT=$((1 - COMPACT)) ;;
@@ -3695,6 +3834,10 @@ if [ "$WATCH" = 1 ]; then
       GOT=1; WAIT=0.002
     done
     [ "$QUIT" = 1 ] && break
+    # The banner follows the state file rather than a variable set at startup,
+    # so a fetch that lands ten seconds into the session still gets seen. U
+    # blanks it for this run, and this must not undo that.
+    [ "$UPDDISMISS" = 0 ] && UPDNEW=$(update_available)
     # Push the countdown out, but never past a refresh the key itself asked for.
     [ "$GOT" = 1 ] && [ "$DEADLINE" != 0 ] && DEADLINE=$(( $(now_s) + RATE ))
   done
@@ -3702,9 +3845,18 @@ else
   SNAP=$(mktemp 2>/dev/null) || SNAP="$CL/.token-sessions.snap.$$"
   VSNAP="$SNAP.view"; PGFILE="$SNAP.pages"
   trap 'rm -f "$SNAP" "$VSNAP" "$PGFILE"' EXIT
+  version_check
   snapshot > "$SNAP"
   arrange
   term_cols
   SECS=0
+  UPDNEW=""; UPDDISMISS=0
   render "$VSNAP" "$SEL"
+  # A one-shot has no keys, so it can only say where the update is. The pane is
+  # where it can be taken, which is what the second line points at.
+  upd=$(update_available)
+  if [ -n "$upd" ]; then
+    printf '\n  %sversion %s is available%s  you have %s\n' "$C_YEL" "$upd" "$C_R" "$TSVER"
+    printf '  %stake it with u in --watch, or git pull in the clone%s\n' "$C_DIM" "$C_R"
+  fi
 fi

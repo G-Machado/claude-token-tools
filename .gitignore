@@ -5,6 +5,8 @@ token-meta.tsv
 token-nicks.tsv
 token-projmap.tsv
 token-occupancy.state
+token-version.state
+token-tools-src
 token-retune.state
 token-*.log
 checkpoints/

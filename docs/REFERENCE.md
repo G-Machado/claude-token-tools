@@ -22,8 +22,48 @@ token-sessions.sh --checkpoints [proj]  what is parked, newest first ("all" for 
 token-sessions.sh --classic           the older rounded frame and softer palette
 token-sessions.sh --ascii             no box-drawing or block glyphs
 token-sessions.sh --no-color          plain text
+token-sessions.sh --version           what this copy is, and what is available
+token-sessions.sh --update            pull and reinstall from the recorded clone
+token-sessions.sh --no-update-check   skip the once-a-day version check
 token-sessions.sh --help              the header block, plus the key table
 ```
+
+### The update check
+
+The pane asks GitHub once a day what the latest released `VERSION` is. If it is newer than the
+copy you are running, the footer offers it:
+
+```
+▸ update 1.1.0 available  u takes it, U dismisses
+```
+
+`u` runs `git pull --ff-only` in the clone `install.sh` recorded, then that installer again.
+`U` dismisses the offer for the run. A one-shot run has no keys, so it prints the notice and
+points at where to take it.
+
+How it is built, because a version check is an easy thing to get obnoxiously wrong:
+
+- **Detached, never waited on.** A pane that blocks for four seconds on a flaky network at
+  startup is worse than one that never mentions updates. The fetch writes a file; whatever is in
+  that file is what the next frame reports. So the first run of a day says nothing and the run
+  after it says what was found.
+- **Once a day**, and the timestamp is written *before* the fetch, so a network that hangs every
+  time still costs one attempt a day rather than one per launch.
+- **4-second timeout, every failure silent.** No curl, no network, a rate-limited CDN — the
+  previous answer stays in place.
+- **Only a plausible version is stored.** A captive-portal login page is a 200 with a body, and
+  without a sanity check it would become "the latest version".
+- **Compared numerically**, field by field. A string compare calls `1.10.0` older than `1.9.0`,
+  which is exactly the release you would want to hear about.
+- **Nothing downloads without your keypress**, and `TOKEN_UPDATE_CHECK=0` turns the whole thing
+  off for good.
+
+| var | default | means |
+|---|---|---|
+| `TOKEN_UPDATE_CHECK` | 1 | `0` disables the check entirely |
+| `TOKEN_UPDATE_EVERY` | 86400 | seconds between checks |
+| `TOKEN_UPDATE_REPO` | this repo | `owner/name` to check against |
+| `TOKEN_UPDATE_BRANCH` | `master` | branch the `VERSION` file is read from |
 
 ### Keys in `--watch` / `--browse`
 
@@ -34,6 +74,7 @@ token-sessions.sh --help              the header block, plus the key table
 | `g` `G` | first row / last row |
 | `/` | filter by name, project, prompt or path |
 | `/n NAME` | name the selected row yourself; bare `/n` undoes it |
+| `u` `U` | take an offered update, or dismiss the offer |
 | `s` | re-order: lapse, context, cost, active, project |
 | `d` | expand the selected row into the full panel |
 | `y` | copy `claude -r <id>` to the clipboard |
@@ -225,6 +266,8 @@ and gitignored.
 | `token-titles.tsv` | the pane | sid → title cache; a first turn never changes, so it is extracted once |
 | `token-meta.tsv` | the pane | sid → mtime, last activity, cwd |
 | `token-nicks.tsv` | the pane | sid → re-roll variant, and any name typed with `/n` |
+| `token-version.state` | the pane | last update check: epoch, and the version seen |
+| `token-tools-src` | `install.sh` | the clone to pull from when you press `u` |
 | `token-projmap.tsv` | the pane | short sid → project label, for the analytics tab |
 | `token-occupancy.state` | `token-cycles.sh` | context occupancy between runs |
 | `token-gap-warn.log` | the gap hook | one row per firing, and which case it was |

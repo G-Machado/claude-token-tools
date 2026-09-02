@@ -52,6 +52,15 @@ if [ "$CMDS" = 1 ]; then
   for f in "$SRC"/commands/*.md; do place "$f" "$DEST/commands/$(basename "$f")"; done
 fi
 
+# Where this clone lives, so the pane can offer an update and take it: u runs a
+# pull here and then this installer again. Recorded on every install so moving
+# the clone fixes itself the next time you run it.
+if [ "$DRY" = 0 ]; then
+  printf '%s
+' "$SRC" > "$DEST/token-tools-src"
+  echo "source  -> $DEST/token-tools-src"
+fi
+
 cat <<'WIRING'
 
 --------------------------------------------------------------------

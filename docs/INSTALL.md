@@ -117,6 +117,24 @@ The tools measure; `docs/COST-MODEL.md` is the policy they measure *against* —
 thresholds, the budget tiers, and where each number came from. Copy the parts you want into
 your own `~/.claude/CLAUDE.md` so the model follows the same rules the hooks enforce.
 
+## Staying up to date
+
+`install.sh` records the clone it ran from in `~/.claude/token-tools-src`. The pane checks once
+a day whether a newer `VERSION` has been released and offers it in the footer; `u` pulls and
+reinstalls, `U` dismisses. From a shell:
+
+```sh
+bash ~/.claude/token-sessions.sh --version   # this copy, and the latest seen
+bash ~/.claude/token-sessions.sh --update    # pull and reinstall
+```
+
+The check is detached, capped at one attempt a day, silent on every failure, and downloads
+nothing without a keypress. `TOKEN_UPDATE_CHECK=0` turns it off; the details are in
+[REFERENCE.md](REFERENCE.md#the-update-check).
+
+If you installed with `--link`, `u` still pulls, and the symlinks pick the new version up on
+the next launch.
+
 ## Uninstall
 
 ```sh

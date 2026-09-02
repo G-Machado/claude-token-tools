@@ -212,6 +212,19 @@ export TOKEN_PRICE_IN=5            # $/MTok input for your model
 The full list is in [REFERENCE.md](REFERENCE.md); the derivations are in
 [strategy-refactor.md](strategy-refactor.md) and [workflow-debt.md](workflow-debt.md).
 
+## Keeping it current
+
+Once a day the pane asks GitHub whether a newer version exists. If one does, the footer says so:
+
+```
+> update 1.1.0 available  u takes it, U dismisses
+```
+
+`u` pulls in the clone you installed from and re-runs its installer; `U` drops the offer for the
+run. Nothing downloads without that keypress, the check is detached with a 4-second timeout, and
+every failure is silent — a version check should never be the reason a pane is slow to open.
+`TOKEN_UPDATE_CHECK=0` turns it off; `--version` and `--update` do the same job from a shell.
+
 ## What not to bother trying
 
 Automatic cache renewal. It looks like the obvious fix and it does not work: a `claude -p`

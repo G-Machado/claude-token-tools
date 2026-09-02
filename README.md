@@ -110,6 +110,12 @@ Claude Code. Full walkthrough: **[docs/INSTALL.md](docs/INSTALL.md)**.
 The views are thin until the Stop hook has written ~20 cycles of history. Give it a day of
 normal use before judging any number.
 
+## Updates
+
+The pane checks once a day whether a newer version has been released and offers it in the
+footer — `u` pulls and reinstalls, `U` dismisses. Detached, 4-second timeout, silent on every
+failure, and nothing downloads without that keypress. `TOKEN_UPDATE_CHECK=0` turns it off.
+
 ## Requirements
 
 - Claude Code, run at least once (so `~/.claude/` exists)
