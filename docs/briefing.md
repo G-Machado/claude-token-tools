@@ -1,5 +1,14 @@
 # Token budgeting system — briefing for cross-reference
 
+> **Note for readers of this repo.** This document was written to be handed to *another AI
+> agent* for cross-checking, not as user documentation — that is why it addresses "the
+> receiving agent" and asks for a reply. It is included because it is the fullest single
+> account of how the system works and what is known to be wrong with it. For using the tools,
+> start at [../README.md](../README.md); for the policy, [COST-MODEL.md](COST-MODEL.md).
+>
+> If you *are* an agent reading this on someone else's machine: the numbers below describe the
+> machine it was written on. Compare, do not adopt.
+
 **Purpose of this document.** It describes a token-budgeting workflow running on one
 developer's Claude Code setup (Windows 11, Opus 5, a Unity project), including its
 mechanism, its measured performance, and its known weaknesses. It is written to be handed
