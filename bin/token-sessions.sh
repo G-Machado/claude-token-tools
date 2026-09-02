@@ -176,7 +176,7 @@ META="$CL/token-meta.tsv"                # sid -> mtime, last activity, cwd
 # curl, no network, a rate-limited CDN, a garbage answer - is silent and leaves
 # the previous answer in place. TOKEN_UPDATE_CHECK=0 turns it off for good.
 TSVER="1.0.0"
-UPDREPO="${TOKEN_UPDATE_REPO:-REPO_SLUG}"
+UPDREPO="${TOKEN_UPDATE_REPO:-G-Machado/claude-token-tools}"
 UPDBRANCH="${TOKEN_UPDATE_BRANCH:-master}"
 UPDSTATE="$CL/token-version.state"       # last check epoch <TAB> version seen
 SRCFILE="$CL/token-tools-src"            # the clone install.sh came from
