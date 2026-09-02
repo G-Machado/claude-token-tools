@@ -1,0 +1,7 @@
+# Shell scripts must stay LF whatever the platform. A CRLF checkout breaks the
+# shebang line outright ("bad interpreter: /usr/bin/env bash^M") and, worse here,
+# breaks the awk renderers in ways that look like layout bugs rather than line
+# endings. Windows clones with core.autocrlf=true would do exactly that.
+*.sh        text eol=lf
+*.minttyrc  text eol=lf
+*.md        text eol=lf
