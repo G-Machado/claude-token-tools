@@ -63,8 +63,9 @@ Per row: context size, spend so far split green/orange/blue (output / cache writ
 reads), a growth sparkline, an A–F grade, and **minutes of prompt-cache life left**.
 
 Each row also carries a verdict glyph — act now / a cut would pay / nothing to decide — off
-the same ladder the advice line underneath is written from. `--watch` redraws in place and
-takes keys live; `--analytics` opens the history tab (where the spend went, median and p90 per
+the same ladder the advice line underneath is written from. Rows are named from the words the
+session itself used, and `/n build-fix` names one yourself for the windows you live in.
+`--watch` redraws in place and takes keys live; `--analytics` opens the history tab (where the spend went, median and p90 per
 cycle, a 14-day sparkline, breach and gap-rewrite rates, 7d-vs-before with arrows).
 
 It exists because the expensive failure is **cross-session**: 59% of measured gap rewrites had
