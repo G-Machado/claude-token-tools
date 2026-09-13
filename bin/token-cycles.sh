@@ -34,6 +34,13 @@
 # nothing in model tokens - only reading --stats does. Rows carry the measured
 # quantities, never a bucket or a verdict, so retuning a threshold does not
 # invalidate the history; --stats rescores whatever is already on disk.
+#
+# Columns: ts,session,cycle,output,recache,context,fired,held. "held" is
+# renew or park on a cycle this machine started by typing into the session
+# (see token-poke.ps1), empty on a cycle a person asked for. It is column 8
+# and not a letter in "fired" because "fired" is a flag SET that --stats
+# counts breaches from, and a marker there would make every renewal read as
+# a budget breach.
 
 set -u
 
@@ -49,6 +56,52 @@ ARG="${1:-}"
 [ "$ARG" = "--stats" ] && MODE="stats"
 [ "$ARG" = "--retune" ] && MODE="retune"
 [ "$ARG" = "--status" ] && MODE="status"
+
+# A renewal is not a cycle. It resumes a session purely to touch its cache, so
+# letting the hooks fire would put a phantom cycle into token-history.csv - the
+# file every measurement in this toolchain is derived from. The renewer exports
+# this, the forked session inherits it, and both hooks become no-ops for it.
+[ "${TOKEN_RENEWAL:-0}" = 1 ] && exit 0
+
+# Every status line render is handed a JSON payload on stdin, and it carries
+# things nothing else on this machine can see: the account's five-hour and
+# seven-day rate-limit percentages and when they reset, the prompt cache's real
+# expiry rather than one inferred from a timestamp, and the context window's
+# actual size. It arrives only for the session being rendered and is gone the
+# moment this process exits, so each session drops its own copy here and
+# token-sessions.sh reads across the lot.
+#
+# Cheap on purpose: one small write, throttled to once every 3s per session -
+# a status line renders far more often than that. It was 10s until the widget
+# started repainting its context bar from this between collects, which is the
+# one consumer that can tell the difference. Nothing here can fail the status line: every step is optional and
+# the payload is passed through untouched.
+if [ "$MODE" = "status" ] && [ ! -t 0 ]; then
+  SLPAY=$(cat 2>/dev/null || true)
+  case "${SLPAY:-}" in
+    *'"session_id"'*)
+      slsid=$(printf '%s' "$SLPAY" |
+              sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      if [ -n "${slsid:-}" ]; then
+        sldir="$HOME/.claude/session-usage"
+        slf="$sldir/$slsid.json"
+        slnow=$(date +%s 2>/dev/null || echo 0)
+        slold=0
+        if [ -f "$slf" ]; then
+          slold=$(stat -c %Y "$slf" 2>/dev/null || echo 0)
+        else
+          # First write for this session is the rare one, so the prune rides
+          # along with it rather than costing a find every ten seconds.
+          mkdir -p "$sldir" 2>/dev/null
+          find "$sldir" -name '*.json' -mtime +7 -delete 2>/dev/null
+        fi
+        if [ $(( slnow - slold )) -ge 3 ]; then
+          printf '%s' "$SLPAY" > "$slf.$$" 2>/dev/null &&
+            mv -f "$slf.$$" "$slf" 2>/dev/null
+        fi
+      fi ;;
+  esac
+fi
 
 # Tier name -> output budget. A bare number passes through unchanged.
 resolve_budget() {
@@ -97,7 +150,7 @@ if [ "$MODE" = "alert" ] || [ "$MODE" = "stats" ] || [ "$MODE" = "retune" ]; the
   # --stats uses the same number so its rates describe the hook as it actually
   # runs, rather than a tier the hook never applies.
   BUDGET="${TOKEN_ALERT_BUDGET:-20000}"
-  GROWTH="${TOKEN_ALERT_GROWTH:-25000}"
+  GROWTH="${TOKEN_ALERT_GROWTH:-40000}"   # raised from 25k with the display scale
 else
   BUDGET="${TOKEN_BUDGET:-$(resolve_budget "$ARG")}"
   GROWTH="${TOKEN_GROWTH_BUDGET:-$(resolve_growth "$ARG")}"
@@ -528,11 +581,92 @@ if [ "$MODE" = "status" ] && [ -f "$HIST" ]; then
   ' "$HIST" 2>/dev/null)
 fi
 
+# --- held cycles -----------------------------------------------------------
+#
+# A poke is a real cycle - prompt, response, history row, cost - but it is not
+# work. Unflagged, a window held warm overnight shows sixteen cycles of
+# near-zero output and grades as the least productive session on the machine,
+# which is exactly backwards: it was the cheapest thing running.
+#
+# The join is exact rather than fuzzy. token-poke.ps1 writes its row at the
+# moment it types into the session, seconds before that cycle ends and this
+# hook runs, so the newest poke row for this session is either one this hook
+# has already claimed - its timestamp is latched in the state file - or the one
+# that started the cycle now ending. No time window, no guessing, and a poke
+# row can never be claimed by two cycles.
+#
+# Fail-open throughout. This runs at the end of every cycle in every session;
+# if token-poke.log is missing or unreadable the field is empty and nothing
+# else about the row changes.
+PLOG="$HOME/.claude/token-poke.log"
+POKE_TS=""
+POKE_KIND=""
+if [ "$MODE" = "alert" ] && [ -r "$PLOG" ]; then
+  _pk=$(awk -F'\t' -v s="$(printf '%s' "$SESSION_KEY" | cut -c1-8)" '
+          # The last row of a kind this can CLAIM, not the last row outright. A
+          # nudge - or any kind added later - written after a park would other-
+          # wise be picked up here and then discarded by the guard below, taking
+          # the unclaimed park down with it. That is exactly what happened to the
+          # only auto-park that has ever fired: 2026-09-04 18:01, session
+          # 983a3eb8, followed 46 seconds later by a nudge. The held column read
+          # "0 park" across 954 rows while the feature was working correctly.
+          $2 == s && NF >= 4 && ($4 == "renew" || $4 == "park") { t = $1; k = $4 }
+          END { if (t != "") print t " " k }' "$PLOG" 2>/dev/null || true)
+  POKE_TS=${_pk%% *}
+  POKE_KIND=${_pk##* }
+  # Only the two kinds the log can legitimately carry, and nothing with a comma
+  # or a space in it - this string is about to be written into a CSV field and
+  # into a space-separated state file.
+  case "$POKE_KIND" in renew|park) ;; *) POKE_TS=""; POKE_KIND="" ;; esac
+  case "$POKE_TS" in *[!0-9T:-]*) POKE_TS=""; POKE_KIND="" ;; esac
+fi
+
 # --- tally -----------------------------------------------------------------
 
 # Header once, so the CSV is readable by anything that expects one.
 if [ "$MODE" = "alert" ] && [ ! -f "$HIST" ]; then
-  echo "ts,session,cycle,output,recache,context,fired" > "$HIST" 2>/dev/null || true
+  echo "ts,session,cycle,output,recache,context,fired,held,read,reqs" > "$HIST" 2>/dev/null || true
+fi
+# An EMPTY history file is not the same as a missing one, and it used to be
+# treated as one: everything downstream - context, cycles, cost, every grade -
+# is derived from these rows, so a truncated file reads as a machine that has
+# never done any work, silently and with no error anywhere. Seen once, on
+# 2026-09-02, cause unknown.
+#
+# So: a header goes back into an empty file, and a copy of a healthy one is kept
+# daily. The copy costs one stat and, once a day, 34KB - against a month of
+# measurements, which is the only thing here that cannot be recomputed.
+if [ "$MODE" = "alert" ] && [ -f "$HIST" ] && [ ! -s "$HIST" ]; then
+  echo "ts,session,cycle,output,recache,context,fired,held,read,reqs" > "$HIST" 2>/dev/null || true
+  echo "$(date '+%F %T') history was empty - header rewritten; recover from token-history.csv.bak or token-dashboard.html"     >> "$ERRLOG" 2>/dev/null || true
+fi
+# One-time header upgrade. The header is only written when the file is missing
+# or empty, so a history that predates column 8 would otherwise carry a 7-name
+# header over 8-field rows forever. Rewrites line 1 only, in place, and leaves
+# every row untouched; anything that goes wrong leaves the original alone.
+if [ "$MODE" = "alert" ] && [ -s "$HIST" ]; then
+  case "$(head -1 "$HIST" 2>/dev/null)" in
+    ts,session,cycle,output,recache,context,fired|ts,session,cycle,output,recache,context,fired,held)
+      if sed '1s/.*/ts,session,cycle,output,recache,context,fired,held,read,reqs/' "$HIST" \
+           > "$HIST.tmp" 2>/dev/null && [ -s "$HIST.tmp" ]; then
+        mv -f "$HIST.tmp" "$HIST" 2>/dev/null || rm -f "$HIST.tmp" 2>/dev/null
+      else
+        rm -f "$HIST.tmp" 2>/dev/null
+      fi ;;
+  esac
+fi
+if [ "$MODE" = "alert" ] && [ -s "$HIST" ]; then
+  _hb="$HIST.bak"
+  _hn=$(wc -l < "$HIST" 2>/dev/null || echo 0)
+  # Only ever replace the backup with something at least as complete, so one
+  # bad day cannot overwrite a good copy with a stub.
+  if [ "$_hn" -gt 1 ]; then
+    _ob=0
+    [ -f "$_hb" ] && _ob=$(wc -l < "$_hb" 2>/dev/null || echo 0)
+    if [ "$_hn" -ge "$_ob" ] && { [ ! -f "$_hb" ] || [ -z "$(find "$_hb" -mtime -1 2>/dev/null)" ]; }; then
+      cp -f "$HIST" "$_hb" 2>/dev/null || true
+    fi
+  fi
 fi
 
 FLOOR=$(read_floor)
@@ -563,6 +697,7 @@ awk -v budget="$BUDGET" -v gbudget="$GROWTH" -v restart="$RESTART" -v mode="$MOD
     -v cacheleft="$CACHE_LEFT" -v parkctx="${TOKEN_PARK_CROSSOVER:-80000}" \
     -v others="$OTHERS" \
     -v state="$STATE" -v statekey="$SESSION_KEY" \
+    -v poke="$POKE_TS" -v pokekind="$POKE_KIND" \
     -v hist="$HIST" -v now="$(date '+%Y-%m-%d %H:%M')" '
 function commify(n,   _s, _out, _len, _i, _rem) {
   _s = sprintf("%d", n); _out = ""; _len = length(_s)
@@ -604,6 +739,9 @@ function kfmt(v) {
   key = (match($0, /msg_[A-Za-z0-9]+/)) ? substr($0, RSTART, RLENGTH) : "L" NR
   if (key in seen) next
   seen[key] = 1
+  # One deduped usage object is one request - which is all TOKEN_REQS_PER_CYCLE
+  # ever needed and, until now, never had.
+  nq[cycle]++
   _o = _cc = _cr = _it = 0
   if (match($0, /"output_tokens":[0-9]+/))               { s=substr($0,RSTART,RLENGTH); gsub(/[^0-9]/,"",s); _o=s+0 }
   if (match($0, /"cache_creation_input_tokens":[0-9]+/)) { s=substr($0,RSTART,RLENGTH); gsub(/[^0-9]/,"",s); _cc=s+0 }
@@ -633,7 +771,7 @@ END {
   # slots unset; coerce to numbers before they reach any function.
   for (i = 1; i <= cycle; i++) {
     ov = o[i] + 0; cv = c[i] + 0
-    o[i] = ov; c[i] = cv; r[i] = r[i] + 0; q[i] = q[i] + 0
+    o[i] = ov; c[i] = cv; r[i] = r[i] + 0; q[i] = q[i] + 0; nq[i] = nq[i] + 0
     outTotal += ov; newTotal += cv; readTotal += q[i]
     if (cv > maxNew) maxNew = cv
     if (ov > budget) over++
@@ -656,6 +794,13 @@ END {
   # assistant message may still be mid-write, so treat this as a floor.
   if (mode == "alert") {
     ov = o[cycle]; cv = c[cycle]; gv = g[cycle]
+    # Columns 9 and 10. Cache reads are 22% of weighted spend and were the one
+    # term the CSV could not see, so nothing downstream could score history in
+    # cost units at all. Requests are what TOKEN_REQS_PER_CYCLE guesses at 2.3
+    # from a single session; it scales the carry side of every break-even
+    # linearly, which makes it the least-supported number in the model and the
+    # cheapest one to stop guessing at.
+    rdv = q[cycle] + 0; nrv = nq[cycle] + 0
     msg = ""
     if (ov > budget)
       msg = "cycle " cycle " produced " commify(ov) " output tokens vs a " commify(budget) " ceiling - the prompt probably bundled discovery, design and implementation"
@@ -684,10 +829,14 @@ END {
     # session so the rewrite below does not drop them. Third field is the last
     # cycle recorded to history; older two-field lines read back as 0, which is
     # correct for a session that predates the history file.
-    lastband = 0; lastcycle = 0; nk = 0
+    lastband = 0; lastcycle = 0; lastpoke = ""; nk = 0
     while ((getline line < state) > 0) {
       split(line, a, " ")
-      if (a[1] == statekey) { lastband = a[2] + 0; lastcycle = a[3] + 0 }
+      # Fourth field is the timestamp of the newest token-poke.log row this
+      # session has already attributed to a cycle. State lines written before
+      # column 8 existed have no fourth field and read back as "", which is
+      # correct: they predate the poke log entirely.
+      if (a[1] == statekey) { lastband = a[2] + 0; lastcycle = a[3] + 0; lastpoke = (4 in a) ? a[4] : "" }
       else if (line != "")  keep[++nk] = line
     }
     close(state)
@@ -719,6 +868,11 @@ END {
     # One row per cycle. Guarded on the cycle number because a Stop hook that
     # fires twice for the same cycle would otherwise inflate every rate in
     # --stats, and a doubled denominator is not something you can spot later.
+    #
+    # A poke row this session has not claimed yet belongs to the cycle now
+    # ending - the poke is what started it. Empty for an ordinary cycle, and
+    # empty for every cycle when the poke log is absent.
+    held = (poke != "" && poke != lastpoke) ? pokekind : ""
     if (hist != "" && cycle > lastcycle) {
       fired = ""
       if (ov > budget)    fired = fired "o"
@@ -726,13 +880,15 @@ END {
       if (cv > restart)   fired = fired "r"
       if (band > lastband) fired = fired "c"
       if (fired == "") fired = "-"
-      printf "%s,%s,%d,%d,%d,%d,%s\n", now, substr(statekey, 1, 8), cycle, ov, cv, occ, fired >> hist
+      printf "%s,%s,%d,%d,%d,%d,%s,%s,%d,%d\n", now, substr(statekey, 1, 8), cycle, ov, cv, occ, fired, held, rdv, nrv >> hist
       close(hist)
     }
 
-    if (band != lastband || cycle != lastcycle) {
+    # The poke id is latched here whether or not the row above was written, so
+    # a poke can only ever be claimed once even if the history write is skipped.
+    if (band != lastband || cycle != lastcycle || (poke != "" && poke != lastpoke)) {
       for (i = 1; i <= nk; i++) print keep[i] > state
-      print statekey " " band " " cycle > state
+      print statekey " " band " " cycle " " (poke != "" ? poke : lastpoke) > state
       close(state)
     }
 

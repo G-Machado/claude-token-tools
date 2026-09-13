@@ -28,16 +28,31 @@
 #   token-sessions.sh --analytics     history: where the spend went, and whether
 #                                     it is getting better
 #   token-sessions.sh --weekly        analytics in weeks rather than days
+#   token-sessions.sh --exclude-self  drop the cycles that ran in this tooling's
+#                                     own tree (~, .claude, the test rigs) from
+#                                     the history every view reads. Off by
+#                                     default; TOKEN_EXCLUDE_SELF=1 flips that
 #   token-sessions.sh --all           include sessions whose process is gone,
 #                                     newest TOKEN_CLOSED_MAX of them (12)
+#   token-sessions.sh --closed-count N  that page, sized: N closed sessions
+#   token-sessions.sh --closed-from N   starting N back from the newest
 #   token-sessions.sh --compact       one line per session, no titles
 #   token-sessions.sh --sort NAME     lapse (default), context, cost, active or
 #                                     project; s cycles the same list in the pane
 #   token-sessions.sh --filter TEXT   only sessions whose name, project, opening
 #                                     prompt or path contains TEXT
+#   token-sessions.sh --parked --json  every checkpoint on disk as JSON, with
+#                                     the cwd to resume it in and whether its
+#                                     window is still open. No collect - see
+#                                     parked_json. Drives token-parked.ps1.
 #   token-sessions.sh --checkpoints [proj]
 #                                     what is parked, newest first (default: the
 #                                     project in the cwd; "all" for every one)
+#   token-sessions.sh --json          one JSON object: sessions, the derived
+#                                     bands, and the 7d overall. What the
+#                                     desktop widget polls.
+#   token-sessions.sh --json-full     the same, plus every history row. What
+#                                     token-dashboard.sh inlines into the page.
 #   token-sessions.sh --classic       the older rounded frame and softer palette
 #   token-sessions.sh --ascii         no box-drawing or block glyphs
 #   token-sessions.sh --no-color      plain text
@@ -95,11 +110,18 @@
 # cheaper move; the pinger was trying to remove the need to and could not.
 #
 # Row markers:  a moving bar = a turn is running right now (a solid arrow in the
-# one-shot form, which has no second frame to animate into), a hollow arrow =
-# the session touched most recently; a diamond = a /park checkpoint is on disk
-# for this window. While anything is running the pane redraws four times a
-# second and re-reads the disk every ten, so the marker cannot go on moving for
-# a turn that has already finished.
+# one-shot form, which has no second frame to animate into), the same arrow in
+# yellow and never moving = the window is waiting on YOU or has gone quiet
+# mid-turn, a hollow arrow = the session touched most recently; a diamond = a
+# /park checkpoint is on disk for this window. While anything is running the
+# pane redraws four times a second and re-reads the disk every ten, so the
+# marker cannot go on moving for a turn that has already finished.
+#
+# Beside the marker is how long that turn has been in flight. Both come from
+# the status flag the CLI writes into sessions/<pid>.json - what state this
+# window is in and when it entered it - rather than from anything inferred off
+# a transcript, which is what the run state used to be and what kept it wrong.
+# See the run= block in collect() for the measurements behind that.
 #
 # The second glyph on every row is the VERDICT - what to do with that window,
 # off the same ladder the advice underneath is written from. A filled triangle
@@ -164,7 +186,13 @@ export LC_ALL=C
 # lines away from the line that caused it, which is why every comment in here
 # says "the panel" and not "the panel's". Same for the analytics program and
 # frame_blocks. bash -n catches it instantly; nothing else will.
-CL="$HOME/.claude"
+# Overridable for one reason only: the poke chain types into live consoles
+# unattended, and every rail that decides whether it does - the danger zone,
+# the floor, the marks, the backstop - reads its inputs from here. A test
+# that cannot point those at a fixture has to be run against real sessions,
+# which is how this went unverified long enough to fail silently. See
+# tests/poke-l2.sh. Unset in every normal run.
+CL="${TOKEN_CLAUDE_DIR:-$HOME/.claude}"
 HIST="$CL/token-history.csv"
 TITLES="$CL/token-titles.tsv"
 META="$CL/token-meta.tsv"                # sid -> mtime, last activity, cwd
@@ -182,11 +210,36 @@ UPDSTATE="$CL/token-version.state"       # last check epoch <TAB> version seen
 SRCFILE="$CL/token-tools-src"            # the clone install.sh came from
 UPDCHECK="${TOKEN_UPDATE_CHECK:-1}"      # 0 disables the check entirely
 UPDEVERY="${TOKEN_UPDATE_EVERY:-86400}"  # seconds between checks
-NICKS="$CL/token-nicks.tsv"              # sid -> re-roll variant, and the name
+NICKS="$CL/token-nicks.tsv"              # sid -> the name typed for that session
+EXTF="$CL/token-extend.tsv"              # sid -> extension marks allowed, and spent
+# sid -> which account that session is actually spending. Derived, not looked
+# up: a session started before a cswap switch keeps the credentials it opened
+# with, so the global config answers the wrong question. live_usage_rows works
+# it out per payload already - this is that answer kept per session, instead of
+# being collapsed onto one row per account and thrown away.
+ACCTMAP="$CL/token-acct-sids.tsv"        # sid -> account number
+AGCACHE="$CL/token-agents.tsv"            # agent file -> its usage totals, keyed by mtime
+AG_LIVE="${TOKEN_AGENT_LIVE:-120}"       # seconds since the last write that still count as running
+BLOCKD="$CL/token-blocks"                # one marker per blocked session
+CUTD="$CL/token-cut"                     # prompts the block cut, one per session
+POKEF="$CL/token-poke.log"               # one row per prompt this machine typed
+SPAWNF="$CL/token-spawn.tsv"             # pid -> this window was opened by the tooling
+# Three side tables, read ONCE per collect instead of once per session.
+#
+# They are 48, 84 and 47 bytes. The cost was never the reading - it was the
+# fork: pokes_of, ext_lastx, ext_allowed, ext_used and spawned_of were each an
+# awk (and pokes_of a nested `date` on top) spawned inside the per-session
+# loop, so a page of ten closed sessions paid forty-odd process creations to
+# scan a third of a kilobyte. Measured on this machine, pokes_of alone was
+# 9.1s of a 27.9s collect - a third of the whole run, for a 48-byte file.
+#
+# The functions are still there and still correct; they serve the callers
+# OUTSIDE the loop, which run once and want the file as it is on disk.
+declare -A PKC PKM XA XU XX SPW
+RENEWLOG="$CL/token-renew.log"           # one line per renewal, hit or miss
                                          # typed with /n if there is one
 PROJMAP="$CL/token-projmap.tsv"          # short sid -> project label, for the analytics tab
 FSFORKS="$CL/token-failsafe-forks.txt"   # short sids of ping forks, kept out of the history
-NVAR="${TOKEN_NICK_VARIANTS:-6}"         # re-rolls before n comes back to the default
 CLOSED_MAX="${TOKEN_CLOSED_MAX:-12}"     # closed sessions listed by --all; the
                                          # rest are counted in a footer
 CK_STALE="${TOKEN_PARK_STALE:-15}"       # minutes of work AFTER a /park before
@@ -205,7 +258,37 @@ POPUP="${TOKEN_POPUP:-1}"                # desktop notification alongside the be
 TTL="${TOKEN_CACHE_TTL_MIN:-60}"
 CTXMAX="${TOKEN_CTX_FULL_K:-300}"        # context bar full-scale, thousands
 OBUD="${TOKEN_ALERT_BUDGET:-20000}"      # output budget per cycle, for the trend colour
-GBUD="${TOKEN_GROWTH_BUDGET:-25000}"     # growth budget per cycle, for the trend scale
+GBUD="${TOKEN_GROWTH_BUDGET:-40000}"     # growth budget per cycle, for the trend scale
+# Full scale for the DAILY spend sparkline. It used to scale to the tallest
+# bucket in the series, so one 22M day (2026-09-02) flattened every other day
+# onto the bottom two rungs of an eight-rung ramp: the line stopped answering
+# "was this day heavy" and only answered "was this the worst day". A fixed
+# ceiling makes it a budget gauge instead - height is the day against what a
+# day should cost, and anything over it pegs and turns red. Weekly buckets
+# scale to 7x this so the two views mean the same thing. 0 restores the old
+# relative scale.
+DAYCAP="${TOKEN_DAY_CAP:-3500000}"       # weighted input-equivalents per day, full scale
+# What the workshop is allowed to cost in a week. SELF_LABELS already knew which
+# tree this tooling is built in - it was only ever used to HIDE it (--exclude-self)
+# so the grades would not read E on the days the tooling got worked on. Hiding a
+# cost is not budgeting it: measured 2026-09-11, five sessions building and
+# analysing this widget came to 11.5M of a 25.0M week - 46%, against the 2.6M of
+# gap rewrites in the same week that the tooling exists to prevent. It is the
+# largest single line here, so it gets a line of its own and a ceiling.
+METACAP="${TOKEN_META_WEEK:-5000000}"    # weighted per week for the tooling itself
+# What makes a session tooling work is what it was FOR, not the tree it ran in.
+# Classifying by directory alone read 70% of the week as workshop, because "~" is
+# the home directory and real work runs from there too - a shader rework,
+# a design spec and a web fetch were all being counted as tooling.
+# A session counts only when its project is one of SELF_LABELS AND its first
+# prompt matches this, or when it ran in ~/.claude outright. Against the five
+# sessions hand-classified on 2026-09-11 that returns 46%, which is what those
+# five actually came to.
+TOOLRE="${TOKEN_META_MATCH:-token|widget|park|checkpoint|cache|session}"
+# 25k until 2026-09-02, which was the figure CLAUDE.md measured for a "feature"
+# cycle. Real cycles here now routinely clear it, so every bar sat pinned at
+# full and the sparkline stopped distinguishing a big cycle from an enormous
+# one - which is the only thing a sparkline is for.
 RPC="${TOKEN_REQ_PER_CYCLE:-2.3}"        # requests per cycle, for the modelled cache reads
 PRICE_IN="${TOKEN_PRICE_IN:-5}"          # $/MTok input, Opus 5 list. Everything else
                                          # here is a multiple of it: output x5,
@@ -218,10 +301,40 @@ PRICE_IN="${TOKEN_PRICE_IN:-5}"          # $/MTok input, Opus 5 list. Everything
 PLAN_5H="${TOKEN_PLAN_5H_USD:-0}"        # $ of API-equivalent spend per 5h window
 PLAN_WK="${TOKEN_PLAN_WEEK_USD:-0}"      # $ of API-equivalent spend per week
 
+# The tree this tooling is built in, by the label proj_rows derives. Overridable
+# because those labels come from directory names, not from anything canonical.
+SELF_LABELS="${TOKEN_SELF_LABELS:-~ claude claude-tests--rig-session}"
+EXCL_SELF="${TOKEN_EXCLUDE_SELF:-0}"
+
 # The history, minus the cycles the fail-safe's own pings wrote. Nothing to do
 # in the ordinary case, and the ordinary case is checked first.
+#
+# --exclude-self additionally drops every cycle that ran in the workshop.
+# Measured 2026-09-05: that tree is 17% of all-time spend, and 45% of the
+# rewrite cost over the five days the extension marks and auto-park were being
+# built - so a control grade that counts it reads E on exactly the days the
+# tooling gets worked on, which is the opposite of what the grade is for.
+#
+# Off by default, deliberately: the workshop is real money and a view that hid
+# it by default would misreport the bill. And retroactive, for free - proj_rows
+# already recovers short sid -> project from the transcript glob, so no new CSV
+# column is needed and the whole history can be filtered, not just rows written
+# from today on.
+#
+# "~" is the home directory itself, which makes this an approximation: not
+# everything run from ~ is tooling work. That is the honest side of the error -
+# it drops a little real work rather than keeping the build sessions in.
+self_sids() {
+  proj_rows | awk -F'\t' -v L="$SELF_LABELS" '
+    BEGIN { n = split(L, a, " "); for (i = 1; i <= n; i++) self[a[i]] = 1 }
+    ($2 in self) || $2 ~ /^AppData-Local-Temp-claude-/ { print $1 }'
+}
+
 hist_rows() {
-  if [ -s "$FSFORKS" ]; then
+  if [ "$EXCL_SELF" = 1 ]; then
+    awk -F, 'NR == FNR { skip[$1] = 1; next } !($2 in skip)' \
+        <( { [ -s "$FSFORKS" ] && cut -d, -f1 "$FSFORKS"; self_sids; } 2>/dev/null ) "$HIST"
+  elif [ -s "$FSFORKS" ]; then
     awk -F, 'NR == FNR { skip[$1] = 1; next } !($2 in skip)' "$FSFORKS" "$HIST"
   else
     cat "$HIST"
@@ -288,7 +401,7 @@ measure_constants() {
   M_FLOOR=0; M_RD=0; M_CPS=0
   [ -r "$HIST" ] || return 0
   M_WPC=0; M_PROD=0; M_REM=0; M_HEAT=0
-  read -r M_FLOOR M_RD M_CPS M_WPC M_PROD M_REM M_HEAT <<< "$(awk -F, \
+  read -r M_FLOOR M_RD M_CPS M_WPC M_PROD M_REM M_HEAT M_CHURN <<< "$(awk -F, \
       -v gap="${TOKEN_CONTINUATION_GAP:-30}" -v rpc="$RPC" '
     function tomin(t,   a, d, h) {
       split(t, a, " "); split(a[1], d, "-"); split(a[2], h, ":")
@@ -302,6 +415,14 @@ measure_constants() {
       # Per-session totals, for the scorecard medians. Weighted the same way
       # everywhere: output x5, cache write x2, cache read x0.1 per request.
       sn[$2]++; so[$2] += $4; sr[$2] += $5; if ($6 + 0 > sc[$2]) sc[$2] = $6 + 0
+      # Churn per session, cycle 1 excluded. Growth is the context a cycle
+      # ADDED - the half the prompt chose; churn is the rest of the re-cache,
+      # the window being rewritten. On cycle 1 growth is undefined, so the whole
+      # cold load would land in churn: the floor is not rent, and it is skipped.
+      gm2 = (($2 in pvm) ? $6 - pvm[$2] : 0); if (gm2 < 0) gm2 = 0
+      cm2 = $5 - gm2; if (cm2 < 0) cm2 = 0
+      pvm[$2] = $6
+      if ($3 + 0 > 1) sch[$2] += cm2
       # Rent against work, in 25k bands of window size. Rent is what a cycle
       # pays purely to have this window in front of it (the modelled cache
       # reads); work is what it produced. Where the first overtakes the second
@@ -319,7 +440,7 @@ measure_constants() {
     END {
       # Under this many samples a median is a single observation wearing a hat,
       # and this term swings every band - so fall back to the literals instead.
-      if (fn < 5 || rn < 5 || ses < 2) { print "0 0 0 0 0"; exit }
+      if (fn < 5 || rn < 5 || ses < 2) { print "0 0 0 0 0 0 0 0"; exit }
       f = med(fv, fn); r = med(rv, rn) - f; if (r < 0) r = 0
       # How many cycles a window still has left in it. NOT the same question as
       # cycles-per-session, which is what the cut bars used to be built on, and
@@ -355,13 +476,40 @@ measure_constants() {
         # session that never grew past the floor from grading on a negative.
         d = w - f * 2; if (d < w * 0.15) d = w * 0.15
         wv[++wn] = d / sn[k] / 1000
-        pv2[wn]  = so[k] * 5 * 100 / w }
-      printf "%.1f %.1f %.2f %.0f %.0f %.1f %.0f\n", f / 1000, r / 1000, cyc / ses, \
-        (wn ? med(wv, wn) : 0), (wn ? med(pv2, wn) : 0), rem, heat }' <(hist_rows) 2>/dev/null)"
-  : "${M_FLOOR:=0}" "${M_RD:=0}" "${M_CPS:=0}" "${M_WPC:=0}" "${M_PROD:=0}"
+        pv2[wn]  = so[k] * 5 * 100 / w
+        # Churn as a share of what the session cost. Low is good: this is the
+        # part of the bill that bought nothing but continuity - the part
+        # that a /park or a /clear removes outright.
+        cv2[wn]  = sch[k] * 2 * 100 / w }
+      printf "%.1f %.1f %.2f %.0f %.0f %.1f %.0f %.1f\n", f / 1000, r / 1000, cyc / ses, \
+        (wn ? med(wv, wn) : 0), (wn ? med(pv2, wn) : 0), rem, heat, \
+        (wn ? med(cv2, wn) : 0) }' <(hist_rows) 2>/dev/null)"
+  : "${M_FLOOR:=0}" "${M_RD:=0}" "${M_CPS:=0}" "${M_WPC:=0}" "${M_PROD:=0}" "${M_CHURN:=0}"
   : "${M_REM:=0}" "${M_HEAT:=0}"
 }
-measure_constants
+# A write or scan mode - --poke-due, --renew-due, --extend, --block - renders
+# nothing, so these roll-ups over the whole history are pure cost. Skipping them
+# is what makes --poke-due cheap enough to sit on a schedule: measured 87s for
+# the first version of that scan, 10s once its per-file awks were collapsed into
+# one, and about a second with this. The zeros are exactly what both functions
+# set when there is no history to read, so nothing downstream sees a new state.
+case " $* " in
+  *" --poke-due "*|*" --renew-due "*|*" --renew "*|*" --extend "*|*" --block "*|*" --unblock "*|*" --name "*)
+    TS_NOSTATS=1 ;;
+esac
+# --parked --json wants none of it either, and it is the one mode where the
+# saving is the whole point: a widget polling for checkpoints was paying 38s of
+# measurement for an answer that is a directory listing. Two patterns rather
+# than one because it is an AND - --parked on its own still draws the pane's
+# listing, which is graded and coloured like every other view.
+case " $* " in *" --parked "*|*" --checkpoints "*)
+  case " $* " in *" --json "*|*" --json-full "*) TS_NOSTATS=1 ;; esac ;;
+esac
+if [ "${TS_NOSTATS:-0}" = 1 ]; then
+  M_FLOOR=0; M_RD=0; M_CPS=0; M_WPC=0; M_PROD=0; M_REM=0; M_HEAT=0; M_CHURN=0
+else
+  measure_constants
+fi
 
 # The same three axes the per-session grade uses, aggregated over a recent
 # window and the one before it, so the sessions tab can carry an OVERALL line
@@ -376,7 +524,7 @@ measure_overall() {
   O_WPC=0; O_PROD=0; O_CTL=0; O_N=0; P_WPC=0; P_PROD=0; P_CTL=0; P_N=0
   O_5H=0; O_7D=0
   [ -r "$HIST" ] || return 0
-  read -r O_WPC O_PROD O_CTL O_N P_WPC P_PROD P_CTL P_N O_5H O_7D <<< "$(awk -F, \
+  read -r O_WPC O_PROD O_CTL O_N P_WPC P_PROD P_CTL P_N O_5H O_7D O_CHURN P_CHURN <<< "$(awk -F, \
     -v now="${EPOCHSECONDS:-$(date +%s)}" -v rpc="$RPC" -v floor="$M_FLOOR" '
     function ep(t,   s) { s = t; gsub(/[-:]/, " ", s); return mktime(s " 00") }
     NR > 1 && $2 != "" {
@@ -393,32 +541,44 @@ measure_overall() {
       if ($3 + 0 == 1 && floor > 0) { wg = w - floor * 2000; if (wg < w * 0.15) wg = w * 0.15 }
       # Control counts a gap rewrite double: a breach is one prompt that asked
       # for too much, a rewrite is a whole window paid for twice.
-      bad = (($7 != "-" && $7 != "") ? 1 : 0) + (($3 + 0 > 1 && ch > 60000) ? 2 : 0)
+      bad = ($7 ~ /[og]/) ? 1 : 0
       age = now - e
-      if      (age <= 604800)  { rw += wg; ru += w; ro += $4 * 5; rn++; rc += bad }
-      else if (age <= 1209600) { qw += wg; qu += w; qo += $4 * 5; qn++; qc += bad }
-      else                     { xw += wg; xu += w; xo += $4 * 5; xn++; xc += bad }
+      # Cycle 1 contributes no churn for the same reason it contributes no
+      # growth - the cold load is the floor, not the window being rewritten.
+      chw = ($3 + 0 > 1) ? ch * 2 : 0
+      if      (age <= 604800)  { rw += wg; ru += w; ro += $4 * 5; rn++; rc += bad; rh += chw }
+      else if (age <= 1209600) { qw += wg; qu += w; qo += $4 * 5; qn++; qc += bad; qh += chw }
+      else                     { xw += wg; xu += w; xo += $4 * 5; xn++; xc += bad; xh += chw }
       if (age <= 604800) s7 += w
       if (age <= 18000)  s5 += w }
     END {
       # A quiet fortnight leaves the prior week too thin to compare against, so
       # it widens to everything older rather than reporting a swing measured
       # off two cycles.
-      if (qn < 5) { qw += xw; qu += xu; qo += xo; qn += xn; qc += xc }
+      if (qn < 5) { qw += xw; qu += xu; qo += xo; qn += xn; qc += xc; qh += xh }
       # Spend off the discounted weight, production off the real one. They are
       # two different questions: how hard the window was driven above a floor it
       # had no say in, versus what share of every token actually spent went into
       # work. Rebasing the second measured flat across cycle index (35% at cycle
       # 1, 35% at cycle 8), so there was nothing there to correct and correcting
       # it anyway would just have inflated the number.
-      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f\n", \
+      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f %.1f %.1f\n", \
         (rn ? rw / rn / 1000 : 0), (ru ? ro * 100 / ru : 0), (rn ? rc / rn : 0), rn, \
         (qn ? qw / qn / 1000 : 0), (qu ? qo * 100 / qu : 0), (qn ? qc / qn : 0), qn, \
-        s5 / 1000, s7 / 1000 }' <(hist_rows) 2>/dev/null)"
+        s5 / 1000, s7 / 1000, (ru ? rh * 100 / ru : 0), (qu ? qh * 100 / qu : 0) }' <(hist_rows) 2>/dev/null)"
   : "${O_WPC:=0}" "${O_PROD:=0}" "${O_CTL:=0}" "${O_N:=0}"
   : "${P_WPC:=0}" "${P_PROD:=0}" "${P_CTL:=0}" "${P_N:=0}" "${O_5H:=0}" "${O_7D:=0}"
+  : "${O_CHURN:=0}" "${P_CHURN:=0}"
 }
-measure_overall
+# This one used to run whatever the mode was, so --extend and --block paid for a
+# 7d aggregate they then exited without printing. The zeros are the same ones
+# the function's own fallbacks set on an empty history, so nothing downstream
+# can tell the difference between "skipped" and "nothing to measure".
+zero_overall() {
+  O_WPC=0; O_PROD=0; O_CTL=0; O_N=0
+  P_WPC=0; P_PROD=0; P_CTL=0; P_N=0; O_5H=0; O_7D=0; O_CHURN=0; P_CHURN=0
+}
+if [ "${TS_NOSTATS:-0}" = 1 ]; then zero_overall; else measure_overall; fi
 
 # The local-model ledger, the mirror of measure_overall. Ollama generation is free (no
 # Anthropic tokens), so what matters is the 7d offload ratio: local generated tokens
@@ -443,7 +603,11 @@ measure_ollama() {
   fi
   : "${OLL_PROMPT:=0}" "${OLL_EVAL:=0}" "${OLL_CALLS:=0}" "${CL_OUT_7D:=0}"
 }
-measure_ollama
+if [ "${TS_NOSTATS:-0}" = 1 ]; then
+  OLL_PROMPT=0; OLL_EVAL=0; OLL_CALLS=0; CL_OUT_7D=0
+else
+  measure_ollama
+fi
 
 # The same log, per session rather than summed. The aggregate line answers "how
 # much of the generation went local"; it cannot answer "which of these was the
@@ -465,7 +629,8 @@ ollama_sessions() {
           ((now - L[k] < 0) ? 0 : now - L[k]), k, C[k], M[k], P[k], V[k], MS[k] / C[k], T[k] }' \
     "$CL/ollama-usage.csv" 2>/dev/null | sort -t'|' -k1,1n
 }
-OLL_SESSIONS="$(ollama_sessions)"
+if [ "${TS_NOSTATS:-0}" = 1 ]; then OLL_SESSIONS=""
+else OLL_SESSIONS="$(ollama_sessions)"; fi
 
 # The bell's floor, in thousands: the parking bar, which is where a lapse first
 # costs more than doing something about it would. Derived from the measured
@@ -503,12 +668,12 @@ KEYTAB='j k|move the selection, or scroll the list|move
 1-9|jump to a row - type two digits past nine|jump
 g G|first row / last row|
 /|filter by name, project, prompt or path|filter
-/n|"/n build-fix" names the selected row; bare /n undoes it|
+/n|"/n build-fix" names a row without leaving the prompt line|
 s|re-order: lapse, context, cost, active, project|sort
 d|expand the selected row into the full panel|expand
 y|copy "claude -r <id>" to the clipboard|copy
 o|open the checkpoint, or the transcript folder|open
-n|re-roll this row name, or clear one typed with /n|rename
+n|name this row - the line opens on its current name, empty clears it|rename
 D|move a closed session log to deleted-sessions|delete
 t|analytics: the whole history|analytics
 [ ]|analytics: page through the sections|
@@ -533,13 +698,169 @@ show_help() {
 }
 
 SHOW_ALL=0; WATCH=0; EVERY=60; ASCII=0; COLOR=1; SEL=0; COMPACT=0
-CKLIST=0; CKPROJ=""; ANALYTICS=0; BADARG=""; BUCKET=0
+# A window onto the closed sessions rather than a cap on them. -1 means "not
+# asked for", which resolves to CLOSED_MAX under --all and to nothing without
+# it - so the pane and the dashboard behave exactly as they did. A caller that
+# pages says so explicitly, and pays only for the page it asked for: the rank
+# below is free (it reads hook rows already in hand), and it is the per-session
+# probe after it that costs, so a page of 10 costs ten probes and not 148.
+CLOSED_FROM=0; CLOSED_N=-1
+CKLIST=0; CKPROJ=""; ANALYTICS=0; BADARG=""; BUCKET=0; JSONQ=0
+NAMESID=""; NAMEVAL=""; NAMEQ=0
+EXTSID=""; EXTVAL="+1"; EXTQ=0; RENEWQ=0; RENEWSID=""; RENEWDRY=""
+BLKSID=""; BLKWHY=""; BLKQ=0
+# Where "running out" starts, as percent of the tighter window REMAINING. Both
+# are overridable: a machine with one account wants to hear about it earlier
+# than one with three, because switching is not an option there.
+ALERT_WARN="${TOKEN_ALERT_WARN:-10}"
+ALERT_BRAKE="${TOKEN_ALERT_BRAKE:-5}"
+# How much headroom another account needs before it counts as somewhere to go.
+# Below this, switching just moves the problem.
+ALERT_SPARE="${TOKEN_ALERT_SPARE:-20}"
+# Extension marks. Every session starts with one - enough to carry a window
+# across a lunch without anyone deciding anything - and the count is edited per
+# session from the widget. A window below the floor is not worth extending at
+# all: rebuilding it cold costs less than the floor does to hold.
+#
+# Two since 2026-09-04. It used to be two because the last mark was spent on the
+# /park, so a one-mark session never got a plain renewal; since 2026-09-10 every
+# mark is a renewal and the park happens after the budget, so N marks means
+# exactly N crossings and then a checkpoint. Two keeps the common life of an
+# idle window at "renew twice, then checkpoint and stop". One means "one
+# crossing"; zero means leave this session alone entirely.
+EXT_DEFAULT="${TOKEN_EXTEND_DEFAULT:-2}"
+# Five, and the number is a policy rather than a limit of the mechanism. A
+# window that has been carried across five full hours has been carried for the
+# best part of a working day, and at that point the question has stopped being
+# "is this read cheaper than that rewrite" - which it always is - and become
+# whether anything should live that long. Past the cap the answer is a
+# checkpoint, not a sixth ticket. Raise it with TOKEN_EXTEND_MAX if you
+# disagree, but raise it deliberately.
+EXT_MAX="${TOKEN_EXTEND_MAX:-5}"
+EXT_MIN_CTX="${TOKEN_EXTEND_MIN_CTX:-60}"     # thousands; under this, let it go
+EXT_DUE_MIN="${TOKEN_EXTEND_DUE_MIN:-8}"      # renew when this few minutes remain
+# Runway a park needs to land WARM. The sweep decides on a 3-minute tick and the
+# poke types into a console the CLI may not drain at once, so a park chosen with
+# a minute left can go out after the prefix has already lapsed - and then it pays
+# a full 2x rewrite of the window to write one checkpoint. Measured 2026-09-10 on
+# c0bee0a0: parked at 03:09 with 282k of context, recache 252k, 608k weighted for
+# a file worth ~136k of re-derivation. Under this many minutes the window is left
+# to lapse instead: the checkpoint is not worth a rewrite, and a renewal at that
+# range is the same bet.
+EXT_PARK_MIN="${TOKEN_EXTEND_PARK_MIN:-3}"    # minutes of cache life a park needs
+# When a checkpoint stops describing anything. --checkpoints is what a fresh
+# session is pointed at after a /clear, so a stale entry there is worse than no
+# entry: it reads as saved state and is really a description of a window that
+# died days ago. Measured 2026-09-11: 11 of 16 checkpoints on disk were over two
+# days old and two carried session stamps whose sessions had stopped before the
+# file was written. They are flagged, never deleted without --prune.
+CKPT_STALE_D="${TOKEN_CKPT_STALE_DAYS:-7}"    # days after which a checkpoint is stale
+# The backstop between two pokes of the SAME session. A scheduler firing every
+# minute would otherwise re-type into a window that is busy or that never
+# answered, and each of those is a real cycle with a real cost.
+POKE_GAP_MIN="${TOKEN_POKE_GAP_MIN:-20}"
+# Carry a half-typed line across the renewal rather than refusing over it. Set
+# empty (TOKEN_POKE_PRESERVE=) to go back to refusing, which loses the window
+# but never touches what is in the box.
+POKE_PRESERVE="${TOKEN_POKE_PRESERVE-1}"
+# End a spent budget with a checkpoint instead of a shrug: a window about to
+# lapse with its marks used up gets /park typed into it while it is still warm,
+# and then the input block arms behind it - that window is done, and only the
+# widget can say otherwise. A mark having been SPENT is the evidence that the
+# window was wanted; zeroing a session's marks (--extend <sid> 0) opts it out of
+# all of it. Set empty to turn the parking half off and keep only the renewals.
+PARK_ON_LAPSE="${TOKEN_PARK_ON_LAPSE-1}"
+# How close to local midnight is too close. The date sits in the system
+# prompt, so the prefix breaks at 00:00 whatever the TTL says and a renewal
+# bought just before it buys nothing. A knob because it is the one rail a
+# test cannot reach any other way - the others take a fixture, this one takes
+# a clock.
+EXT_MIDNIGHT_MIN="${TOKEN_EXTEND_MIDNIGHT_MIN:-20}"
+# How long to wait, after typing, for the session to actually send it.
+# There is no point renewing a cache and not knowing whether you did: a
+# poke that types perfectly into a prompt box nobody pressed Enter on
+# looks identical, in every log, to one that worked. That is how this
+# feature spent a day reporting success while every window lapsed.
+POKE_VERIFY_SEC="${TOKEN_POKE_VERIFY_SEC:-30}"
+# How stale the status-line payload may be before a session known ONLY through
+# it stops counting as open. This is not a guess dressed as a constant, it is
+# the whole accuracy of that third register (see collect()), so it is worth
+# saying what it can and cannot decide.
+#
+# The payload is rewritten every time the status line renders, which is every
+# few seconds while a turn runs and NEVER while the window sits idle at the
+# prompt - measured 2026-09-02: an open, idle session's payload was 51 minutes
+# stale while its pid file was 4 minutes old. So a stale payload means "closed
+# OR idle" and nothing can separate the two from disk.
+#
+# That makes the threshold a choice between two errors, and they are not equal.
+# A session with a pid file is unaffected either way. What is left is a session
+# with NO pid file, where the errors are:
+#
+#   too long  - a closed window is drawn as live, with a cache clock counting
+#               down on a process that does not exist and advice to /park it.
+#               The tool's one job is saying what the invisible window costs;
+#               inventing one is the worst thing it can do.
+#   too short - an idle payload-only window vanishes from the live table until
+#               it is spoken to again. It reappears the moment it does work,
+#               which is the moment it starts costing anything.
+#
+# 900 here meant a closed session stayed on the widget for a quarter of an hour
+# (observed on session a62bdcf8, "token-tooling-plan": closed, still drawn live
+# with 47m of cache). 120 keeps the case the register was added for - a session
+# actively working that no other register can see - and gives up the idle case,
+# which is the one where being wrong is free.
+SU_LIVE="${TOKEN_SU_LIVE:-120}"               # seconds; payload-only liveness
+# The ceiling: past this, checkpoint and start a fresh window. Thousands; 0
+# derives it from the bar's scale. Unlike every other band this one is NOT a
+# cost answer, and why not is worth reading before retuning it - see MAX_AT in
+# the constants block, where it is derived.
+MAX_AT_K="${TOKEN_MAX_AT:-0}"
+# Staleness guards on the run state. They can only ever DEMOTE a running turn
+# to stalled - nothing here can invent one, because the run state itself is now
+# read off the CLI's own status flag rather than inferred from a transcript.
+# See the run= block in collect() for why that changed.
+#
+#   RUN_IDLE  a turn genuinely in flight writes assistant records and tool
+#             results far more often than this. Silence for longer, while the
+#             pid file still says busy, means the window is waiting on
+#             something outside itself - a permission prompt, a hung tool - or
+#             the process died without ever writing the transition back.
+#   RUN_MAX   and no single cycle runs this long. Past it, believe the clock
+#             rather than the flag.
+RUN_IDLE="${TOKEN_RUN_IDLE:-300}"             # seconds since the last record
+RUN_MAX="${TOKEN_RUN_MAX:-5400}"              # seconds since the turn began
 VERSIONQ=0; UPDATEQ=0
 THEME="${TOKEN_THEME:-hud}"          # hud or classic; --classic switches back
 [ -n "${NO_COLOR:-}" ] && COLOR=0
 
-want_proj=0; want_sort=0; want_filter=0
+want_proj=0; want_sort=0; want_filter=0; want_name=0; want_ext=0; want_renew=0
+want_blk=0; want_cfrom=0; want_ccount=0
 for a in "$@"; do
+  # --name takes two: the id, then the name. The name may be empty - that is
+  # how it is cleared - so it is matched on "not another flag" rather than on
+  # being non-blank, and an empty string reaches here as a real argument.
+  if [ "$want_ext" = 1 ]; then want_ext=2
+    case "$a" in --*) want_ext=0; EXTQ=0 ;; *) EXTSID="$a"; continue ;; esac
+  elif [ "$want_ext" = 2 ]; then want_ext=0
+    case "$a" in -[0-9]*|+[0-9]*|[0-9]*) EXTVAL="$a"; continue ;; esac
+  fi
+  if [ "$want_renew" = 1 ]; then want_renew=0
+    case "$a" in --*) ;; *) RENEWSID="$a"; continue ;; esac
+  fi
+  # --block takes the id and then an optional reason, the same two-argument
+  # shape --name uses. The reason is one argument, so a caller passing several
+  # words has to quote them; that is the widget's job and it does.
+  if [ "$want_blk" = 1 ]; then want_blk=2
+    case "$a" in --*) want_blk=0; BLKQ=0 ;; *) BLKSID="$a"; continue ;; esac
+  elif [ "$want_blk" = 2 ]; then want_blk=0
+    case "$a" in --*) ;; *) BLKWHY="$a"; continue ;; esac
+  fi
+  if [ "$want_name" = 1 ]; then want_name=2
+    case "$a" in --*) want_name=0; NAMEQ=0 ;; *) NAMESID="$a"; continue ;; esac
+  elif [ "$want_name" = 2 ]; then want_name=0
+    case "$a" in --*) ;; *) NAMEVAL="$a"; continue ;; esac
+  fi
   if [ "$want_proj" = 1 ]; then want_proj=0
     case "$a" in --*) ;; *) CKPROJ="$a"; continue ;; esac
   fi
@@ -549,11 +870,37 @@ for a in "$@"; do
   if [ "$want_filter" = 1 ]; then want_filter=0
     case "$a" in --*) ;; *) FILTER="$a"; continue ;; esac
   fi
+  if [ "$want_cfrom" = 1 ]; then want_cfrom=0
+    case "$a" in --*) ;; *[!0-9]*) ;; *) CLOSED_FROM="$a"; continue ;; esac
+  fi
+  if [ "$want_ccount" = 1 ]; then want_ccount=0
+    case "$a" in --*) ;; *[!0-9]*) ;; *) CLOSED_N="$a"; continue ;; esac
+  fi
   case "$a" in
     --all|-a) SHOW_ALL=1 ;; --watch|-w) WATCH=1 ;; --ascii) ASCII=1 ;;
+    --closed-from)  want_cfrom=1 ;;  --closed-from=*)  CLOSED_FROM="${a#*=}" ;;
+    --closed-count) want_ccount=1 ;; --closed-count=*) CLOSED_N="${a#*=}" ;;
     --browse|-b) WATCH=1; SEL=1; DETAIL=1 ;; --compact|-c) COMPACT=1 ;;
     --analytics|--history|-t) ANALYTICS=1 ;;
+    --json) JSONQ=1 ;; --json-full) JSONQ=2 ;;
+    # Naming from outside the pane - what the widget calls, so that the one
+    # writer for token-nicks.tsv stays the one writer for it. A session id and
+    # a name; the name omitted or empty clears back to the derived one.
+    --name) want_name=1; NAMEQ=1 ;;
+    --extend) want_ext=1; EXTQ=1 ;;
+    --renew) want_renew=1; RENEWQ=1 ;;
+    --block) want_blk=1; BLKQ=1 ;;
+    --unblock) want_blk=1; BLKQ=2 ;;
+    --blocks) BLKQ=3 ;;
+    --renew-due) RENEWQ=2 ;;
+    --poke-due) RENEWQ=3 ;;
+    --dry-run) RENEWDRY=dry ;;
+    --name=*) NAMESID="${a#*=}"; want_name=2; NAMEQ=1 ;;
     --weekly) BUCKET=1 ;; --daily) BUCKET=0 ;;
+    --prune) CKPRUNE=1 ;;
+    # Off by default: the workshop is real spend, and hiding it without being
+    # asked would misreport the bill. See hist_rows for why it is retroactive.
+    --exclude-self) EXCL_SELF=1 ;; --include-self) EXCL_SELF=0 ;;
     --classic) THEME=classic ;; --hud) THEME=hud ;;
     # Both exit rather than drawing anything: they are questions about the
     # program, not about the sessions.
@@ -723,7 +1070,18 @@ if [ "$THEME" = hud ]; then HUD=1; else HUD=0; fi
 # mode=probe additionally reports how long ago the transcript last had anything
 # WRITTEN to it, which is not the same question as its mtime - see collect().
 prompt_of() {
-  awk -v mode="$2" '
+  # dues is the danger zone the extension test below measures a gap against, and
+  # it is EXT_DUE_MIN + 1 rather than EXT_DUE_MIN because the sweep that fires the
+  # renewal FLOORS its minutes: "8m left" is anything from 539 seconds down, so a
+  # renewal fired in the eighth minute lands with a gap under ttls - 8*60 and the
+  # test misses the very event it exists to count. The two windows have to be the
+  # same window or the budget never spends. Measured 2026-09-08 over the near-TTL
+  # renewals still on disk: 3 of 8 fell in that 59-second dead band (3075s, 3079s,
+  # 3119s) and spent no mark, while every one fired at 7m or less (3154s, 3200s,
+  # 3210s, 3231s) was counted. 10 of 40 logged renewals fired at "8m left", so a
+  # quarter of the budget was being given away and the widget sat on a full row.
+  awk -v mode="$2" -v cut="${3:--1}" -v lastx="${4:-0}" \
+      -v ttls=$(( TTL * 60 )) -v dues=$(( (EXT_DUE_MIN + 1) * 60 )) '
     # An ISO timestamp out of a record, read as UTC. Both sides of the
     # subtraction go through mktime with the same (local) rule, so whatever
     # that rule gets wrong cancels - which is why this returns an age and not
@@ -735,6 +1093,12 @@ prompt_of() {
         return 0
       d = substr(s, RSTART, 19); gsub(/[-T:]/, " ", d)
       return mktime(d) }
+    # A number out of the record, by its key. The leading quote in the pattern
+    # is load-bearing: without it "input_tokens" also matches the tail of
+    # cache_creation_input_tokens and every context reading doubles.
+    function jn(pat,   r) {
+      if (match($0, pat)) { r = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", r); return r + 0 }
+      return 0 }
     function dec(s,   i, ch, nx, out) {
       for (i = 1; i <= length(s); i++) {
         ch = substr(s, i, 1)
@@ -748,16 +1112,109 @@ prompt_of() {
         out = out ch
         if (length(out) > 300) break }
       return out }
-    BEGIN { NOWU = mktime(strftime("%Y %m %d %H %M %S", systime(), 1)) }
+    BEGIN { NOWU = mktime(strftime("%Y %m %d %H %M %S", systime(), 1))
+            if (cut == "") cut = -1; else cut += 0 }
     mode == "probe" && match($0, /"timestamp":"[0-9][0-9][0-9][0-9]-/) {
-      e = utcep(substr($0, RSTART + 13, 19)); if (e > lastts) lastts = e }
+      e = utcep(substr($0, RSTART + 13, 19)); if (e > lastts) lastts = e
+      # And separately, the newest record that is part of the CONVERSATION.
+      #
+      # The CLI writes timestamped records outside a turn - "system",
+      # "file-history-delta", "queue-operation", "attachment" - and lastts
+      # counts them, because for "when was this file last touched" they do
+      # count. For "is a turn running right now" they emphatically do not: a
+      # lone system record three minutes after a turn ended is what made this
+      # window read as working for the whole time it sat waiting for a prompt.
+      # Measured 2026-09-03 on af877673: last assistant record 02:56:33, Stop
+      # hook row 23:56, then a single system record at 02:59:39 - which pushed
+      # the activity clock 219s past the hook fence and lit the spinner until
+      # the 300s idle guard finally caught it, 8 minutes later.
+      #
+      # A turn in flight always writes assistant records, and its tool results
+      # come back as user records, so those two are the whole signal.
+      if ($0 ~ /"type":"assistant"/ || $0 ~ /"type":"user"/)
+        if (e > turnts) turnts = e }
+    # Live usage: what this window has spent since the Stop hook last wrote a
+    # row for it. The hook only fires at the END of a cycle, so without this
+    # every figure downstream is one cycle stale - and a session still inside
+    # its FIRST cycle has no row at all, so it reads as a flat zero for as long
+    # as that cycle runs. That is the "numbers drop to zero for a while" the
+    # widget showed: not a glitch, just the only honest answer the hook could
+    # give. The transcript has known the truth all along, per request.
+    #
+    # cut is the age in seconds of that last row; -1 means "no row yet, count
+    # the whole tail". The same usage object is written ~2.5x per message, so
+    # requestId is the dedupe key - token-cycles.sh keys off the same thing.
+    # The sums are bounded by the 400KB tail the caller reads, so a very long
+    # cycle can undercount them; lctx comes off the newest record and is exact.
+    mode == "probe" && /"cache_read_input_tokens":/ {
+      rid = ""
+      if (match($0, /"requestId":"[^"]*"/)) rid = substr($0, RSTART + 13, RLENGTH - 14)
+      if (rid != "" && !(rid in lseen)) {
+        lseen[rid] = 1
+        rts = 0
+        if (match($0, /"timestamp":"[0-9][0-9][0-9][0-9]-/)) rts = utcep(substr($0, RSTART + 13, 19))
+        rw = jn("\"cache_creation_input_tokens\":[0-9]+")
+        rr = jn("\"cache_read_input_tokens\":[0-9]+")
+        # An extension is not "a request happened". It is a request that
+        # arrived with the window already inside the danger zone - dues seconds
+        # or less of cache life left - and came back a HIT. That is the event a
+        # mark is a budget for: one save, worth the 0.1x read instead of the 2x
+        # rebuild. Ordinary back-to-back work spends nothing, because nothing
+        # was at risk; and a gap past the whole TTL is not an extension either,
+        # it is the lapse, counted elsewhere as a gap rewrite.
+        #
+        # A hit is asserted from the numbers rather than assumed: a rebuilt
+        # window writes most of what it reads. Measured on this machine, an
+        # 81.8 minute gap wrote 169,259 against 29,682 read; a 13.9 minute one
+        # wrote 1,303 against 137,446.
+        #
+        # lastx is the newest extension already counted for this session, so
+        # the count is derived, never incremented. Two scans racing produce the
+        # same answer and write the same answer, which is why this needs no
+        # lock and cannot double-spend a mark.
+        if (prevts > 0 && rts > 0) {
+          gp = rts - prevts
+          if (gp >= ttls - dues && gp < ttls && rr > 0 && rw <= rr / 4 && rts > lastx) {
+            lext++
+            if (rts > lextts) lextts = rts } }
+        if (rts > 0) prevts = rts
+        if (cut < 0 || rts <= 0 || (NOWU - rts) <= cut) {
+          lreq++
+          lout += jn("\"output_tokens\":[0-9]+")
+          lwr  += rw
+          lrd  += rr }
+        if (rts >= lcts) {
+          lcts = rts
+          lctx = jn("\"input_tokens\":[0-9]+") \
+               + jn("\"cache_creation_input_tokens\":[0-9]+") \
+               + jn("\"cache_read_input_tokens\":[0-9]+") } } }
+    # Which model answered and at what reasoning effort. Both live on the
+    # assistant record - model inside message, effort at the top level - and
+    # both can change mid-session (/model, /effort), so the LAST one seen wins
+    # rather than the first. Sidechain records carry what a SUBAGENT answered,
+    # not what this window did, and would otherwise report a Haiku helper.
+    mode == "probe" && /"isSidechain":false/ && /"role":"assistant"/ {
+      # "<synthetic>" is the placeholder on a record the client wrote itself -
+      # an interrupt, an error stub - and it names no model. Skipping it keeps
+      # the last REAL answer, which is what the window is actually running on.
+      if (match($0, /"model":"[^"]*"/)) {
+        m = substr($0, RSTART + 9, RLENGTH - 10)
+        if (m !~ /^</) mdl = m }
+      if (match($0, /"effort":"[^"]*"/)) eff = substr($0, RSTART + 10, RLENGTH - 11) }
     # The working directory, which for a session with no pid file left on disk
     # is the only place its project name can come from. Every record carries it,
     # so the first one seen settles it and the match is skipped thereafter.
     mode == "probe" && cwd == "" && match($0, /"cwd":"[^"]*"/) {
       cwd = substr($0, RSTART + 7, RLENGTH - 8); gsub(/\|/, "/", cwd) }
+    # Two shapes carry the same thing. A session started from the IDE writes its
+    # prompt as a content ARRAY of typed blocks; one started at a terminal writes
+    # it as a bare STRING. Matching only the array - which this did until
+    # 2026-09-02 - meant every terminal session was named "new-session" and
+    # titled "(no prompt yet)", silently, for as long as it lived.
     /"origin":\{"kind":"human"\}/ {
-      if (!match($0, /"content":\[\{"type":"text","text":"/)) next
+      if (match($0, /"content":\[\{"type":"text","text":"/)) { }
+      else if (match($0, /"message":\{"role":"user","content":"/)) { }
+      else next
       t = dec(substr($0, RSTART + RLENGTH))
       gsub(/[^ -~]/, "", t); gsub(/\|/, "/", t)
       gsub(/[ \t]+/, " ", t); sub(/^ +/, "", t); sub(/ +$/, "", t)
@@ -765,7 +1222,12 @@ prompt_of() {
       if (mode == "first") { print t; exit }
       l = t }
     END {
-      if (mode == "probe") { printf "%d|%s|%s\n", (lastts > 0 ? NOWU - lastts : -1), cwd, l; exit }
+      # The live tuple sits BEFORE the prompt, not after it: the prompt is the
+      # only field that can contain arbitrary text, so it has to stay last.
+      if (mode == "probe") { printf "%d|%d|%s|%d,%d,%d,%d,%d,%d,%d|%s|%s|%s\n", \
+        (lastts > 0 ? NOWU - lastts : -1), (turnts > 0 ? NOWU - turnts : -1), \
+        cwd, lreq + 0, lout + 0, lwr + 0, lrd + 0, lctx + 0, \
+        lext + 0, (lextts > 0 ? lextts : lastx) + 0, mdl, eff, l; exit }
       if (mode != "first" && l != "") print l }' "$1"
 }
 
@@ -782,7 +1244,14 @@ scan_checkpoints() {
   while IFS='|' read -r cm cf sid task; do
     [ -n "$cf" ] || continue
     CK[$cf]=$cm; CS[$cf]=$sid; CKT[$cf]=$task; CKN+=("$cf")
-  done < <(stat -c '%Y|%n' "$CL"/checkpoints/*.md 2>/dev/null | sort -t'|' -k1,1nr |
+  # Both globs, because *.md does not match a dotfile and the project part of
+  # a checkpoint name is whatever basename the parker was handed - ".claude"
+  # when /park ran with the shell sitting in ~/.claude. Two files had been
+  # silently invisible here for exactly that reason. A glob that matches
+  # nothing is passed through literally and stat rejects it, which is what the
+  # 2>/dev/null was already absorbing.
+  done < <(stat -c '%Y|%n' "$CL"/checkpoints/*.md "$CL"/checkpoints/.*.md 2>/dev/null |
+           sort -t'|' -k1,1nr |
     awk -F'|' '{
       path = $2; name = path; sub(/.*[\/\\]/, "", name)
       sid = ""; task = ""; intask = 0; ln = 0
@@ -809,7 +1278,14 @@ scan_checkpoints() {
 # here is a fork, and this is called once per checkpoint per session.
 topic_of() {
   local t=${1%.md}
-  t=${t#"$2"}; t=${t#.}
+  case "$t" in
+    "$2"|"$2".*) t=${t#"$2"}; t=${t#.} ;;
+    # The parker's idea of which project this is does not always match this
+    # one's - a stamped checkpoint is claimed by its session id, not by its
+    # name - so when the prefix is something else, drop whatever it is rather
+    # than leaving it glued to the front of the topic.
+    *)           t=${t#.}; t=${t#*.} ;;
+  esac
   TOPIC=${t:-general}
 }
 
@@ -818,6 +1294,155 @@ agestr() {
   if   [ "$1" -lt 60 ];   then AGE="${1}m"
   elif [ "$1" -lt 2880 ]; then AGE="$(($1 / 60))h"
   else                         AGE="$(($1 / 1440))d"; fi
+}
+
+# Every subagent on the machine, grouped under the session that spawned it.
+#
+# A subagent does NOT write into its parent transcript. Its whole conversation
+# goes to projects/<project>/<parent-sid>/subagents/agent-<id>.jsonl, with a
+# sibling .meta.json naming the agent type, the description it was given and
+# the model it runs on - and the parent file records nothing but the tool_use
+# that started it. So every figure this tool derived from a transcript was
+# blind to agent spend, silently: a Task burning cache reads at 180k a request
+# looked exactly like a window sitting still. Measured 2026-09-03 on session
+# 9c356fce, one general-purpose agent: 22 requests, 2.77M cache reads, 182k of
+# cache writes, ~724k weighted - eleven cold floors, invisible.
+#
+# Two traps in the numbers, both found the expensive way:
+#
+#   * a requestId appears ~5 times in an agent file, once per content block of
+#     the same assistant message, and the FIRST copy carries a PARTIAL usage -
+#     output_tokens of 2 or 4 while the finished message had 6,132. Taking the
+#     first match, which is what the live probe does on a parent transcript
+#     (where it is right, because there each id appears once), undercounts
+#     output here by ~260x. Hence max-per-requestId, not first-per-requestId.
+#   * cache_creation_input_tokens ends in input_tokens, so the pattern needs
+#     its leading quote or every input reading doubles. Same trap as prompt_of.
+#
+# Cost control: the totals are cached in AGCACHE keyed by mtime, so a finished
+# agent is read exactly once ever and only the file being written right now is
+# rescanned. One stat over the whole glob, one awk over what changed, one awk
+# over the meta files.
+declare -A AGS AGN AGL AGC
+scan_agents() {
+  local f b mt sid row key need line
+  local -A AC AMETA
+  AGS=(); AGN=(); AGL=(); AGC=()
+  now_agent=$(now_s)
+
+  if [ -f "$AGCACHE" ]; then
+    while IFS=$'\t' read -r key row; do
+      [ -n "$key" ] && AC[$key]="$row"
+    done < "$AGCACHE"
+  fi
+
+  # path -> mtime and the parent sid, in one stat. The sid is the directory two
+  # levels up, which is the only place it is written down - the records inside
+  # carry the parent sessionId too, but reading them to find it would defeat
+  # the cache.
+  local -a NEED=()
+  local -A AMT ASID
+  while IFS='|' read -r mt f; do
+    [ -n "$f" ] || continue
+    b=${f##*/}; b=${b%.jsonl}
+    sid=${f%/subagents/*}; sid=${sid##*/}
+    AMT[$b]="$mt"; ASID[$b]="$sid"
+    [ -n "${AC["$b|$mt"]:-}" ] || NEED+=("$f")
+  done < <(stat -c '%Y|%n' "$CL"/projects/*/*/subagents/agent-*.jsonl 2>/dev/null)
+
+  # Only the files whose mtime moved. One awk for all of them.
+  if [ "${#NEED[@]}" -gt 0 ]; then
+    while IFS=$'\t' read -r b row; do
+      [ -n "$b" ] || continue
+      AC["$b|${AMT[$b]:-0}"]="$row"
+      printf '%s\t%s\n' "$b|${AMT[$b]:-0}" "$row" >> "$AGCACHE"
+    done < <(awk '
+      function jn(pat,   r) {
+        if (match($0, pat)) { r = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", r); return r + 0 }
+        return 0 }
+      function utcep(s,   d) {
+        if (!match(s, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/))
+          return 0
+        d = substr(s, RSTART, 19); gsub(/[-T:]/, " ", d)
+        return mktime(d) }
+      FNR == 1 { if (fn != "") flush(); fn = FILENAME; sub(/.*[\/\\]/, "", fn); sub(/\.jsonl$/, "", fn)
+                 delete OU; delete WR; delete RD; nq = 0; lct = 0; lcx = 0; fts = 0; lts = 0 }
+      /"cache_read_input_tokens":/ {
+        rid = ""
+        if (match($0, /"requestId":"[^"]*"/)) rid = substr($0, RSTART + 13, RLENGTH - 14)
+        if (rid == "") next
+        if (!(rid in OU)) { nq++; OU[rid] = -1 }
+        o = jn("\"output_tokens\":[0-9]+"); if (o > OU[rid]) OU[rid] = o
+        WR[rid] = jn("\"cache_creation_input_tokens\":[0-9]+")
+        RD[rid] = jn("\"cache_read_input_tokens\":[0-9]+")
+        ts = 0
+        if (match($0, /"timestamp":"[0-9][0-9][0-9][0-9]-/)) ts = utcep(substr($0, RSTART + 13, 19))
+        if (ts > 0) { if (fts == 0 || ts < fts) fts = ts; if (ts > lts) lts = ts }
+        if (ts >= lct) {
+          lct = ts
+          lcx = jn("\"input_tokens\":[0-9]+") \
+              + jn("\"cache_creation_input_tokens\":[0-9]+") \
+              + jn("\"cache_read_input_tokens\":[0-9]+") } }
+      function flush(   r, to, tw, tr) {
+        for (r in OU) { to += (OU[r] > 0 ? OU[r] : 0); tw += WR[r]; tr += RD[r] }
+        printf "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", fn, nq, to, tw, tr, lcx, fts, lts }
+      END { if (fn != "") flush() }' "${NEED[@]}" 2>/dev/null)
+  fi
+
+  # agentType, description and model, from the sidecars. Older sidecars carry
+  # only the first two, so a missing model is blank rather than wrong.
+  while IFS=$'\t' read -r b row; do
+    [ -n "$b" ] && AMETA[$b]="$row"
+  done < <(awk '
+    function js(k,   r, q) {
+      q = sprintf("%c", 34)
+      if (!match($0, q k q ":" q "[^" q "]*" q)) return ""
+      r = substr($0, RSTART, RLENGTH); sub("^" q k q ":" q, "", r); sub(q "$", "", r)
+      gsub(/[^ -~]/, " ", r); gsub(/[|;~\t]/, " ", r)
+      return r }
+    { b = FILENAME; sub(/.*[\/\\]/, "", b); sub(/\.meta\.json$/, "", b)
+      if (b in seen) next
+      seen[b] = 1
+      printf "%s\t%s\t%s\t%s\n", b, js("agentType"), js("description"), js("model") }' \
+    "$CL"/projects/*/*/subagents/agent-*.meta.json 2>/dev/null)
+
+  # Newest first, so the agent that is running is the one you read first.
+  local aty ades amdl nq to tw tr cx fts lts wt age run enc
+  while IFS='|' read -r mt b; do
+    [ -n "$b" ] || continue
+    sid="${ASID[$b]:-}"; [ -n "$sid" ] || continue
+    row="${AC["$b|$mt"]:-}"; [ -n "$row" ] || continue
+    IFS=$'\t' read -r _ nq to tw tr cx fts lts <<EOF
+$b	$row
+EOF
+    IFS=$'\t' read -r _ aty ades amdl <<EOF
+$b	${AMETA[$b]:-}
+EOF
+    # The same weights the rest of this file prices a window with: output 5x,
+    # cache write 2x, cache read 0.1x, all in input-equivalents.
+    wt=$(awk -v o="${to:-0}" -v w="${tw:-0}" -v r="${tr:-0}" 'BEGIN{printf "%.0f", o*5 + w*2 + r*0.1}')
+    age=$(( now_agent - mt )); [ "$age" -ge 0 ] || age=0
+    run=0; [ "$age" -le "$AG_LIVE" ] && run=1
+    AGN[$sid]=$(( ${AGN[$sid]:-0} + 1 ))
+    [ "$run" = 1 ] && AGL[$sid]=$(( ${AGL[$sid]:-0} + 1 ))
+    AGC[$sid]=$(( ${AGC[$sid]:-0} + wt ))
+    # Capped: a session with forty finished agents would otherwise put forty
+    # records on one row, and the detail panel shows a handful.
+    if [ "${AGN[$sid]}" -le 24 ]; then
+      enc="${b#agent-}~${aty:-agent}~${ades:-}~${amdl:-}~$age~$run~${nq:-0}~${to:-0}~${tw:-0}~${tr:-0}~${cx:-0}~$wt"
+      AGS[$sid]="${AGS[$sid]:+${AGS[$sid]};}$enc"
+    fi
+  done < <(for b in "${!AMT[@]}"; do printf '%s|%s\n' "${AMT[$b]}" "$b"; done | sort -t'|' -k1,1nr)
+
+  # Same slow-leak guard the meta cache uses: the file only ever grows, so it
+  # is rewritten once it is mostly stale rather than on every collect.
+  if [ -f "$AGCACHE" ] && [ "$(wc -l < "$AGCACHE" 2>/dev/null || echo 0)" -gt $(( ${#AMT[@]} * 3 + 40 )) ]; then
+    : > "$AGCACHE"
+    for b in "${!AMT[@]}"; do
+      [ -n "${AC["$b|${AMT[$b]}"]:-}" ] &&
+        printf '%s\t%s\n' "$b|${AMT[$b]}" "${AC["$b|${AMT[$b]}"]}" >> "$AGCACHE"
+    done
+  fi
 }
 
 # Everything here is batched, because a process spawn under Git Bash costs
@@ -829,7 +1454,8 @@ collect() {
   local now pidset psout f b k v rest cf d best ckmt age nother nmeta
   local pid sid alive name cwd proj short tf mtime idle left act probe page touched
   local ctx trend cyc otot olast rlast stop title lastp run parked ckage ckname
-  local cktopic ckothers ckdist cached pcwd nclosed nhidden
+  local cktopic ckothers ckdist cached pcwd nclosed nhidden srun srts runsince
+  local nag naglive agcost aglist
   local -a SHOW CAND
   now=${EPOCHSECONDS:-$(date +%s)}
 
@@ -865,7 +1491,7 @@ collect() {
   [ "${#pidset}" -gt 2 ] || pidset=" $(printf '%s\n' "$psout" |
     awk 'NR > 1 { print $1; print $4 }' | tr '\n' ' ') "
 
-  local -A TF TI HS MT SM SA LA
+  local -A TF TI HS MT SM SA LA SU SUT SR
 
   # sid -> transcript path AND mtime, from one stat over the whole glob. This
   # used to be a shell loop here plus a stat per session further down; batching
@@ -875,6 +1501,74 @@ collect() {
     b=${f##*/}; b=${b%.jsonl}
     TF[$b]="$f"; MT[$b]="$v"
   done < <(stat -c '%Y|%n' "$CL"/projects/*/*.jsonl 2>/dev/null)
+
+  # Third register: the status-line payload.
+  #
+  # The two registers above are both things the CLI writes at startup, and a
+  # session can end up in neither. Measured here 2026-09-02, session a62bdcf8:
+  # no jsonl under projects/, no sessions/<pid>.json, one "no transcript
+  # resolved from hook payload" line in token-alert-errors.log, and zero rows
+  # in token-history.csv - while the window was open and being worked in. Every
+  # view on this machine was blind to it, and nothing said so.
+  #
+  # session-usage/<sid>.json survived, because the status line rewrites it
+  # every few seconds for as long as the session renders anything. So it stands
+  # in as a third source, and not a poor one: it carries the context window and
+  # the cache's REAL expiry rather than one inferred from a hook timestamp,
+  # which are the two numbers a live row is actually read for.
+  #
+  # Registered with an EMPTY transcript path. Everything downstream that reads
+  # the transcript is guarded on that being non-empty, so such a row has no
+  # prompt history, no growth sparkline and no title lifted from a first
+  # prompt. It says what it knows and leaves the rest blank, which beats not
+  # existing.
+  while IFS='|' read -r v f; do
+    [ -n "$f" ] || continue
+    b=${f##*/}; b=${b%.json}
+    SUT[$b]="$v"
+  done < <(stat -c '%Y|%n' "$CL"/session-usage/*.json 2>/dev/null)
+  while IFS='|' read -r b c e nm cw; do
+    [ -n "$b" ] || continue
+    v="${SUT[$b]:-0}"
+    [ "$v" -gt 0 ] || continue
+    SU[$b]="$v|$c|$e|$nm|$cw"
+    # Two gates before a payload conjures a row that has no transcript behind
+    # it, because such a row is thin: no prompt history, no title from a first
+    # prompt, no sparkline, no cost split. It knows the window size and the
+    # cache expiry and nothing else, and it can never learn more.
+    #
+    #   context  - a payload with none has never made a request. A window that
+    #              just opened, or a short-lived print run. Nothing to show and
+    #              no cache worth protecting.
+    #   freshness - a payload the status line stopped rewriting is a session
+    #              that is closed, or idle, and disk cannot say which (see
+    #              SU_LIVE). Drawing it anyway is how a closed window kept a
+    #              live row and a counting-down clock on the widget.
+    #
+    # Recorded either way for anyone who asks about that sid by name; what the
+    # gates decide is whether it becomes a ROW.
+    if [ -z "${TF[$b]:-}" ] && [ "${c:-0}" -gt 0 ]        && [ $(( $(now_s) - v )) -le "$SU_LIVE" ]; then TF[$b]=""; MT[$b]="$v"; fi
+  done < <(awk '
+      # Quote as a variable rather than an escape: this program is spliced
+      # through a shell single-quoted string, and a backslash in here is one
+      # more thing between the reader and what the pattern says.
+      function jn(s, k,   r, q) {
+        q = sprintf("%c", 34)
+        if (!match(s, q k q ":[0-9]+")) return 0
+        r = substr(s, RSTART, RLENGTH); sub(/^[^:]*:/, "", r); return r + 0 }
+      function js(s, k,   r, q) {
+        q = sprintf("%c", 34)
+        if (!match(s, q k q ":" q "[^" q "]*" q)) return ""
+        r = substr(s, RSTART, RLENGTH)
+        sub("^" q k q ":" q, "", r); sub(q "$", "", r); return r }
+      # expires_at appears once in the payload, inside prompt_cache; the rate
+      # limits use resets_at, so this needs no enclosing-object match.
+      { b = FILENAME; sub(/.*[/]/, "", b); sub(/[.]json$/, "", b)
+        if (b in seen) next
+        seen[b] = 1
+        print b "|" jn($0, "total_input_tokens") "|" jn($0, "expires_at") \
+              "|" js($0, "session_name") "|" js($0, "cwd") }' \
+      "$CL"/session-usage/*.json 2>/dev/null)
 
   # sid -> cached title, read whole rather than grepped once per session.
   if [ -f "$TITLES" ]; then
@@ -902,13 +1596,17 @@ collect() {
     fi
   fi
 
+  load_side_tables
   scan_checkpoints
+  scan_agents
 
   # short sid -> ctx|trend|cycles|output|lastout|lastrecache|laststop|recache|
   # growth|breaches|gaprewrites, in a single pass over the history instead of
   # three awks per session. laststop is the epoch of the last Stop hook, which
-  # is what makes "a turn is running" decidable: the hook fires when a cycle
-  # ENDS, so a transcript written after it means the next cycle has begun.
+  # ENDS. It used to be what made "a turn is running" decidable, and the run=
+  # block in this function says at length why it no longer is; it survives as
+  # the cutoff for the live half of the usage figures, and as a fallback clock
+  # for a session with no pid file behind it.
   while IFS='|' read -r k rest; do
     [ -n "$k" ] && HS[$k]="$rest"
   done < <(awk -F, 'NR > 1 && $2 != "" {
@@ -921,7 +1619,15 @@ collect() {
         pv[$2] = $6
         c[$2] = $6 + 0; n[$2]++; o[$2] += $4; lo[$2] = $4; lr[$2] = $5
         rt[$2] += $5; gt[$2] += g
-        if ($7 != "-" && $7 != "") fb[$2]++
+        # Control counts PROMPT-authored breaches only - o (too much output)
+        # and g (too much new material). The other two flags are facts about
+        # the window rather than decisions about the prompt: r is re-cache,
+        # which is what churn prices, and c is a context band crossing, which
+        # is what spend measures. Measured over 127 sessions, counting all four
+        # left control 0.79 correlated with spend and 0.63 with churn; this cut
+        # drops the churn correlation to 0.18, which is what makes the three
+        # letters three different claims rather than one claim said three ways.
+        if ($7 ~ /[og]/) fb[$2]++
         # A churn spike this size is a cache that lapsed and was rewritten -
         # the one line in the table a /park would have removed outright.
         #
@@ -930,6 +1636,15 @@ collect() {
         # lands in churn and every session would score a rewrite it never had.
         if ($3 + 0 > 1 && ch > 60000) gp[$2]++
         ts[$2] = $1
+        # Minutes between this session cycles, for the forecast the row draws:
+        # a window survives to your next prompt when the cache outlives the gap
+        # you usually leave. Median rather than mean, so one lunch break does
+        # not move it, and minute resolution because that is what the hook
+        # writes.
+        gs = $1; gsub(/[-:]/, " ", gs); ge = mktime(gs " 00")
+        if (ge > 0) {
+          if (pt[$2] > 0 && ge > pt[$2]) gl[$2] = gl[$2] " " int((ge - pt[$2]) / 60)
+          pt[$2] = ge }
         # The trend carries growth AND that cycle output, so the sparkline can
         # draw one and colour by the other. Context itself only ever rises,
         # which is why drawing it made every session look like the same ramp.
@@ -944,30 +1659,65 @@ collect() {
           # "2026-08-24 15:28" -> epoch. Minute resolution, so the reader has to
           # allow a minute of slack before calling a session busy.
           st = ts[k]; gsub(/[-:]/, " ", st); e = mktime(st " 00"); if (e < 0) e = 0
-          printf "%s|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d\n", k, c[k], t, n[k], o[k], \
-            lo[k], lr[k], e, rt[k], gt[k], fb[k] + 0, gp[k] + 0 } }' \
+          gm = 0; mg = split(gl[k], ga, " ")
+          if (mg > 0) {
+            for (i = 2; i <= mg; i++) {
+              tv = ga[i] + 0
+              for (j = i - 1; j >= 1 && ga[j] + 0 > tv; j--) ga[j + 1] = ga[j]
+              ga[j + 1] = tv }
+            gm = ga[int((mg + 1) / 2)] + 0 }
+          printf "%s|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d\n", k, c[k], t, n[k], o[k], \
+            lo[k], lr[k], e, rt[k], gt[k], fb[k] + 0, gp[k] + 0, gm } }' \
       <(hist_rows) 2>/dev/null)
 
   # Session metadata from every pid file, in one awk. Liveness is decided here
   # rather than in the loop, and a live record always beats a stale one for the
   # same sid - two pids can name one session.
-  while IFS='|' read -r pid sid alive name cwd; do
+  #
+  # status and statusUpdatedAt come out of the same read, because between them
+  # they are the only register on this machine that KNOWS whether a turn is
+  # running. The CLI writes the flag itself on every transition and stamps the
+  # moment it flipped; everything this tool used to do with that question was
+  # inference over a transcript, and inference is what kept getting it wrong.
+  #
+  # statusUpdatedAt is milliseconds, and is divided down here so that nothing
+  # downstream has to remember which unit it arrived in.
+  #
+  # Both land BEFORE name and cwd in the row rather than after them. cwd is
+  # last on purpose - it is the field that can hold arbitrary text, and read
+  # absorbs the rest of the line into the final variable, so a separator inside
+  # a path cannot shift a column that comes after it.
+  while IFS='|' read -r pid sid alive srun srts name cwd; do
     [ -n "$sid" ] || continue
     # A live record beats a dead one for the same sid whichever order the files
     # arrive in. Backwards, this silently marks a RUNNING session closed - it
     # takes only one stale pid file still naming it.
     [ -n "${SA[$sid]:-}" ] && [ "${SA[$sid]}" -ge "$alive" ] && continue
-    SA[$sid]=$alive; SM[$sid]="$pid|$name|$cwd"
+    SA[$sid]=$alive; SM[$sid]="$pid|$name|$cwd"; SR[$sid]="$srun|$srts"
   done < <(awk -v pidset="$pidset" '
       function jv(s, k,   r) {
         if (!match(s, "\"" k "\":\"[^\"]*\"")) return ""
         r = substr(s, RSTART, RLENGTH)
         sub("^\"" k "\":\"", "", r); sub("\"$", "", r); return r }
+      function jn(s, k,   r) {
+        if (!match(s, "\"" k "\":[0-9]+")) return 0
+        r = substr(s, RSTART, RLENGTH); sub(/^[^:]*:/, "", r); return r + 0 }
       { p = FILENAME; sub(/.*[\/\\]/, "", p); sub(/\.json$/, "", p)
         s = jv($0, "sessionId"); if (s == "") next
-        printf "%s|%s|%d|%s|%s\n", p, s, (index(pidset, " " p " ") ? 1 : 0), \
+        printf "%s|%s|%d|%s|%d|%s|%s\n", p, s, (index(pidset, " " p " ") ? 1 : 0), \
+          jv($0, "status"), int(jn($0, "statusUpdatedAt") / 1000), \
           jv($0, "name"), jv($0, "cwd") }' \
       "$CL"/sessions/*.json 2>/dev/null)
+
+  # Liveness for a session no pid file mentions. A pid file is the better
+  # answer wherever there is one - it names a process - so this only fills
+  # silence, and it can only ever mark a session LIVE: a stale payload leaves
+  # the sid exactly where the registers above put it.
+  for b in "${!SU[@]}"; do
+    [ -n "${SA[$b]:-}" ] && continue
+    v=${SU[$b]%%|*}
+    [ $(( $(now_s) - v )) -le "$SU_LIVE" ] && SA[$b]=1
+  done
 
   # Which sessions there ARE.
   #
@@ -987,7 +1737,18 @@ collect() {
     [ "${SA[$sid]:-0}" = 1 ] && SHOW+=("$sid")
   done
   nclosed=0; nhidden=0
-  if [ "$SHOW_ALL" = 1 ]; then
+  # Resolved here rather than at parse time, because the pane toggles SHOW_ALL
+  # live on the 'a' key and never re-parses its arguments.
+  cwant=$CLOSED_N
+  if [ "$cwant" -lt 0 ]; then
+    if [ "$SHOW_ALL" = 1 ]; then cwant=$CLOSED_MAX; else cwant=0; fi
+  fi
+  # The COUNT is taken whether or not a page was asked for. A caller showing
+  # no closed sessions at all still has to be able to say how many it is not
+  # showing - that number is the whole content of the button that reveals
+  # them - and counting is free: it reads hook rows already in hand and pays
+  # no probe. Only the page selection below is gated.
+  if true; then
     CAND=()
     for sid in "${!TF[@]}"; do
       [ "${SA[$sid]:-0}" = 1 ] && continue
@@ -1002,23 +1763,37 @@ collect() {
       CAND+=("$act|$sid")
       nclosed=$((nclosed + 1))
     done
-    if [ "$nclosed" -gt 0 ]; then
+    if [ "$nclosed" -gt 0 ] && [ "$cwant" -gt 0 ]; then
+      # tail before head: skip the pages already in hand, then take this one.
+      # tail -n +1 is the whole list, so an offset of 0 is not a special case.
       while IFS='|' read -r v k; do
         [ -n "$k" ] && SHOW+=("$k")
-      done < <(printf '%s\n' "${CAND[@]}" | sort -t'|' -k1,1nr | head -n "$CLOSED_MAX")
+      done < <(printf '%s\n' "${CAND[@]}" | sort -t'|' -k1,1nr |
+               tail -n +$(( CLOSED_FROM + 1 )) | head -n "$cwant")
     fi
-    nhidden=$(( nclosed - CLOSED_MAX )); [ "$nhidden" -lt 0 ] && nhidden=0
+    # What is left BEYOND this page - which is what a caller needs to know to
+    # decide whether asking for another one would return anything.
+    nhidden=$(( nclosed - CLOSED_FROM - cwant )); [ "$nhidden" -lt 0 ] && nhidden=0
   fi
   # A count, not a row: the renderer prints it as a footer under the table so
   # that "12 closed" never reads as "12 closed sessions exist".
   [ "$nhidden" -gt 0 ] && printf '#|hidden|%s|%s\n' "$nhidden" "$nclosed"
 
   for sid in ${SHOW[@]+"${SHOW[@]}"}; do
-    tf="${TF[$sid]:-}"; [ -n "$tf" ] || continue
+    tf="${TF[$sid]:-}"
+    # A payload-only row has no transcript by construction; anything else with
+    # no transcript is a register entry with nothing behind it and is skipped.
+    [ -n "$tf" ] || [ -n "${SU[$sid]:-}" ] || continue
     mtime="${MT[$sid]:-0}"; [ "$mtime" -gt 0 ] || continue
 
     short=${sid:0:8}
     alive="${SA[$sid]:-0}"
+    suts=0; suctx=0; suexp=0; suname=""; sucwd=""
+    if [ -n "${SU[$sid]:-}" ]; then
+      IFS='|' read -r suts suctx suexp suname sucwd <<EOF
+${SU[$sid]}
+EOF
+    fi
     rest="${SM[$sid]:-}"
     if [ -n "$rest" ]; then
       pid=${rest%%|*}; rest=${rest#*|}; name=${rest%%|*}; cwd=${rest#*|}
@@ -1026,8 +1801,13 @@ collect() {
       pid="-"; name="-"; cwd=""
     fi
     [ -n "$name" ] || name="-"
-    rest="${HS[$short]:-0||0|0|0|0|0|0|0|0|0}"
-    IFS='|' read -r ctx trend cyc otot olast rlast stop rtot gtot brch gaps <<< "$rest"
+    rest="${HS[$short]:-0||0|0|0|0|0|0|0|0|0|0}"
+    IFS='|' read -r ctx trend cyc otot olast rlast stop rtot gtot brch gaps gapmed <<< "$rest"
+    # No hook row for this session: either it has not finished a cycle yet, or
+    # the hook could not resolve its transcript and never will. The payload
+    # knows how big the window is either way, and a row that has to say 0 for
+    # the one number it exists to show is not worth drawing.
+    [ "${ctx:-0}" -gt 0 ] || ctx=${suctx:-0}
 
     # When this session last actually DID something, and what was last typed
     # into it - one pass over the tail for both.
@@ -1048,23 +1828,61 @@ collect() {
     # it. They get the same probe, once, cached by mtime; and where the Stop
     # hook has seen the session at all, its last row settles the question for
     # free and no probe is needed.
-    act=$mtime; lastp=""; pcwd=""; page=-1
+    act=$mtime; lastp=""; pcwd=""; page=-1; plive="0,0,0,0,0,0,0"
+    pmodel=""; peff=""; tage=-1
     if [ "$alive" = 1 ]; then
-      probe=$(tail -c 400000 "$tf" 2>/dev/null | prompt_of /dev/stdin probe)
-      page=${probe%%|*}; probe=${probe#*|}; pcwd=${probe%%|*}; lastp=${probe#*|}
+      # Everything the hook has already accounted for is older than its last
+      # row, so that row's age is the cutoff. No row yet -> -1, count it all.
+      lcut=-1
+      [ "${stop:-0}" -gt 0 ] && lcut=$(( now - stop ))
+      probe=""
+      if [ -n "$tf" ]; then
+        probe=$(tail -c 400000 "$tf" 2>/dev/null | prompt_of /dev/stdin probe "$lcut" "${XX[$short]:-0}")
+      fi
+      page=${probe%%|*}; probe=${probe#*|}
+      tage=${probe%%|*}; probe=${probe#*|}
+      pcwd=${probe%%|*}; probe=${probe#*|}
+      plive=${probe%%|*}; probe=${probe#*|}
+      pmodel=${probe%%|*}; probe=${probe#*|}
+      peff=${probe%%|*}; lastp=${probe#*|}
+      case "$plive" in ''|*[!0-9,]*) plive="0,0,0,0,0,0,0" ;; esac
       case "$page" in ''|*[!0-9-]*) page=-1 ;; esac
+      case "$tage" in ''|*[!0-9-]*) tage=-1 ;; esac
       [ "$page" -ge 0 ] && act=$(( now - page ))
       [ "${stop:-0}" -gt "$act" ] && act=$stop
     else
       cached="${LA[$sid]:-}"
+      # Five fields or it cannot answer. Rows written before the model and
+      # effort columns existed carry three, and a closed transcript never
+      # changes mtime again - so without this they would stay blank forever
+      # rather than being re-probed once and cached in the new shape.
+      case "$cached" in
+        # A row that cached the client placeholder in place of a model was
+        # written before that was filtered out, and re-probes to a real one.
+        *'<synthetic>'*)           cached="" ;;
+        *$'\t'*$'\t'*$'\t'*$'\t'*) ;;
+        *)                         cached="" ;;
+      esac
       if [ "${cached%%	*}" = "$mtime" ]; then
-        cached=${cached#*	}; act=${cached%%	*}; pcwd=${cached#*	}; page=0
-      elif [ "${stop:-0}" -le 0 ] || [ -z "$cwd" ]; then
-        probe=$(tail -c 400000 "$tf" 2>/dev/null | prompt_of /dev/stdin probe)
-        page=${probe%%|*}; probe=${probe#*|}; pcwd=${probe%%|*}
+        cached=${cached#*	}; act=${cached%%	*}; cached=${cached#*	}
+        pcwd=${cached%%	*}; cached=${cached#*	}
+        pmodel=${cached%%	*}; peff=${cached#*	}; page=0
+      else
+        # A closed session has no live half worth the read - its cache is gone
+        # and nothing is being added - so this probe stays on the cheap path.
+        probe=""
+        if [ -n "$tf" ]; then
+          probe=$(tail -c 400000 "$tf" 2>/dev/null | prompt_of /dev/stdin probe)
+        fi
+        page=${probe%%|*}; probe=${probe#*|}
+        probe=${probe#*|}
+        pcwd=${probe%%|*}; probe=${probe#*|}
+        probe=${probe#*|}
+        pmodel=${probe%%|*}; probe=${probe#*|}
+        peff=${probe%%|*}
         case "$page" in ''|*[!0-9-]*) page=-1 ;; esac
         [ "$page" -ge 0 ] && act=$(( now - page ))
-        printf '%s\t%s\t%s\t%s\n' "$sid" "$mtime" "$act" "$pcwd" >> "$META"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$mtime" "$act" "$pcwd" "$pmodel" "$peff" >> "$META"
       fi
       # The probe is the finer of the two - a record timestamp against the
       # minute the hook fired - so it wins where there is one, and the hook row
@@ -1074,9 +1892,19 @@ collect() {
       fi
     fi
     [ -n "$cwd" ] || cwd="$pcwd"
+    [ -n "$cwd" ] || cwd="$sucwd"
     proj=${cwd//\\//}; proj=${proj%/}; proj=${proj##*/}; [ -n "$proj" ] || proj="-"
     idle=$(( (now - act) / 60 )); [ "$idle" -lt 0 ] && idle=0
     left=$(( TTL - idle ))
+    # The payload carries the cache's REAL expiry, and it beats one inferred
+    # from an activity timestamp. Inference assumes the last thing to touch the
+    # session was a request; a resume, a status render or an interrupted turn
+    # all touch it and buy no cache life at all, which is the reading that
+    # showed windows 877 minutes warm. Believed only while the payload itself
+    # is fresh - a stale one is a stopped clock.
+    if [ "${suexp:-0}" -gt 0 ] && [ $(( now - suts )) -le "$SU_LIVE" ]; then
+      left=$(( (suexp - now) / 60 ))
+    fi
     # A wide gap between the mtime and the last record is the signature of a
     # session reopened and not spoken to. Worth saying out loud in the panel:
     # it is the one state where "live process, dead cache" is correct and still
@@ -1096,7 +1924,13 @@ collect() {
     # is what stops two sessions in one project from both showing parked.
     parked=0; ckage=-1; ckname=""; ckmt=0; cktopic=""; ckothers=""; ckdist=-1
     for cf in "${CKN[@]}"; do
-      case "$cf" in "$proj".md|"$proj".*.md) ;; *) continue ;; esac
+      # No project filter on this pass. A stamped file carries the session id
+      # it was written for, which is a stronger claim than a filename match and
+      # does not require the two derivations of "the project" to agree - they
+      # do not: collect() takes it from the SESSION's cwd, while the parker
+      # takes basename "$PWD", which is wherever the shell happened to be.
+      # The mtime pass below keeps the filter, because an unstamped file has
+      # nothing but its name to say who it belongs to.
       if [ -n "${CS[$cf]}" ] && [ "${CS[$cf]:0:8}" = "$short" ]; then
         parked=1; ckname="$cf"; ckmt=${CK[$cf]}; break
       fi
@@ -1132,31 +1966,187 @@ collect() {
       nother=$((nother + 1)); [ "$nother" -ge 4 ] && break
     done
 
-    # Running: the transcript has been written since the last Stop hook (+90s
-    # of slack for the minute-resolution timestamp) and was touched recently
-    # enough that this is a live turn rather than an interrupted one. With no
-    # history at all the hook has never fired, so freshness is all there is.
-    run=0; age=$(( now - act ))
+    # Running, and since when. Three registers, and they are not equally
+    # informed - so they are asked in order rather than blended together.
+    #
+    # 1. sessions/<pid>.json carries the CLI's OWN status flag: "busy" while a
+    #    turn is in flight, "idle" at the prompt, rewritten on every transition
+    #    with statusUpdatedAt stamped at the moment it flipped. That is not an
+    #    inference, and where it exists nothing else gets a vote.
+    # 2. Where there is no pid file - a payload-only row - there is no flag, so
+    #    the old transcript-against-the-Stop-hook fence is all there is. It is
+    #    kept for exactly that case and nothing else.
+    # 3. Nothing else may assert a running turn. A transcript alone used to be
+    #    able to, and that is what went wrong.
+    #
+    # What this replaces. The fence was "the transcript has been written since
+    # the last Stop hook", with a 120-second freshness test standing in when
+    # the hook had never fired for that session. Both halves failed together on
+    # 2026-09-03: token-history.csv had not been appended to since 05:13 - the
+    # Stop hook was not being invoked at all - so every live session had stop=0
+    # and every one of them fell through to the fallback, which marks a window
+    # running for two minutes after each turn ENDS. The pane read "4 working"
+    # over a machine with one turn actually in flight.
+    #
+    # That is the shape of the bug and not just an instance of it: a derivation
+    # whose primary path depends on a hook it has no way to check, degrading
+    # silently into a heuristic that cannot tell a finished turn from a live
+    # one. The flag can, and it costs the same read that was happening anyway.
+    #
+    # Three states, not two, because "busy" can be true and stale at once:
+    #
+    #   1  running   the flag says busy and the transcript is still moving.
+    #   2  waiting    the flag says so itself. A third value the CLI writes,
+    #                 found only by reading real pid files rather than assuming
+    #                 the two states anyone would have guessed: a window
+    #                 holding a permission prompt open is neither busy nor
+    #                 idle, and it says which. Folding that into idle would
+    #                 have hidden the one state that actually wants you.
+    #   3  stalled    the flag says busy but nothing has been written for
+    #                 RUN_IDLE, or the turn has been open past RUN_MAX. A
+    #                 process that died mid-turn looks like this - the pid file
+    #                 keeps whatever it last said. Observed on 03bcc363: busy
+    #                 since 14:22, last record 15:33. INFERRED, where 2 is
+    #                 reported, which is why they are two states and not one.
+    #   0  idle       the flag says idle, or there is no flag and the fence
+    #                 below finds nothing.
+    #
+    # The vocabulary is wider than two words and nothing publishes the list -
+    # these were found by reading real pid files one afternoon: busy, idle,
+    # waiting, and shell (a ! command running in the window). So an
+    # unrecognised value counts as RUNNING rather than idle. That is the safer
+    # of the two errors here, and it is not the obvious one: everywhere else
+    # this tool refuses to invent a live window. But the CLI writes a status
+    # because something is happening, "shell" read as idle for an afternoon on
+    # exactly that reasoning, and the RUN_IDLE guard demotes a wrong guess to
+    # stalled within five minutes - where no guard can rescue a row that was
+    # never drawn.
+    #
+    # Only state 1 animates or counts as working. A spinner over a window that
+    # is waiting on YOU is the same lie the static arrow used to tell over a
+    # live one, pointing the other way.
+    #
+    # Measured against the CONVERSATION clock, not the activity clock. act is
+    # "when was this session last touched at all" and is right for the cache
+    # countdown and the ordering; a turn is a narrower thing, and asking the
+    # wrong clock is what kept the spinner running over an idle window.
+    tact=$act; [ "${tage:-1}" -ge 0 ] && tact=$(( now - tage ))
+    run=0; runsince=0; age=$(( now - tact ))
     if [ "$alive" = 1 ]; then
-      if [ "${stop:-0}" -gt 0 ]; then
-        [ "$age" -le 600 ] && [ "$act" -gt $(( stop + 90 )) ] && run=1
-      else
-        [ "$age" -le 120 ] && run=1
+      srun=""; srts=0
+      if [ -n "${SR[$sid]:-}" ]; then
+        srun="${SR[$sid]%%|*}"; srts="${SR[$sid]##*|}"
+        case "$srts" in ''|*[!0-9]*) srts=0 ;; esac
       fi
+      case "$srun" in
+        idle) run=0 ;;
+        "")
+          # No pid file at all. The payload proves the window is rendering but
+          # not what it is rendering, so this is the old fence - kept narrow,
+          # and unable to produce anything but state 1.
+          if [ "${stop:-0}" -gt 0 ]; then
+            if [ "$age" -le "$RUN_IDLE" ] && [ "$tact" -gt $(( stop + 90 )) ] && [ $(( tact - stop )) -le "$RUN_MAX" ]; then run=1; runsince=$stop; fi
+          else
+            [ "$age" -le 120 ] && run=1
+          fi
+          ;;
+        waiting)
+          # The CLI's own word for a window holding something open in front of
+          # you - a permission prompt, a question. No staleness guard on this
+          # one: waiting is a state a window is SUPPOSED to sit in forever, so
+          # its age is information rather than doubt, and runsince dates it.
+          run=2; runsince=$srts
+          [ "$runsince" -gt 0 ] || runsince=${stop:-0}
+          ;;
+        *)
+          # busy, shell, or a word this was written before it existed.
+          # Something is happening; the guards decide whether it still is.
+          run=1
+          # statusUpdatedAt is the transition into this state, which measured
+          # here lands on the same second as the human prompt that started the
+          # turn. Where it is missing the last Stop hook is the next best
+          # fence, and 0 means the row shows no elapsed time rather than an
+          # invented one.
+          runsince=$srts
+          [ "$runsince" -gt 0 ] || runsince=${stop:-0}
+          [ "$age" -gt "$RUN_IDLE" ] && run=3
+          [ "$runsince" -gt 0 ] && [ $(( now - runsince )) -gt "$RUN_MAX" ] && run=3
+          ;;
+      esac
     fi
 
     title="${TI[$sid]:-}"
     if [ -z "$title" ]; then
-      title=$(prompt_of "$tf" first)
+      if [ -n "$tf" ]; then title=$(prompt_of "$tf" first); fi
+      # No transcript to read a first prompt out of. The payload carries the
+      # name the CLI derived for this session, which is the same thing one step
+      # further along, and it caches like any other title.
+      [ -n "$title" ] || title="$suname"
       if [ -n "$title" ]; then printf '%s\t%s\n' "$sid" "$title" >> "$TITLES"
       else title="(no prompt yet)"; fi
     fi
 
-    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
+    # Fields 31-35: the live half, everything this window has spent since the
+    # hook last wrote a row. Appended rather than woven in, because the pane
+    # and the dashboard index these positionally.
+    IFS=, read -r lvreq lvout lvwr lvrd lvctx lvext lvxts <<EOF
+$plive
+EOF
+    # A mark is spent the moment the extension it paid for is seen. The stored
+    # timestamp is what stops the next scan spending the same one again - and
+    # because the count is DERIVED from that timestamp rather than incremented,
+    # two scans landing together compute and write the same answer.
+    if [ "${lvext:-0}" -gt 0 ]; then
+      # The table is updated in step with the file, so a later session in the
+      # same collect reads what was just written rather than what was there
+      # when the collect started.
+      XA[$short]="${XA[$short]:-$EXT_DEFAULT}"
+      XU[$short]=$(( ${XU[$short]:-0} + lvext ))
+      XX[$short]="${lvxts:-0}"
+      write_ext "$short" "${XA[$short]}" "${XU[$short]}" "${lvxts:-0}"
+    fi
+    # Fields 36-37: how many prompts this machine typed into the session, and
+    # how long ago the last one was. Appended, like the live half before it -
+    # the reader loops to NF rather than to a literal, so growing the row here
+    # costs nothing downstream.
+    npoke="${PKC[$short]:-0}"; pokeage="${PKM[$short]:--1}"
+    # Field 38: why this window exists. Empty when a person opened it.
+    spawnwhy="${SPW[$pid]:-}"
+    # Fields 40-41: which model is answering in this window, and at what
+    # reasoning effort. Off the transcript rather than the pid file - the pid
+    # file records what the session was STARTED with, and /model mid-session
+    # does not rewrite it.
+    # Field 42: when the turn in flight began, as an epoch second. An epoch
+    # and not an age, because the renderer redraws far more often than this
+    # runs - it subtracts from systime() itself, so the elapsed clock keeps
+    # ticking between collects instead of freezing ten seconds at a time.
+    # Fields 43-46: the subagents this session spawned - how many, how many
+    # are still running, what they cost between them, and the list itself.
+    # See scan_agents for why none of it could be read off the parent
+    # transcript: an agent writes to its own file and the parent records only
+    # the tool_use that started it.
+    #
+    # An agent counts as running only while its file is still being written
+    # AND this window has a turn in flight. The file clock alone keeps an
+    # agent "running" for AG_LIVE seconds after it returned; the run state
+    # alone cannot say which of four agents on the row is the live one.
+    nag="${AGN[$sid]:-0}"; naglive="${AGL[$sid]:-0}"
+    agcost="${AGC[$sid]:-0}"; aglist="${AGS[$sid]:-}"
+    if [ "$run" != 1 ] && [ "${naglive:-0}" != 0 ]; then
+      naglive=0
+      aglist=$(printf %s "$aglist" | awk -F';' -v OFS=';' '{
+        for (i = 1; i <= NF; i++) { n = split($i, a, "~"); a[6] = 0; $i = a[1]
+          for (j = 2; j <= n; j++) $i = $i "~" a[j] } print }')
+    fi
+    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
       "$short" "$alive" "$idle" "$left" "$ctx" "${name:0:34}" "$trend" \
       "$pid" "$proj" "$title" "$cyc" "$otot" "$olast" "$rlast" "$sid" "$tf" "$lastp" \
       "$run" "$parked" "$ckage" "$ckname" "$cktopic" "$ckothers" "$ckdist" \
-      "$rtot" "$gtot" "$brch" "$gaps" "$touched" "$cwd"
+      "$rtot" "$gtot" "$brch" "$gaps" "$touched" "$cwd" \
+      "${lvreq:-0}" "${lvout:-0}" "${lvwr:-0}" "${lvrd:-0}" "${lvctx:-0}" \
+      "${npoke:-0}" "${pokeage:--1}" "${spawnwhy:-}" "${gapmed:-0}" \
+      "${pmodel:-}" "${peff:-}" "${runsince:-0}" \
+      "${nag:-0}" "${naglive:-0}" "${agcost:-0}" "${aglist:-}"
   done
 }
 
@@ -1207,6 +2197,840 @@ snapshot() {
 # (countdown to the next collect) and COLS. The watch loop redraws once a
 # second to keep that countdown live, so a frame costs exactly one process and
 # reads nothing off disk beyond the snapshot.
+# ---------------------------------------------------------------------------
+# The same snapshot the pane draws, as JSON, for the two views that are not a
+# terminal: the desktop widget and the HTML dashboard.
+#
+# Why the bands are restated here. render() derives FLOOR, PARK_AT, CLEAR_*,
+# CUT_* and OVERHEAT from the measured constants, but that copy lives inside a
+# 1400-line awk program that also owns the drawing, so there is nothing to
+# call. This block recomputes them from the SAME M_* globals rather than
+# hardcoding, so retuning measure_constants moves both. What it must not do is
+# invent a different ladder - if you change one, change the other.
+#
+#   --json       sessions + constants + the 7d overall   (the widget polls this)
+#   --json-full  the same, plus every history row        (the dashboard reads it)
+# How much of the plan is left. Two sources, and they answer different
+# questions, so the better one wins rather than the newer one:
+#
+#   cswap      polls EVERY managed account on its own timer, so it knows the
+#              headroom on the account you are not signed into - and a full
+#              five-hour window matters much less when a second account is
+#              sitting at 0%. It also carries pace: where a seven-day window
+#              ought to be by now, and whether this one lasts to its reset.
+#   status line  only ever describes the account being spent right now, and
+#              only refreshes while a session is open. It is the fallback, and
+#              on a machine without cswap it is all there is.
+#
+# Both are read the same way: into one TSV that the JSON writer walks. Rows are
+#   S <TAB> source <TAB> active-account-number
+#   A <TAB> n <TAB> email <TAB> active <TAB> status <TAB> 5h% <TAB> 5h-in
+#     <TAB> 7d% <TAB> 7d-in <TAB> pace% <TAB> ahead <TAB> lasts <TAB> age
+CSWAP=""
+for _c in "$HOME/.local/bin/cswap.exe" "$HOME/.local/bin/cswap"; do
+  [ -x "$_c" ] && { CSWAP="$_c"; break; }
+done
+[ -n "$CSWAP" ] || CSWAP=$(command -v cswap 2>/dev/null || true)
+
+# cswap costs about two thirds of a second to start, which is fine once a
+# minute and not fine three times in one redraw - so its answer is kept on disk
+# and re-used for half a minute. Nothing is lost by that: cswap polls the API
+# every few MINUTES, so a 30s-old copy of its answer is the same answer.
+cswap_json() {
+  local c="$CL/.cswap-usage.json" age=9999
+  [ -n "$CSWAP" ] || return 1
+  [ -f "$c" ] && age=$(( $(now_s) - $(stat -c %Y "$c" 2>/dev/null || echo 0) ))
+  if [ "$age" -ge 30 ]; then
+    "$CSWAP" list --json > "$c.$$" 2>/dev/null && mv -f "$c.$$" "$c" 2>/dev/null
+    rm -f "$c.$$" 2>/dev/null
+  fi
+  [ -s "$c" ] || return 1
+  printf '%s\n' "$c"
+}
+
+# Which account a live session is actually spending, and what that account's
+# usage was a few seconds ago.
+#
+# cswap answers a NEIGHBOURING question, not this one. Its activeAccountNumber
+# is whichever credential the GLOBAL config holds - the account a new session
+# would pick up - and it polls every other account on a slow timer. But a
+# session started with CLAUDE_CONFIG_DIR pointing at a per-account profile
+# spends THAT account regardless of what the global config says, and the number
+# cswap holds for it can easily predate the session. Measured 2026-09-02: this
+# window was signed into account 1 and burning it, while cswap's copy was ten
+# minutes old and read 5h 0% - because its last poll landed before the session
+# opened, and account 2 was the "active" one it kept fresh.
+#
+# The status-line payload has no such lag. It carries rate_limits for the
+# account ITS OWN session is signed into, rewritten every few seconds for as
+# long as the window renders anything - the same file the third register in
+# snapshot() already leans on. So the account is read from the profile
+# directory in transcript_path (...\sessions\<n>-<slug>\...), and a payload
+# with no such segment belongs to whatever the global config points at, which
+# is exactly cswap's active account.
+#
+# Only payloads inside SU_LIVE count: an older one describes a window that has
+# stopped rendering, and its rate limits are then no fresher than cswap's.
+#
+# Prints one row per account, freshest payload wins:
+#   n <TAB> age <TAB> p5 <TAB> resets5 <TAB> p7 <TAB> resets7
+live_usage_rows() {
+  local act="${1:-0}" cs="${2:-}" sm="${3:-}" mf rc=1
+  ls "$CL"/session-usage/*.json >/dev/null 2>&1 || return 1
+  mf=$(mktemp 2>/dev/null) || mf="$CL/.limlive.$$"
+  stat -c '%Y|%n' "$CL"/session-usage/*.json 2>/dev/null > "$mf"
+  if [ -s "$mf" ]; then
+    awk -v now="$(now_s)" -v live="$SU_LIVE" -v act="$act" -v cs="$cs" -v sidmap="$sm" '
+      function abs(x) { return x < 0 ? -x : x }
+      # cswap'"'"'s own per-account readings, so a payload can be matched to the
+      # account it actually describes. Read from LIMF before merge_live_usage
+      # writes to it, so these are the untouched poll values.
+      function load_cswap(   l, g, k) {
+        if (cs == "") return
+        while ((getline l < cs) > 0) {
+          split(l, g, "	")
+          if (g[1] != "A") continue
+          k = g[2] + 0
+          if (k <= 0) continue
+          AN[++AC] = k; A5[k] = g[6] + 0; A7[k] = g[8] + 0 }
+        close(cs) }
+      # Which account a payload BELONGS to, when its path does not say.
+      #
+      # The old answer was "whichever the global config holds", and that is
+      # wrong for the case this exists to cover: a session started before a
+      # cswap switch keeps the credentials it opened with and goes on spending
+      # the OLD account, while its transcript still sits in the shared projects
+      # directory with no profile segment to name it. Its rate limits were then
+      # folded onto the new account'"'"'s row - so account 1 could be drawn at
+      # account 2'"'"'s 88%, and the account genuinely being spent shown as idle
+      # and offered as the escape route.
+      #
+      # The payload names the account itself, in the only way it can: the
+      # percentages ARE the account. The seven-day window carries that - it
+      # moves a percent or two an hour, so it still identifies the account
+      # across cswap'"'"'s poll lag - with the five-hour one worth a tiebreak and
+      # no more. Only a clear winner counts; two accounts sitting at similar
+      # percentages cannot be told apart this way, and guessing there is worse
+      # than falling back to the credential the global config holds.
+      function byusage(p5, p7,   i, k, d, b1, b2, bn) {
+        if (AC == 0) return act + 0
+        if (AC == 1) return AN[1]
+        b1 = 1e9; b2 = 1e9; bn = 0
+        for (i = 1; i <= AC; i++) {
+          k = AN[i]; d = 0
+          if (p7 >= 0 && A7[k] >= 0) d += 4 * abs(p7 - A7[k])
+          if (p5 >= 0 && A5[k] >= 0) d += abs(p5 - A5[k])
+          if (d < b1) { b2 = b1; b1 = d; bn = k } else if (d < b2) { b2 = d } }
+        if (bn > 0 && b1 <= 60 && b1 + 20 <= b2) return bn
+        return act + 0 }
+      function tpath(s,   r) {
+        if (!match(s, /"transcript_path":"[^"]*"/)) return ""
+        r = substr(s, RSTART, RLENGTH)
+        sub(/^"transcript_path":"/, "", r); sub(/"$/, "", r); return r }
+      # The profile directory is <n>-<slug>, so the number is everything up to
+      # the first dash. Separators are stripped one at a time because the path
+      # arrives JSON-escaped, with every backslash doubled.
+      function prof(p,   i, r, c) {
+        i = index(p, "sessions")
+        if (i == 0) return 0
+        r = substr(p, i + 8)
+        while (length(r)) { c = substr(r, 1, 1); if (c != "\\" && c != "/") break; r = substr(r, 2) }
+        if (match(r, /^[0-9]+-/)) return substr(r, 1, RLENGTH - 1) + 0
+        return 0 }
+      function v(b, k,   r) {
+        if (match(b, "\"" k "\":-?[0-9.]+")) {
+          r = substr(b, RSTART, RLENGTH); sub(/^[^:]*:/, "", r); return r + 0 }
+        return -1 }
+      NR == FNR { i = index($0, "|"); if (i) AGE[substr($0, i + 1)] = now - substr($0, 1, i - 1); next }
+      { S[FILENAME] = S[FILENAME] $0 }
+      END {
+        load_cswap()
+        for (f in S) {
+          a = (f in AGE) ? AGE[f] : 99999
+          if (a < 0) a = 0
+          if (a > live + 0) continue
+          s = S[f]
+          if (!match(s, /"rate_limits":\{.*\}/)) continue
+          p5 = -1; r5 = 0; p7 = -1; r7 = 0
+          if (match(s, /"five_hour":\{[^}]*\}/)) {
+            b = substr(s, RSTART, RLENGTH); p5 = v(b, "used_percentage"); r5 = v(b, "resets_at") }
+          if (match(s, /"seven_day":\{[^}]*\}/)) {
+            b = substr(s, RSTART, RLENGTH); p7 = v(b, "used_percentage"); r7 = v(b, "resets_at") }
+          if (p5 < 0 && p7 < 0) continue
+          # Attribution needs the percentages, so it happens after the parse -
+          # the profile directory when the path carries one, the payload'"'"'s own
+          # readings when it does not.
+          n = prof(tpath(s))
+          if (n == 0) n = byusage(p5, p7)
+          # The same answer, kept per session. BEST below collapses these onto
+          # one row per account, which is what the limits panel needs and the
+          # wrong shape for "which account is this window spending".
+          if (sidmap != "") {
+            sidn = f; sub(/.*[/]/, "", sidn); sub(/[.]json$/, "", sidn)
+            if (sidn != "") printf "%s\t%d\n", sidn, n > sidmap }
+          if (n in BEST && BEST[n] <= a) continue
+          BEST[n] = a; P5[n] = p5; R5[n] = r5; P7[n] = p7; R7[n] = r7 }
+        for (n in BEST)
+          printf "%d\t%d\t%.1f\t%d\t%.1f\t%d\n", n, BEST[n], P5[n], R5[n], P7[n], R7[n] }' \
+      "$mf" "$CL"/session-usage/*.json 2>/dev/null && rc=0
+  fi
+  rm -f "$mf" 2>/dev/null
+  return $rc
+}
+
+# Fold those live readings over the rows cswap left in LIMF.
+#
+# Two corrections, and they are separate. The PERCENTAGES are replaced only
+# when the payload is genuinely fresher than cswap's own usageAgeSeconds, so a
+# machine where cswap is keeping up loses nothing. ACTIVE is replaced outright
+# whenever any live session was found, because cswap's flag answers "which
+# credential is in the global config" and every reader of this file - the
+# widget's "(in use)", the alert block, the spare-account search - is asking
+# "which account is being spent right now". Those differ the moment a session
+# runs on a per-account profile, and then the alert describes an account
+# nothing is spending while the one at 90% sits in the spare list.
+merge_live_usage() {
+  local act lv am
+  act=$(awk -F'\t' '$1 == "S" { print $3 + 0; exit }' "$LIMF" 2>/dev/null)
+  lv="$LIMF.live"
+  # Written to a side file and MERGED, never replaced. Only payloads touched in
+  # the last SU_LIVE seconds are read, so a straight overwrite would empty the
+  # map of every window that happens to be idle - which is most of them, most
+  # of the time. The answer keeps: a session spends the credentials it opened
+  # with, so last poll's attribution is still this poll's attribution. What
+  # does expire it is the session-usage payload going away with the session.
+  am="$ACCTMAP.new"
+  : > "$am" 2>/dev/null
+  live_usage_rows "${act:-0}" "$LIMF" "$am" > "$lv" 2>/dev/null
+  awk -F"\t" -v d="$CL/session-usage" '
+      NR == FNR { A[$1] = $2; next }
+      !($1 in A) { A[$1] = $2 }
+      END { for (k in A) {
+        f = d "/" k ".json"
+        if ((getline junk < f) >= 0) print k "\t" A[k]
+        close(f) } }' "$am" "$ACCTMAP" > "$ACCTMAP.tmp" 2>/dev/null &&
+    mv -f "$ACCTMAP.tmp" "$ACCTMAP" 2>/dev/null
+  rm -f "$am" "$ACCTMAP.tmp" 2>/dev/null
+  if [ ! -s "$lv" ]; then rm -f "$lv" 2>/dev/null; return 0; fi
+  if awk -F'\t' -v now="$(now_s)" -v lv="$lv" '
+      function cd(r,   s, d, h, m) {
+        s = r - now
+        if (r <= 0 || s <= 0) return ""
+        d = int(s / 86400); h = int((s % 86400) / 3600); m = int((s % 3600) / 60)
+        if (d > 0) return sprintf("%dd %dh", d, h)
+        return sprintf("%dh %dm", h, m) }
+      BEGIN {
+        while ((getline l < lv) > 0) {
+          split(l, g, "\t")
+          n = g[1] + 0; SEEN[n] = 1; AG[n] = g[2] + 0
+          P5[n] = g[3] + 0; R5[n] = g[4] + 0; P7[n] = g[5] + 0; R7[n] = g[6] + 0
+          LIVE[n]++ }
+        close(lv) }
+      $1 != "A" { print; next }
+      {
+        n = $2 + 0; src = "cswap"
+        # A live session decides active, for every row, or none of them do.
+        $4 = (n in SEEN) ? 1 : 0
+        if ((n in SEEN) && ($13 + 0 < 0 || AG[n] < $13 + 0)) {
+          if (P5[n] >= 0) { $6 = sprintf("%.1f", P5[n]); $7 = cd(R5[n]) }
+          if (P7[n] >= 0) {
+            $8 = sprintf("%.1f", P7[n]); $9 = cd(R7[n])
+            # Pace is cswap-derived and outlives the poll it came with, but the
+            # verdict against it must move with the number it judges.
+            if ($10 + 0 >= 0) $11 = ($8 + 0 > $10 + 0) ? 1 : 0 }
+          $13 = AG[n]; src = "live" }
+        print $0 "\t" ((n in SEEN) ? LIVE[n] : 0) "\t" src }' \
+      OFS='\t' "$LIMF" > "$LIMF.new" 2>/dev/null && [ -s "$LIMF.new" ]; then
+    mv -f "$LIMF.new" "$LIMF" 2>/dev/null
+  fi
+  rm -f "$lv" "$LIMF.new" 2>/dev/null
+}
+
+read_limits() {
+  local f cj
+  : > "$LIMF"
+  # cswap prints one key per line, so the parse is a small state machine over
+  # lines rather than a regex over a blob - which is also why it survives a key
+  # being added anywhere in the object.
+  if cj=$(cswap_json); then
+    awk -F'\n' '
+      function str(l,   r) {
+        if (match(l, /: *"[^"]*"/)) {
+          r = substr(l, RSTART, RLENGTH); sub(/^:[ ]*"/, "", r); sub(/"$/, "", r)
+          gsub(/\t/, " ", r); return r }
+        return "" }
+      function num(l,   r) {
+        if (match(l, /: *-?[0-9.]+/)) {
+          r = substr(l, RSTART, RLENGTH); sub(/^:[ ]*/, "", r); return r + 0 }
+        return -1 }
+      /"activeAccountNumber"/ { act = num($0); next }
+      /"number":/  { n++; blk = ""; N[n] = num($0); AH[n] = 0; WL[n] = 1; X[n] = -1
+                     C5[n] = ""; C7[n] = ""; P5[n] = -1; P7[n] = -1; AG[n] = -1; next }
+      n == 0 { next }
+      /"email":/            { E[n]  = str($0); next }
+      /"active":/           { A[n]  = ($0 ~ /true/) ? 1 : 0; next }
+      /"usageStatus":/      { U[n]  = str($0); next }
+      /"fiveHour"/          { blk = "5"; next }
+      /"sevenDay"/          { blk = "7"; next }
+      /"pct":/              { if (blk == "5") P5[n] = num($0); else if (blk == "7") P7[n] = num($0); next }
+      /"countdown":/        { if (blk == "5") C5[n] = str($0); else if (blk == "7") C7[n] = str($0); next }
+      /"expectedPct":/      { X[n]  = num($0); next }
+      /"aheadOfPace":/      { AH[n] = ($0 ~ /true/) ? 1 : 0; next }
+      /"willLastToReset":/  { WL[n] = ($0 ~ /false/) ? 0 : 1; next }
+      /"usageAgeSeconds":/  { AG[n] = num($0); blk = ""; next }
+      END {
+        printf "S\tcswap\t%d\n", act
+        for (i = 1; i <= n; i++)
+          printf "A\t%d\t%s\t%d\t%s\t%.1f\t%s\t%.1f\t%s\t%.1f\t%d\t%d\t%d\n", \
+            N[i], E[i], A[i], (U[i] == "" ? "ok" : U[i]), P5[i], C5[i], \
+            P7[i], C7[i], X[i], AH[i], WL[i], AG[i] }' "$cj" >> "$LIMF" 2>/dev/null
+    # The percentages cswap just handed over are as fresh as its last poll of
+    # each account, which is not the same thing as fresh.
+    if [ -s "$LIMF" ]; then merge_live_usage; return 0; fi
+  fi
+
+  # No cswap. The status line payload names only the account in use, and only
+  # while something is rendering it, so the row is written with no number and
+  # no pace - the JSON says which source it came from and the widget says so.
+  f=$(ls -t "$CL"/session-usage/*.json 2>/dev/null | head -1)
+  [ -n "${f:-}" ] && [ -f "$f" ] || return 0
+  awk -v age=$(( $(now_s) - $(stat -c %Y "$f" 2>/dev/null || echo 0) )) '
+    function v(b, k,   r) {
+      if (match(b, "\"" k "\":[0-9.]+")) {
+        r = substr(b, RSTART, RLENGTH); sub(/^[^:]*:/, "", r); return r + 0 }
+      return -1 }
+    { s = s $0 }
+    END {
+      p5 = -1; p7 = -1
+      if (match(s, /"five_hour":\{[^}]*\}/)) p5 = v(substr(s, RSTART, RLENGTH), "used_percentage")
+      if (match(s, /"seven_day":\{[^}]*\}/)) p7 = v(substr(s, RSTART, RLENGTH), "used_percentage")
+      print "S\tstatusline\t0"
+      printf "A\t0\t\t1\tok\t%.1f\t\t%.1f\t\t-1\t0\t1\t%d\n", p5, p7, age }' "$f" >> "$LIMF" 2>/dev/null
+}
+
+emit_json() {
+  local full="${1:-0}"
+  # The 7d cost split, in the same three terms the widget and the page draw.
+  # measure_overall already walks these rows, but it returns ratios rather than
+  # the three totals, and a bar under a "7d" heading has to BE 7d - drawing the
+  # live sessions there instead was a block that disagreed with its own label.
+  local S7O=0 S7W=0 S7R=0
+  read -r S7O S7W S7R <<< "$(awk -F, -v now="$(now_s)" -v rpc="$RPC" '
+    function ep(t,   x) { x = t; gsub(/[-:]/, " ", x); return mktime(x " 00") }
+    NR > 1 && $2 != "" {
+      e = ep($1); if (e <= 0 || now - e > 604800) next
+      o += $4 * 5; w += $5 * 2; r += $6 * rpc * 0.1 }
+    END { printf "%.0f %.0f %.0f\n", o, w, r }' <(hist_rows) 2>/dev/null)"
+  : "${S7O:=0}" "${S7W:=0}" "${S7R:=0}"
+  # The per-session cycle series behind the growth sparkline. hist_rows is a
+  # shell function, so awk cannot call it - it gets a temp copy instead, and
+  # the trap makes sure a failed emit does not leave one behind.
+  local HF LIMF
+  LIMF=$(mktemp 2>/dev/null) || LIMF="$CL/.token-json.lim.$$"
+  read_limits
+  HF=$(mktemp 2>/dev/null) || HF="$CL/.token-json.hist.$$"
+  hist_rows > "$HF" 2>/dev/null
+  printf '{\n'
+  printf '  "generated": %s,\n' "$(now_s)"
+  printf '  "version": "%s",\n' "$TSVER"
+  snapshot | awk -F'|' \
+      -v m_floor="$M_FLOOR" -v m_rd="$M_RD" -v m_cps="$M_CPS" \
+      -v m_rem="$M_REM" -v m_heat="$M_HEAT" -v rpc="$RPC" -v m_max="$MAX_AT_K" \
+      -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v p_churn="$M_CHURN" \
+      -v o_wpc="$O_WPC" -v o_prod="$O_PROD" -v o_ctl="$O_CTL" -v o_n="$O_N" -v o_churn="$O_CHURN" \
+      -v q_wpc="$P_WPC" -v q_prod="$P_PROD" -v q_ctl="$P_CTL" -v q_n="$P_N" -v q_churn="$P_CHURN" \
+      -v o5h="$O_5H" -v o7d="$O_7D" -v ttl="$TTL" -v ctxmax="$CTXMAX" \
+      -v s7o="$S7O" -v s7w="$S7W" -v s7r="$S7R" \
+      -v hf="$HF" \
+      -v obud="$OBUD" -v gbud="$GBUD" -v price="$PRICE_IN" -v nicks="$NICKS" \
+      -v extf="$EXTF" -v extdef="$EXT_DEFAULT" -v extmax="$EXT_MAX" \
+      -v blocked="$(blocks_list)" \
+      -v limf="$LIMF" -v acctmap="$ACCTMAP" \
+      -v alwarn="$ALERT_WARN" -v albrake="$ALERT_BRAKE" \
+      -v alspare="$ALERT_SPARE" '
+  # Plain concatenation rather than gsub, because the replacement side of gsub
+  # eats backslashes and every cwd on this machine is full of them.
+  function jesc(s,   i, c, o) {
+    o = ""
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      if      (c == "\\") o = o "\\\\"
+      else if (c == "\"") o = o "\\\""
+      else if (c < " ")   o = o " "
+      else                o = o c }
+    return o }
+  # sessions/<pid>.json is itself JSON, and collect lifts cwd out of it
+  # without unescaping, so the path arrives with its backslashes already
+  # doubled. Escaping that again is what turned C:\Users into C:\\Users.
+  function junesc(s,   i, c, o) {
+    o = ""
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      o = o c
+      if (c == "\\" && substr(s, i + 1, 1) == "\\") i++ }
+    return o }
+  function jstr(s) { return "\"" jesc(s) "\"" }
+
+  # Lifted from render() so that a session is called the same thing in the
+  # pane, the widget and the page. The derived name the CLI keeps says nothing
+  # about the work; the opening words of the first prompt do.
+  function nick(t, cap,   a, i, n, w, out) {
+    if (t == "" || substr(t, 1, 1) == "(") return "new-session"
+    t = tolower(t); gsub(/[^a-z0-9 ]/, " ", t)
+    n = split(t, a, " ")
+    for (i = 1; i <= n; i++) {
+      w = a[i]
+      if (length(w) < 3 || index(STOP, " " w " ")) continue
+      if (out != "" && length(out) + 1 + length(w) > cap) continue
+      out = (out == "") ? w : out "-" w
+      if (length(out) >= cap - 2) break }
+    return (out == "") ? substr("session", 1, cap) : out }
+
+  function grade(v, med, invert,   r) {
+    r = (med > 0) ? v / med : 1
+    if (invert) r = (r > 0) ? 1 / r : 9
+    return (r >= 1.5) ? "A" : (r >= 1.15) ? "B" : (r >= 0.85) ? "C" : (r >= 0.6) ? "D" : "E" }
+  # Refitted when control was narrowed to prompt-authored breaches. The old
+  # numerator carried rewrites at double weight, so the distribution shifted
+  # down: the median per cycle went 0.38 to 0.25. Zero is still the target - a
+  # clean cycle authors no over-budget prompt - so A stays near it.
+  function ctlgrade(v) {
+    return (v <= 0.05) ? "A" : (v <= 0.2) ? "B" : (v <= 0.45) ? "C" : (v <= 0.8) ? "D" : "E" }
+
+  # Churn has no corpus median either, for the same reason control does not:
+  # the target is zero. It is what a cycle paid to have its window rewritten
+  # rather than to put new material into it or to produce anything, so it is
+  # graded against the doctrine, not against how much of it you usually do.
+  # The ladder is fitted to the measured distribution over 103 sessions -
+  # median 6.4 percent, p90 26.2 - rather than to round numbers.
+  function churngrade(v) {
+    return (v <= 2) ? "A" : (v <= 7) ? "B" : (v <= 15) ? "C" : (v <= 30) ? "D" : "E" }
+
+  function ago(m) {
+    if (m < 60)   return sprintf("%dm", m)
+    if (m < 2880) return sprintf("%dh", int(m / 60))
+    return sprintf("%dd", int(m / 1440)) }
+
+  BEGIN {
+    FLOOR = (m_floor > 0 ? m_floor : 63)
+    RD_NO = (m_rd > 0 ? m_rd : 34)
+    RD_PARK = 5; RPC = (rpc + 0 > 0) ? rpc + 0 : 2.3
+    CPS = (m_cps > 0 ? m_cps : 6.3)
+    RESTART_NO = (FLOOR + RD_NO) * 2; RESTART_PARK = (FLOOR + RD_PARK) * 2
+    REM = (m_rem + 0 > 0.5) ? m_rem + 0 : 4
+    OVERHEAT = (m_heat + 0 > 0) ? m_heat + 0 : 200
+    PARK_AT  = (RESTART_PARK + 23) / 2
+    CLEAR_PK = RESTART_PARK / 2
+    CLEAR_NO = RESTART_NO / 2
+    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * 0.1)
+    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * 0.1)
+    if (OVERHEAT <= PARK_AT) OVERHEAT = PARK_AT + 1
+    if (OVERHEAT >= CUT_PK)  OVERHEAT = CUT_PK - 1
+
+    # The ceiling: past here, checkpoint and continue in a fresh window.
+    #
+    # Every other mark on this ladder answers "does a restart pay", and at these
+    # sizes the answer is almost always no - which is exactly why this one had
+    # to exist separately. Push the cut formula to its limit and the point is
+    # plain: with REM at 3 the unparked bar is already past 270k, and asking it
+    # for "even ONE more cycle justifies the cut" (REM = 1) puts the bar past
+    # 670k, off any scale this tool draws. Cost will never tell you to stop.
+    #
+    # So the reason to stop carrying a window is not the bill. It is attention
+    # dilution, compaction risk, and headroom before the hard limit - and this
+    # machine cannot measure any of the three. That makes MAX_AT a PREFERENCE
+    # with a default rather than a derivation, and it is written that way on
+    # purpose: a chosen number that admits it was chosen beats the same number
+    # wearing a formula. TOKEN_MAX_AT overrides it, in thousands.
+    #
+    # The default is 85% of the drawn scale, which is the honest reading of what
+    # that scale already means: ctxmax is where this tool stops drawing, so the
+    # last sixth of the bar is the part you should not be living in.
+    MAX_AT = (m_max + 0 > 0) ? m_max + 0 : ctxmax * 0.85
+    if (MAX_AT <= PARK_AT) MAX_AT = PARK_AT + 1
+    if (MAX_AT >= ctxmax)  MAX_AT = ctxmax - 1
+    STOP = " the and are was were being does did done get got has had have this" \
+           " that these those you your our their its lets let not now new old" \
+           " for from with into over under about again still just very much more" \
+           " most some any all what which who how why when where want need please" \
+           " try trying take taken use used using make made can could would should" \
+           " will shall may might must after before right only even also here there" \
+           " out off back one two but then than they them been but its ive dont" \
+           " cant wont didnt doesnt isnt arent were said say says like going gonna" \
+           " alright ahead sure okay yeah thanks hey hmm well actually maybe bit" \
+           " perhaps really quite lot bunch thing things stuff kind sort way ways" \
+           " far yet too own else etc bit lets else since while during between "
+    HID = 0; HTOT = 0; n = 0
+    # The usage TSV read_limits left behind: one S row naming the source, then
+    # one A row per account. Read here rather than passed as a dozen -v flags,
+    # because the number of accounts is not known until it is read.
+    LN = 0; LSRC = ""; LACT = 0
+    while ((getline ll < limf) > 0) {
+      nlf = split(ll, lf, "\t")
+      if (lf[1] == "S") { LSRC = lf[2]; LACT = lf[3] + 0; continue }
+      if (lf[1] != "A" || nlf < 13) continue
+      LN++
+      # 13 fields is a cswap row; merge_live_usage appends two more, and a row
+      # that predates it simply has none.
+      for (li = 1; li <= 14; li++) LA[LN,li] = (li + 1 <= nlf) ? lf[li + 1] : "" }
+    close(limf)
+
+    # sid <TAB> account number, written by the same pass that reads the live
+    # usage payloads. A session with no row simply has no answer yet.
+    while ((getline al < acctmap) > 0) {
+      split(al, af, "	")
+      if (af[1] != "") ACCT[af[1]] = af[2] + 0 }
+    close(acctmap)
+
+    # sid <TAB> allowed <TAB> used. A session with no row here is on the
+    # default, so this file only ever holds the ones you have changed.
+    while ((getline el < extf) > 0) {
+      split(el, ef, "\t")
+      if (ef[1] == "") continue
+      EXA[ef[1]] = ef[2] + 0; EXU[ef[1]] = ef[3] + 0; EXS[ef[1]] = 1 }
+    close(extf)
+
+    # sid <TAB> name. Rows written before names replaced re-rolls carried the
+    # variant index in field 2 and the name, if any, in field 3 - so a numeric
+    # field 2 is one of those and means no name, not a name of "3".
+    while ((getline nl < nicks) > 0) {
+      split(nl, nf, "\t")
+      nnm = (nf[3] != "") ? nf[3] : ((nf[2] ~ /^[0-9]+$/) ? "" : nf[2])
+      if (nnm != "") NICK[nf[1]] = nnm }
+    close(nicks)
+    # Growth is a per-session delta, so the rows have to be walked in order.
+    # Only the tail is kept - a sparkline of forty cycles is a smear.
+    if (hf != "") {
+      hln = 0
+      while ((getline hl < hf) > 0) {
+        if (++hln == 1) continue
+        hm = split(hl, hr, ",")
+        if (hm < 6 || hr[2] == "") continue
+        hs = hr[2]
+        hg = (hs in PCX) ? hr[6] - PCX[hs] : 0; if (hg < 0) hg = 0
+        PCX[hs] = hr[6] + 0
+        hk = ++HN[hs]
+        HCY[hs, hk] = hr[3] + 0; HOU[hs, hk] = hr[4] + 0
+        HGR[hs, hk] = hg; HRC[hs, hk] = hr[5] + 0; HCX[hs, hk] = hr[6] + 0 }
+      close(hf) } }
+
+  /^#/ { if ($2 == "hidden") { HID = $3 + 0; HTOT = $4 + 0 } next }
+  # NF, not a literal 30. This read a fixed field count until 2026-09-02 and
+  # silently dropped every column added after it - the same truncation that
+  # snapshot() was already carrying a scar from. Whatever collect() emits
+  # arrives here whole.
+  { n++; for (f = 1; f <= NF; f++) R[n, f] = $f }
+
+  function hotr(i,   work) {
+    if (R[i,11] + 0 < 3 || R[i,12] + 0 <= 0 || R[i,5] / 1000 < FLOOR) return 0
+    work = R[i,12] / R[i,11] * 5
+    if (work <= 0) return 0
+    return R[i,5] * RPC * 0.1 / work }
+
+  function urank(i,   c) {
+    if (R[i,2] + 0 != 1) return -1
+    c = R[i,5] / 1000
+    if (R[i,4] + 0 > 0) {
+      if (R[i,4] + 0 <= 10 && c >= PARK_AT) return 2
+      if (c >= CUT_NO || (R[i,19] + 0 && c >= CUT_PK)) return 1
+      if (c >= OVERHEAT && hotr(i) >= 1) return 1
+      return 0 }
+    if (c >= CLEAR_NO) return 3
+    if (R[i,19] + 0 && c >= CLEAR_PK) return 2
+    return 1 }
+
+  function pstale(i) { return (R[i,19] + 0 && R[i,20] + 0 > R[i,3] + 0) }
+  function pbehind(i) { return ago(R[i,20] - R[i,3]) }
+
+  # Marks left on this session. The same three ternaries the JSON emitter runs
+  # further down, as a function rather than twice, because the advice line and
+  # the row have to agree about whether there is a ticket in hand.
+  function exleft(i,   a, u) {
+    a = (R[i,1] in EXS) ? EXA[R[i,1]] : extdef + 0
+    u = (R[i,1] in EXS) ? EXU[R[i,1]] : 0
+    return (a - u < 0) ? 0 : a - u }
+
+  function tip(i, slot,   c, carry, be, lf, pk) {
+    c = R[i,5] / 1000; lf = R[i,4] + 0; pk = R[i,19] + 0
+    carry = (c - FLOOR - RD_NO) * RPC * 0.1; if (carry < 0.05) carry = 0.05
+    be = int(RESTART_NO / carry + 0.5)
+    if (R[i,2] + 0 != 1)
+      return (slot == 1) ? "the process is gone - nothing here is being paid for any more." : ""
+    if (lf > 0) {
+      if (slot == 1) {
+        # Out of tickets, with the hour running out. Every other line here can
+        # end in "type something into that window", and this is the one state
+        # where that advice is unspendable: without a mark the crossing is not
+        # budgeted, so the window is going cold whatever the read would have
+        # cost. The only move left is the checkpoint.
+        if (lf <= 10 && c >= PARK_AT && exleft(i) <= 0)
+          return pk \
+            ? sprintf("lapses in %dm at %.0fk with no marks left, and it is parked - /clear now, there is nothing to carry it across.", lf, c) \
+            : sprintf("lapses in %dm at %.0fk and there are no extension marks left - /park it now. No ticket, no crossing.", lf, c)
+        if (lf <= 10 && c >= PARK_AT)
+          return !pk \
+            ? sprintf("lapses in %dm at %.0fk. /park it now - once it is cold the gap costs ~%.0fk.", lf, c, c * 2) \
+            : pstale(i) \
+            ? sprintf("lapses in %dm at %.0fk and the checkpoint is %s behind - /park again, THEN /clear.", lf, c, pbehind(i)) \
+            : sprintf("lapses in %dm at %.0fk and it is already parked - /clear now and the gap costs nothing.", lf, c)
+        if (c >= PARK_AT)
+          return !pk \
+            ? sprintf("stepping away for >1h? /park then /clear (~%.0fk) beats carrying it (~%.0fk).", RESTART_PARK + 23, c * 2) \
+            : pstale(i) \
+            ? sprintf("parked %s ago but %s of work since - /park again before you go, or you resume from the older state.", ago(R[i,20]), pbehind(i)) \
+            : sprintf("parked at %.0fk. The checkpoint only pays back when you /clear - carry this into a gap and you pay the rewrite AND the park.", c)
+        return sprintf("under %.0fk: eating one gap (~%.0fk) is cheaper than parking. Leave it open.", PARK_AT, c * 2) }
+      if (slot == 2) {
+        # Above the ceiling this line stops arguing about the arithmetic. Every
+        # cut message below it is "here is what it saves"; past MAX_AT the
+        # saving is not the point, and leading with one would undersell it.
+        if (c >= MAX_AT)
+          return pk \
+            ? sprintf("past the %.0fk ceiling and already parked - /clear and pick it up in a fresh window. Up here the reason to stop is attention and headroom, not the bill.", MAX_AT) \
+            : sprintf("past the %.0fk ceiling - /park, then /clear and carry on in a fresh window. Up here the reason to stop is attention and headroom, not the bill.", MAX_AT)
+        if (pk && c >= CUT_PK)
+          return sprintf("checkpoint on disk, so cutting pays from here: ~%.0fk once, against ~%.1fk every cycle to carry.", RESTART_PARK, carry)
+        if (c >= CUT_NO)
+          return sprintf("at %.0fk a fresh session pays off now: ~%.0fk once, against ~%.1fk every cycle to carry.", c, RESTART_NO, carry)
+        if (c >= CUT_PK)
+          return sprintf("past %.0fk, cutting would pay if you /park first: ~%.0fk against ~%.1fk/cycle. Unparked the bar is %.0fk.", CUT_PK, RESTART_PARK, carry, CUT_NO)
+        return sprintf("carrying costs ~%.1fk/cycle and a restart ~%.0fk, so cutting only pays past ~%d more cycles.", carry, RESTART_NO, be) }
+      return "" }
+    if (slot == 1) {
+      if (c >= CLEAR_NO)
+        return pk \
+          ? sprintf("COLD at %.0fk and parked: /clear BEFORE typing - ~%.0fk against ~%.0fk to carry.", c, RESTART_PARK, c * 2) \
+          : sprintf("COLD at %.0fk: /clear BEFORE typing - ~%.0fk against ~%.0fk to carry.", c, RESTART_NO, c * 2)
+      if (c >= CLEAR_PK)
+        return pk \
+          ? sprintf("COLD at %.0fk with a checkpoint: /clear before typing, resume from it (~%.0fk).", c, RESTART_PARK) \
+          : sprintf("COLD at %.0fk and not parked: carry on - re-deriving costs ~%.0fk and it is under the clear-vs-carry bar.", c, RD_NO)
+      return sprintf("COLD at %.0fk, under the ~%.0fk floor - clearing would only make it bigger.", c, FLOOR) }
+    if (slot == 2 && c >= CLEAR_PK)
+      return "the rewrite is billed on your NEXT message, so clearing before you type costs nothing."
+    return "" }
+
+  END {
+    printf "  \"constants\": {"
+    printf "\"floor\":%.1f,\"rd_no\":%.1f,\"rd_park\":%.1f,\"restart_no\":%.1f,\"restart_park\":%.1f,", FLOOR, RD_NO, RD_PARK, RESTART_NO, RESTART_PARK
+    printf "\"rem\":%.1f,\"cps\":%.2f,\"rpc\":%.2f,", REM, CPS, RPC
+    printf "\"park_at\":%.1f,\"clear_pk\":%.1f,\"clear_no\":%.1f,\"cut_pk\":%.1f,\"cut_no\":%.1f,\"overheat\":%.1f,\"max_at\":%.1f,\"ext_max\":%d,", PARK_AT, CLEAR_PK, CLEAR_NO, CUT_PK, CUT_NO, OVERHEAT, MAX_AT, extmax + 0
+    printf "\"ttl\":%d,\"ctxmax\":%d,\"obud\":%d,\"gbud\":%d,\"price_in\":%s", ttl, ctxmax, obud, gbud, price
+    printf "},\n"
+
+    printf "  \"overall\": {"
+    printf "\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f,\"ctl\":%.3f,\"n\":%d,", o_wpc, o_prod, o_churn, o_ctl, o_n
+    printf "\"prev\":{\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f,\"ctl\":%.3f,\"n\":%d},", q_wpc, q_prod, q_churn, q_ctl, q_n
+    printf "\"grades\":{\"spend\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
+      grade(o_wpc, p_wpc, 1), churngrade(o_churn), ctlgrade(o_ctl)
+    printf "\"prev_grades\":{\"spend\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
+      grade(q_wpc, p_wpc, 1), churngrade(q_churn), ctlgrade(q_ctl)
+    printf "\"median\":{\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f},", p_wpc, p_prod, p_churn
+    printf "\"split_7d\":{\"output\":%.0f,\"cache_write\":%.0f,\"cache_read\":%.0f},", s7o, s7w, s7r
+    printf "\"spend_5h\":%.0f,\"spend_7d\":%.0f", o5h, o7d
+    printf "},\n"
+    # Account-wide usage, which is a different question from every other number
+    # here: those are about what a WINDOW costs, this is about what is left to
+    # spend. Every managed account is listed, not only the one in use - the
+    # headroom sitting on another account is what decides whether a full
+    # five-hour window is a problem or a keystroke.
+    printf "  \"limits\": {\"source\":\"%s\",\"active\":%d,\"now\":%d,\"accounts\":[", \
+      (LSRC == "" ? "none" : LSRC), LACT + 0, systime()
+    for (i = 1; i <= LN; i++) {
+      printf "%s{\"n\":%d,\"email\":%s,\"active\":%d,\"status\":%s,", (i > 1 ? "," : ""), \
+        LA[i,1] + 0, jstr(LA[i,2]), LA[i,3] + 0, jstr(LA[i,4])
+      printf "\"five_hour_pct\":%.1f,\"five_hour_in\":%s,", LA[i,5] + 0, jstr(LA[i,6])
+      printf "\"seven_day_pct\":%.1f,\"seven_day_in\":%s,", LA[i,7] + 0, jstr(LA[i,8])
+      printf "\"pace_pct\":%.1f,\"ahead_of_pace\":%d,\"lasts_to_reset\":%d,\"age_sec\":%d,", \
+        LA[i,9] + 0, LA[i,10] + 0, LA[i,11] + 0, LA[i,12] + 0
+      # live: how many windows on this machine are spending the account right
+      # now. usage_src: whether the two percentages above came from one of
+      # those windows or from the last cswap poll.
+      printf "\"live\":%d,\"usage_src\":%s}", \
+        LA[i,13] + 0, jstr(LA[i,14] == "" ? "cswap" : LA[i,14]) }
+    printf "]},\n"
+
+    # What to DO about the above, worked out here rather than in each reader, so
+    # the widget, the pane and the page cannot disagree about when to panic.
+    #
+    # The tighter of the two windows decides: 4% left on the five-hour is an
+    # emergency even with the seven-day barely touched, because it is the one
+    # that stops you working in the next few minutes.
+    # More than one account can be in use at once - two windows on two
+    # profiles is the whole reason cswap exists - so the tightest of them is
+    # the one to report, not whichever happened to be listed last.
+    aleft = -1; awin = ""; aem = ""
+    for (i = 1; i <= LN; i++) {
+      if (LA[i,3] + 0 != 1) continue
+      p5 = LA[i,5] + 0; p7 = LA[i,7] + 0
+      al = (p5 >= p7) ? 100 - p5 : 100 - p7
+      aw = (p5 >= p7) ? "five-hour" : "seven-day"
+      if (aleft < 0 || al < aleft) { aleft = al; awin = aw; aem = LA[i,2] } }
+    # Somewhere to go. An account is only a way out if it has real room in BOTH
+    # its windows - one at 2% on the five-hour is not an escape, it is the same
+    # wall four minutes later.
+    sn = 0; sleft = -1; sem = ""
+    for (i = 1; i <= LN; i++) {
+      if (LA[i,3] + 0 == 1) continue
+      p5 = LA[i,5] + 0; p7 = LA[i,7] + 0
+      if (p5 < 0 || p7 < 0) continue
+      l = (p5 >= p7) ? 100 - p5 : 100 - p7
+      if (l > sleft) { sleft = l; sn = LA[i,1] + 0; sem = LA[i,2] } }
+    hasspare = (sleft >= alspare + 0) ? 1 : 0
+    lvl = "ok"
+    if (aleft >= 0) {
+      if (aleft <= albrake + 0)     lvl = "brake"
+      else if (aleft <= alwarn + 0) lvl = "warn" }
+    printf "  \"alert\": {\"level\":\"%s\",\"left_pct\":%.1f,\"window\":%s,\"account\":%s,", \
+      lvl, aleft, jstr(awin), jstr(aem)
+    printf "\"spare\":%d,\"spare_n\":%d,\"spare_left\":%.1f,\"spare_email\":%s,", \
+      hasspare, sn, (sleft < 0 ? 0 : sleft), jstr(sem)
+    printf "\"warn_at\":%.0f,\"brake_at\":%.0f},\n", alwarn + 0, albrake + 0
+    printf "  \"hidden\": {\"n\":%d,\"closed\":%d},\n", HID, HTOT
+
+    printf "  \"sessions\": [\n"
+    for (i = 1; i <= n; i++) {
+      cy = R[i,11] + 0; ot = R[i,12] + 0; rt = R[i,25] + 0; cx = R[i,5] + 0
+      # The live half: spent since the hook last wrote a row for this session.
+      # The hook row is the floor and the transcript is the truth, so a live
+      # context at or below the row means nothing new has landed - which is
+      # also how the minute-resolution edge of the row gets absorbed rather
+      # than double-counted.
+      lvq = R[i,31] + 0; lvo = R[i,32] + 0; lvw = R[i,33] + 0
+      lvr = R[i,34] + 0; lvx = R[i,35] + 0
+      if (lvx <= cx) { lvq = 0; lvo = 0; lvw = 0; lvr = 0; lvx = cx }
+      lvcost = lvo * 5 + lvw * 2 + lvr * 0.1
+      lvgro  = lvx - cx; if (lvgro < 0) lvgro = 0
+      # Context is the live reading wherever there is one. Everything priced off
+      # it - the extension marks, the lapse cost, the bands - is answering "what
+      # would this window cost right now", and right now is not last cycle.
+      cxl = (lvx > cx) ? lvx : cx
+      wtd = ot * 5 + rt * 2 + cx * RPC * 0.1 * cy + lvcost
+      cread = cx * RPC * 0.1 * cy + lvr * 0.1; cout = (ot + lvo) * 5; cwrite = (rt + lvw) * 2
+      dis = wtd - FLOOR * 2000; if (dis < wtd * 0.15) dis = wtd * 0.15
+      spend = (cy > 0) ? dis / cy / 1000 : 0
+      prod  = (wtd > 0) ? cout * 100 / wtd : 0
+      # Churn share, on the same basis a row cell and the OVERALL line use.
+      # R[i,25] is the re-cache total and R[i,26] the growth total, so what is
+      # left after the cold load is the window being rewritten.
+      chn2  = R[i,25] - R[i,26] - FLOOR * 1000; if (chn2 < 0) chn2 = 0
+      chn2  = (wtd > 0) ? chn2 * 2 * 100 / wtd : 0
+      ctl   = (cy > 0) ? R[i,27] / cy : 0
+      u = urank(i)
+      # Keyed by the SHORT id, which is what the pane writes into the file.
+      # This read the full sid until 2026-09-02, so a name typed in the pane
+      # was invisible to --json and the widget kept showing the derived one.
+      nk = (R[i,1] in NICK) ? NICK[R[i,1]] : nick(R[i,10], 20)
+      printf "    {"
+      printf "\"sid\":%s,\"short\":%s,\"pid\":%d,", jstr(R[i,15]), jstr(R[i,1]), R[i,8]
+      # Which account this window is spending, and what it is called. 0 and ""
+      # when nothing on disk says - never guessed from the global config, which
+      # is the answer that was wrong in the first place.
+      acn = (R[i,15] in ACCT) ? ACCT[R[i,15]] : 0
+      acm = ""
+      for (ai = 1; ai <= LN; ai++) if (LA[ai,1] + 0 == acn) { acm = LA[ai,2]; break }
+      printf "\"account\":%d,\"account_email\":%s,", acn, jstr(acm)
+      # running is 0 idle, 1 a turn in flight, 2 waiting on the user, 3 busy
+      # but gone quiet. It was 0/1, and a consumer testing "== 1" still reads
+      # exactly what it always did - which is why the new states were added
+      # above 1 rather than folded into it. run_since is when that state began,
+      # as an epoch second, or 0 where it is not known.
+      printf "\"alive\":%d,\"running\":%d,\"run_since\":%d,", R[i,2] + 0, R[i,18] + 0, R[i,42] + 0
+      printf "\"name\":%s,\"nick\":%s,\"named\":%d,\"project\":%s,", \
+        jstr(R[i,6]), jstr(nk), (R[i,1] in NICK) ? 1 : 0, jstr(R[i,9])
+      printf "\"cwd\":%s,\"title\":%s,\"last_prompt\":%s,", jstr(junesc(R[i,30])), jstr(R[i,10]), jstr(R[i,17])
+      printf "\"transcript\":%s,", jstr(R[i,16])
+      printf "\"idle_min\":%d,\"cache_left_min\":%d,\"touched_min\":%d,", R[i,3] + 0, R[i,4] + 0, R[i,29] + 0
+      printf "\"context\":%d,\"context_k\":%.1f,\"cycles\":%d,\"trend\":%d,", cxl, cxl / 1000, cy, R[i,7] + 0
+      # The in-flight cycle, straight off the transcript. "live":0 means the
+      # hook has caught up and every other number here is already whole.
+      printf "\"live\":%d,\"live_requests\":%d,\"live_output\":%d,\"live_recache\":%d,", \
+        (lvq > 0 ? 1 : 0), lvq, lvo, lvw
+      printf "\"live_cache_read\":%d,\"live_growth\":%d,\"live_cost\":%.0f,\"row_context\":%d,", \
+        lvr, lvgro, lvcost, cx
+      printf "\"output_total\":%d,\"output_last\":%d,", ot, R[i,13] + 0
+      printf "\"recache_last\":%d,\"recache_total\":%d,\"growth_total\":%d,", R[i,14] + 0, rt, R[i,26] + 0
+      printf "\"breaches\":%d,\"gap_rewrites\":%d,", R[i,27] + 0, R[i,28] + 0
+      # Held, not worked. -1 for poke_age_min means never poked, which is not
+      # the same as poked a very long time ago and must not read as 0.
+      printf "\"pokes\":%d,\"poke_age_min\":%d,", R[i,36] + 0, R[i,37] + 0
+      # The median gap between this session cycles. It is what turns a cache
+      # countdown into a forecast: 27 minutes left is only reassuring next to
+      # how long you usually leave between prompts.
+      printf "\"gap_med_min\":%d,", R[i,39] + 0
+      # What is answering in there. Empty on a window nothing has answered in
+      # yet, and on a closed one cached before these two columns existed.
+      printf "\"model\":%s,\"effort\":%s,", jstr(R[i,40]), jstr(R[i,41])
+      # Opened by the tooling, not by a person. An empty reason means a person.
+      printf "\"spawned\":%d,\"spawn_reason\":%s,", (R[i,38] != "" ? 1 : 0), jstr(R[i,38])
+      printf "\"parked\":%d,\"ck_age_min\":%d,\"ck_name\":%s,\"ck_topic\":%s,\"ck_others\":%d,\"ck_stale\":%d,", \
+        R[i,19] + 0, R[i,20] + 0, jstr(R[i,21]), jstr(R[i,22]), R[i,23] + 0, (pstale(i) ? 1 : 0)
+      # The subagents this window spawned. They are the one kind of spend a
+      # transcript cannot see - each agent writes its own file under
+      # <sid>/subagents/ and the parent records only the tool_use - so this
+      # is reported BESIDE the window cost rather than folded into it. Both
+      # numbers are true; adding them silently would make every historical
+      # figure disagree with the one beside it.
+      nagn = R[i,43] + 0; naglv = R[i,44] + 0; agc = R[i,45] + 0
+      printf "\"agents\":{\"n\":%d,\"live\":%d,\"cost\":%.0f,\"usd\":%.3f,\"list\":[", nagn, naglv, agc, agc * price / 1000000
+      am = split(R[i,46], AL, ";"); aq = 0
+      for (aj = 1; aj <= am; aj++) {
+        if (AL[aj] == "") continue
+        split(AL[aj], AF, "~")
+        printf "%s{", (aq++ ? "," : "")
+      printf "\"id\":%s,\"type\":%s,\"desc\":%s,\"model\":%s,", jstr(AF[1]), jstr(AF[2]), jstr(AF[3]), jstr(AF[4])
+      printf "\"age_sec\":%d,\"running\":%d,\"requests\":%d,", AF[5] + 0, AF[6] + 0, AF[7] + 0
+      printf "\"output\":%d,\"cache_write\":%d,\"cache_read\":%d,\"context\":%d,\"cost\":%d,\"usd\":%.3f}", AF[8] + 0, AF[9] + 0, AF[10] + 0, AF[11] + 0, AF[12] + 0, AF[12] * price / 1000000 }
+      printf "]},"
+      printf "\"cost\":{\"total\":%.0f,\"output\":%.0f,\"cache_write\":%.0f,\"cache_read\":%.0f,", wtd, cout, cwrite, cread
+      printf "\"pct_output\":%.1f,\"pct_write\":%.1f,\"pct_read\":%.1f,\"usd\":%.3f,\"agents\":%.0f,\"with_agents\":%.0f,\"usd_with_agents\":%.3f},", \
+        (wtd ? cout * 100 / wtd : 0), (wtd ? cwrite * 100 / wtd : 0), (wtd ? cread * 100 / wtd : 0), wtd * price / 1000000, agc, wtd + agc, (wtd + agc) * price / 1000000
+      printf "\"spend_per_cycle\":%.1f,\"production_pct\":%.0f,\"churn_pct\":%.1f,\"control\":%.3f,", spend, prod, chn2, ctl
+      printf "\"grades\":{\"spend\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
+        (cy < 2 ? "" : grade(spend, p_wpc, 1)), (cy < 2 ? "" : churngrade(chn2)), (cy < 2 ? "" : ctlgrade(ctl))
+      # Extension marks: how many times this window may be kept warm, and how
+      # many of those are spent. The cost of one is the context at the cache
+      # READ rate, against the same context at the write rate for letting it go.
+      exa = (R[i,1] in EXS) ? EXA[R[i,1]] : extdef + 0
+      exu = (R[i,1] in EXS) ? EXU[R[i,1]] : 0
+      # Being extended more often than budgeted is a real state and worth
+      # reporting, but the mark row has to stay exactly `allowed` glyphs wide
+      # or spent marks read as new ones appearing. Clamp the display, report
+      # the overspend beside it.
+      exo = exu - exa; if (exo < 0) exo = 0
+      printf "\"ext_allowed\":%d,\"ext_used\":%d,\"ext_over\":%d,\"ext_left\":%d,", \
+        exa, (exu > exa ? exa : exu), exo, (exa - exu < 0 ? 0 : exa - exu)
+      printf "\"ext_cost\":%.0f,\"lapse_cost\":%.0f,", cx * 0.1, cx * 2
+      # Whether the input block is armed on this window. A membership test on a
+      # space-padded list rather than a stat per session: the answer is the same
+      # and the whole list was one directory read.
+      printf "\"blocked\":%d,", (index(blocked, " " R[i,1] " ") ? 1 : 0)
+      printf "\"hot\":%.2f,\"urank\":%d,", hotr(i), u
+      printf "\"verdict\":\"%s\",", (u < 0) ? "gone" : (u == 3) ? "now" : (u == 2) ? "soon" : (u == 1) ? "cut" : "ok"
+      printf "\"recent\":["
+      s8 = R[i,1]; st = HN[s8] - 7; if (st < 1) st = 1
+      for (kk = st; kk <= HN[s8] + 0; kk++)
+        printf "%s{\"cycle\":%d,\"output\":%d,\"growth\":%d,\"recache\":%d,\"context\":%d}", (kk > st ? "," : ""), HCY[s8,kk], HOU[s8,kk], HGR[s8,kk], HRC[s8,kk], HCX[s8,kk]
+      printf "],"
+      printf "\"advice\":%s,\"advice2\":%s", jstr(tip(i, 1)), jstr(tip(i, 2))
+      printf "}%s\n", (i < n ? "," : "") }
+    printf "  ]" }'
+  rm -f "$HF" "$LIMF"
+  if [ "$full" = 1 ]; then
+    printf ',\n  "history": [\n'
+    hist_rows | awk -F, -v OFS="" '
+      NR > 1 && $2 != "" {
+        if (k++) printf ",\n"
+        printf "    {\"ts\":\"%s\",\"session\":\"%s\",\"cycle\":%d,\"output\":%d,\"recache\":%d,\"context\":%d,\"fired\":\"%s\",\"held\":\"%s\"}", \
+          $1, $2, $3, $4, $5, $6, ($7 == "-" ? "" : $7), ($8 == "renew" || $8 == "park" ? $8 : "") }
+      END { if (k) printf "\n" }'
+    printf '  ]\n'
+  else
+    printf '\n'
+  fi
+  printf '}\n'
+}
+
 render() {
   local snap="$1" sel="$2" cols="$COLS"
 
@@ -1221,9 +3045,9 @@ render() {
     -v R="$C_R" -v D="$C_DIM" -v B="$C_B" -v GRN="$C_GRN" -v YEL="$C_YEL" \
     -v ORG="$C_ORG" -v RED="$C_RED" -v BLU="$C_BLU" -v GRY="$C_GRY" -v CYN="$C_CYN" \
     -v m_floor="$M_FLOOR" -v m_rd="$M_RD" -v m_cps="$M_CPS" \
-    -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v rpc="$RPC" -v price="$PRICE_IN" \
-    -v o_wpc="$O_WPC" -v o_prod="$O_PROD" -v o_ctl="$O_CTL" -v o_n="$O_N" \
-    -v v_wpc="$P_WPC" -v v_prod="$P_PROD" -v v_ctl="$P_CTL" -v v_n="$P_N" \
+    -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v p_churn="$M_CHURN" -v rpc="$RPC" -v price="$PRICE_IN" \
+    -v o_wpc="$O_WPC" -v o_prod="$O_PROD" -v o_ctl="$O_CTL" -v o_n="$O_N" -v o_churn="$O_CHURN" \
+    -v v_wpc="$P_WPC" -v v_prod="$P_PROD" -v v_ctl="$P_CTL" -v v_n="$P_N" -v v_churn="$P_CHURN" \
     -v up="$G_UP" -v dn="$G_DN" -v helpv="${HELPV:-0}" \
     -v g_act="$G_ACT" -v g_cut="$G_CUT" -v g_ok="$G_OK" \
     -v m_rem="$M_REM" -v m_heat="$M_HEAT" -v dtl="${DETAIL:-0}" \
@@ -1234,7 +3058,7 @@ render() {
     -v ptl="$G_PTL" -v ptr="$G_PTR" -v pbl="$G_PBL" -v pbr="$G_PBR" \
     -v ph="$G_PH" -v pv="$G_PV" -v pml="$G_PML" -v pmr="$G_PMR" \
     -v rows="${ROWS:-40}" \
-    -v obud="$OBUD" -v gbud="$GBUD" -v nicks="$NICKS" -v nvar="$NVAR" \
+    -v obud="$OBUD" -v gbud="$GBUD" -v nicks="$NICKS" \
     -v bell="$BELL" -v bellmin="$BELL_MIN" -v delconf="${DELCONF:-}" \
     -v OLL_PROMPT="$OLL_PROMPT" -v OLL_EVAL="$OLL_EVAL" \
     -v OLL_CALLS="$OLL_CALLS" -v CL_OUT_7D="$CL_OUT_7D" \
@@ -1361,30 +3185,6 @@ render() {
       out = (out == "") ? w : out "-" w
       if (length(out) >= cap - 2) break }
     return (out == "") ? substr("session", 1, cap) : out }
-  # A re-rolled nickname. Variant 0 is the default above - the opening words of
-  # the first prompt - and every variant after it walks a window along the pool
-  # of words the session actually used, first prompt then latest, so a re-roll
-  # still says something about the work instead of being noise.
-  #
-  # Deterministic on purpose. token-nicks.tsv stores the INDEX, not the string,
-  # so a re-rolled name follows the transcript as the session keeps talking and
-  # cannot go stale against it - and nothing here ever writes the name the CLI
-  # keeps, which stays in its own column two along.
-  function nickv(t, l, cap, v,   pool, np, a, i, j, w, out, seen, P) {
-    if (v <= 0) return nick(t, cap)
-    pool = tolower(t " " l); gsub(/[^a-z0-9 ]/, " ", pool)
-    np = 0; j = split(pool, a, " ")
-    for (i = 1; i <= j; i++) {
-      w = a[i]
-      if (length(w) < 3 || index(STOP, " " w " ") || (w in seen)) continue
-      seen[w] = 1; P[++np] = w }
-    if (np == 0) return nick(t, cap)
-    for (i = 0; i < np; i++) {
-      w = P[(v * 2 + i) % np + 1]
-      if (out != "" && length(out) + 1 + length(w) > cap) break
-      out = (out == "") ? w : out "-" w
-      if (length(out) >= cap - 2) break }
-    return (out == "") ? nick(t, cap) : out }
   function wrap(s, w, ind,   out, line, i, a, n) {
     n = split(s, a, " ")
     for (i = 1; i <= n; i++) {
@@ -1428,19 +3228,20 @@ render() {
            " alright ahead sure okay yeah thanks hey hmm well actually maybe bit" \
            " perhaps really quite lot bunch thing things stuff kind sort way ways" \
            " far yet too own else etc bit lets else since while during between "
-    # Which re-roll each session is showing. Read here rather than passed in, so
-    # pressing n costs one small write and the next redraw - a second away -
-    # picks it up without a collect.
+    # The name typed for each session. Read here rather than passed in, so
+    # naming one costs a small write and the next redraw - a second away -
+    # rather than a collect. A typed name wins over the derived one outright:
+    # the point of typing one is that the words the session used are not what
+    # you want it called.
+    #
+    # Old rows put a re-roll index in field 2 and the name, if any, in field 3,
+    # so a numeric field 2 is one of those and carries no name.
     while ((getline nline < nicks) > 0) {
       np = index(nline, "\t"); if (!np) continue
       nsid = substr(nline, 1, np - 1); nrest = substr(nline, np + 1)
-      # Third field, when present, is a name typed with /n. It wins over
-      # the derived one outright - the point of typing one is that the
-      # words the session used are not what you want to call it.
       nq = index(nrest, "\t")
-      if (nq) { NV[nsid] = substr(nrest, 1, nq - 1) + 0
-                NC[nsid] = substr(nrest, nq + 1) }
-      else      NV[nsid] = nrest + 0 }
+      if (nq) NC[nsid] = substr(nrest, nq + 1)
+      else if (nrest !~ /^[0-9]+$/) NC[nsid] = nrest }
     close(nicks)
     if (cols + 0 < 76) cols = 76
     if (cols + 0 > 160) cols = 160
@@ -1470,18 +3271,27 @@ render() {
     # "1.4M" is the whole point and the bar is the gloss on it.
     CBAR = (avail >= 110) ? 12 : (avail >= 98) ? 9 : (avail >= 86) ? 6 : 0
     COW  = (avail >= 80) ? (CBAR ? CBAR + 8 : 7) : 0
-    # 8 = the run mark, the verdict glyph, the park mark and the fail-safe mark,
+    # 12 = the run mark, the elapsed clock, the verdict glyph, the park mark
+    #      and the fail-safe mark,
     # 9 = "%6.1fk" plus its gutter,
     # 5 = the cache label ("COLD" is the longest one now that the bar is gone).
     # Every column width is derived here and the header is drawn from the same
     # numbers, so the two cannot drift apart the way hand-counted %-24s did.
     # Counted off the row printf itself rather than guessed at: 2 gutter, 1 run
-    # mark, 1 space, 4 park/fail-safe, -3+1+2+1 for the name suffix, 1 after the
-    # context bar, 7 for "%6.1fk", 2, 1 before the cache label, 5 for the label.
+    # mark, RUNW elapsed, 1 space, 4 park/fail-safe, -3+1+2+1 for the name
+    # suffix, 1 after the context bar, 7 for "%6.1fk", 2, 1 before the cache
+    # label, 5 for the label.
     # It was hand-maintained and had drifted by 2 for as long as the lamp column
     # existed, which is why every row punched through the right-hand border the
     # moment there was a border to punch through.
-    FIXED = 25 + GW + CBW + HW + COW + SPW
+    #
+    # How long the turn in flight has been running, right-aligned. Four is what
+    # the widest label needs - "59s", "22m", "1.7h" - and it is a name rather
+    # than a literal because this column has to be added in two places, here
+    # and the header, and the paragraph above is the record of what happens
+    # when those two drift.
+    RUNW = 4
+    FIXED = 25 + RUNW + GW + CBW + HW + COW + SPW
     NAMEW = avail - FIXED - 2
     if (NAMEW > 30) NAMEW = 30           # past this the column is just a gap
     if (NAMEW < 14) NAMEW = 14
@@ -1546,10 +3356,9 @@ render() {
     rn[n]  = $18 + 0; pk[n] = $19 + 0; ck[n] = $20 + 0; ckf[n] = $21
     ckt[n] = $22; cko[n] = $23
     rt[n]  = $25 + 0; gt[n] = $26 + 0; fb[n] = $27 + 0; gp[n] = $28 + 0
-    tc[n]  = $29 + 0
-    nv[n]  = NV[$1] + 0
+    tc[n]  = $29 + 0; rs[n] = $42 + 0
     nc[n]  = NC[$1]
-    nk[n]  = (nc[n] != "") ? substr(nc[n], 1, NICKW) : nickv(ti[n], lp[n], NICKW, nv[n])
+    nk[n]  = (nc[n] != "") ? substr(nc[n], 1, NICKW) : nick(ti[n], NICKW)
     sfx[n] = (length(nm[n]) > 1) ? substr(nm[n], length(nm[n]) - 1) : "  "
     if (al[n] == 1 && id[n] < fresh_idle) { fresh_idle = id[n]; freshest = n }
     push(n) }
@@ -1560,11 +3369,12 @@ render() {
     # fit. What the row carries instead is the pair of facts the tab exists to
     # produce: how many windows want a decision, and what the live ones hold.
     # Both used to sit dim at the bottom of STATE, below the rows they describe.
-    nact = 0; ncut = 0; livek = 0; nrun = 0
+    nact = 0; ncut = 0; livek = 0; nrun = 0; nstall = 0
     for (i = 1; i <= n; i++) {
       if (al[i] != 1) continue
       livek += cx[i] / 1000
-      if (rn[i]) nrun++
+      if (rn[i] == 1) nrun++
+      else if (rn[i] >= 2) nstall++
       u = urank(i)
       if (u >= 2) nact++
       else if (u == 1) ncut++ }
@@ -1575,8 +3385,15 @@ render() {
     # The lamp. A row scrolled off the bottom of the list is a turn you cannot
     # see running, and this is the one line that is always on screen - so the
     # count lives here too, moving in step with the markers below it.
+    #
+    # Stalled is counted beside working, never folded into it. They are two
+    # different things to do about - one window is getting on with it, the
+    # other is waiting on you - and a single number that adds them together is
+    # how this line came to read "4 working" over a machine running one turn.
     if (nrun > 0)
       head = head sprintf("   %s%s %d working%s", B CYN, (watch ? spin() : here), nrun, R)
+    if (nstall > 0)
+      head = head sprintf("   %s%s %d waiting%s", YEL, here, nstall, R)
     head = head sprintf("   %s%s   %.0fk live%s", D, vv, livek, R)
     if (filt != "") head = head sprintf("   %s/%s%s", CYN, filt, R)
     tail = clock (watch ? (secs + 0 > 0 ? sprintf("   next %ds", secs) : "   reading") : "")
@@ -1657,14 +3474,16 @@ render() {
       if (TOPI + ROWCAP - 1 > n) TOPI = n - ROWCAP + 1
       if (TOPI < 1) TOPI = 1 }
 
-    # 8, because that is what the row prefix actually measures: two of gutter,
-    # the run mark, the verdict glyph, their two spaces and the park/fail-safe
-    # pair. It said 6 for as long as the lamp column has existed, which is why
-    # every header sat two columns left of the data under it.
+    # 12, because that is what the row prefix actually measures: two of gutter,
+    # the run mark, RUNW of elapsed clock, their two spaces and the park/
+    # fail-safe pair. It said 6 for as long as the lamp column has existed,
+    # which is why every header sat two columns left of the data under it - so
+    # the new column is written as 8 + RUNW rather than as a fresh literal,
+    # to keep the number that moved in one place.
     pt(sprintf("%s%s%s %s%d live%s%s%s", D, hd("sessions"), R, D, nlive(), R, \
       (srtname != "") ? sprintf("%s   by %s%s", D, srtname, R) : "", \
       (ROWCAP < n) ? sprintf("%s   %d-%d of %d   %sj k scrolls%s", D, TOPI, TOPI + ROWCAP - 1, n, D, R) : ""))
-    pl(sprintf("%s%s%s%s%s%s%s%s%s%s", D, rep(" ", 8), pad(hd("session"), NAMEW),
+    pl(sprintf("%s%s%s%s%s%s%s%s%s%s", D, rep(" ", 8 + RUNW), pad(hd("session"), NAMEW),
        (GW ? pad(hd("grade"), GW) : ""),
        pad(hd("context"), CBW + 10), (HW ? pad(hd("heat"), HW) : ""),
        (COW ? pad(hd("cost"), COW) : ""),
@@ -1693,9 +3512,10 @@ render() {
     # survives is the part that changes meaning row to row - the markers, and
     # the three bar ladders as bare swatches. The prose that explains them is
     # behind ? in watch mode and in --help everywhere else.
-    anyrun = 0; anypark = 0; anytrend = 0; anystale = 0
+    anyrun = 0; anypark = 0; anytrend = 0; anystale = 0; anystall = 0
     for (i = 1; i <= n; i++) {
-      if (rn[i]) anyrun = 1
+      if (rn[i] == 1) anyrun = 1
+      else if (rn[i] >= 2) anystall = 1
       if (pk[i]) anypark = 1
       if (pstale(i)) anystale = 1
       if (cy[i] > 1) anytrend = 1 }
@@ -1705,7 +3525,8 @@ render() {
     pmid(D hd("key") R)
     leg = sprintf("%s%s%s %s%s%s %s%s%s  %sact / cut pays / ok%s", \
       ORG, g_act, R, YEL, g_cut, R, D GRN, g_ok, R, D, R)
-    if (anyrun)  leg = leg sprintf("   %s%s%s %srunning%s", B CYN, (watch ? spin() : here), R, D, R)
+    if (anyrun)   leg = leg sprintf("   %s%s%s %srunning%s", B CYN, (watch ? spin() : here), R, D, R)
+    if (anystall) leg = leg sprintf("   %s%s%s %swaiting%s", YEL, here, R, D, R)
     if (anylast) leg = leg sprintf("   %s%s%s %slatest%s", BLU, last, R, D, R)
     if (anypark) leg = leg sprintf("   %s%s%s %sparked%s", BLU, park, R, D, R)
     # Width-guarded like every other clause on this line: the frame is drawn per
@@ -1812,8 +3633,8 @@ render() {
         printf "          the file resumes an older state, so /park again before you /clear (>%dm of work after)%s\n", ckstale, R
         printf "    %sSPEND%s%s  weighted input-equivalents priced at the API input rate. The %% is against\n", B, R, D
         printf "          TOKEN_PLAN_5H_USD / TOKEN_PLAN_WEEK_USD, set in token-sessions-launch.sh%s\n", R
-        printf "    %sABC%s%s   spend %s production %s control, against your own median (%.0fk/cyc, %.0f%% output).\n", \
-          B, R, D, vv, vv, p_wpc, p_prod
+        printf "    %sABC%s%s   spend %s churn %s control. spend is against your own median (%.0fk/cyc);\n", \
+          B, R, D, vv, vv, p_wpc
         printf "          spend is measured ABOVE the ~%.0fk floor, so cycle 1 is not punished for it%s\n", FLOOR, R
         # Both this list and the strip below it are printed from the one key
         # table the shell passes in, so a key cannot work while appearing in
@@ -2010,6 +3831,28 @@ render() {
   # tick advances once per redraw, and the loop only redraws four times a second
   # while something is actually running - so the animation costs nothing on a
   # quiet machine.
+  # How long the turn in flight has been running. Off statusUpdatedAt in the
+  # pid file - the moment the CLI flipped this window to busy, which measured
+  # on this machine lands on the same second as the human prompt that started
+  # the turn - so it is the age of the turn, not of this tool noticing it.
+  #
+  # Recomputed against systime() on every frame rather than being handed an age
+  # by collect(): the pane redraws four times a second and re-reads disk every
+  # ten, so a baked-in figure would sit visibly frozen for ten seconds at a
+  # time in the one column whose whole job is to move.
+  #
+  # Four characters is the budget - "59s", "22m", "1.7h". A turn older than a
+  # few hours is a stalled window and the exact figure has stopped being the
+  # point, so it degrades to days rather than widening the column.
+  function runstr(i,   s, m) {
+    if (!rn[i] || rs[i] <= 0) return ""
+    s = systime() - rs[i]; if (s < 0) s = 0
+    if (s < 60)   return sprintf("%ds", s)
+    m = int(s / 60)
+    if (m < 100)  return sprintf("%dm", m)
+    if (m < 5760) return sprintf("%.1fh", m / 60)
+    return sprintf("%dd", int(m / 1440)) }
+
   function spin(   pu, k) {
     split("1 2 4 6 8 7 5 3", pu, " ")
     k = (tick % 8) + 1
@@ -2037,8 +3880,13 @@ render() {
     # glyphs and not one glyph in two colours, so --no-color still tells them
     # apart. The one-shot form has no second frame to animate into, so there it
     # stays the solid arrow it always was.
-    mark = rn[i] ? B CYN (watch ? spin() : here) R \
-                 : ((i == freshest) ? BLU last R : " ")
+    # A stalled turn gets the solid arrow in yellow and never animates. The
+    # animation is a claim that work is happening; over a window sitting on a
+    # permission prompt that claim is exactly as wrong as the static arrow used
+    # to be over a live one, only pointing the other way.
+    mark = (rn[i] == 1) ? B CYN (watch ? spin() : here) R \
+         : (rn[i] >= 2) ? YEL here R \
+         : ((i == freshest) ? BLU last R : " ")
     # Yellow rather than blue when the checkpoint is behind the session: same
     # glyph, so --no-color loses only the warning and not the fact of a park.
     pm   = pk[i] ? (pstale(i) ? YEL : BLU) park R " " : "  "
@@ -2052,12 +3900,13 @@ render() {
     # closed. A session with a turn in flight is the one row on the pane whose
     # numbers are about to change, so it reads bright even when it is not the
     # row you have your cursor on.
-    nc   = (i == sel) ? B CYN : (rn[i] ? B : ((al[i] == 0) ? GRY : ""))
+    nc   = (i == sel) ? B CYN : ((rn[i] == 1) ? B : ((al[i] == 0) ? GRY : ""))
 
     # Nickname, then the last two characters of the derived name the CLI keeps -
     # the only thing tying this row back to what the client calls the session.
-    pl(sprintf("%s%s %s%s%s%s %s%s%s %s%s%s%s %s%6.1fk%s  %s%s%s%s%s %s%s%s",
-      gut, mark, pm fm, nc, pad(nk[i], NAMEW - 3), R, GRY, sfx[i], R,
+    pl(sprintf("%s%s%s %s%s%s%s %s%s%s %s%s%s%s %s%6.1fk%s  %s%s%s%s%s %s%s%s",
+      gut, mark, ((rn[i] == 1) ? CYN : (rn[i] >= 2) ? YEL : "") padl(runstr(i), RUNW) R, \
+      pm fm, nc, pad(nk[i], NAMEW - 3), R, GRY, sfx[i], R,
       gcell(i), cc, cbar, R, cc, c, R,
       hcell(i), ccell(i), BLU, spark(td[i]), R,
       kc, padl(klab, 5), R))
@@ -2153,10 +4002,10 @@ render() {
   function overall(   g1, g2, g3, h1, h2, h3, s) {
     if (o_n + 0 < 5) return ""
     g1 = grade(o_wpc, p_wpc, 1);   h1 = grade(v_wpc, p_wpc, 1)
-    g2 = grade(o_prod, p_prod, 0); h2 = grade(v_prod, p_prod, 0)
+    g2 = churngrade(o_churn);      h2 = churngrade(v_churn)
     g3 = ctlgrade(o_ctl);          h3 = ctlgrade(v_ctl)
     s = sprintf("%sOVERALL%s %s7d%s   ", B, R, D, R)
-    s = s gpair(g1, h1, "spend") "   " gpair(g2, h2, "prod") "   " gpair(g3, h3, "control")
+    s = s gpair(g1, h1, "spend") "   " gpair(g2, h2, "churn") "   " gpair(g3, h3, "control")
     return s sprintf("   %s%d cycles%s", D, o_n, R) }
 
   # The Claude-vs-Ollama split, sat directly under OVERALL because it is the same
@@ -2283,7 +4132,7 @@ render() {
   #   production  output as a share of that spend. High means the tokens went
   #               into doing the work; low means they went into paying rent on
   #               a window - re-caching context that was already there.
-  #   control     breaches and gap rewrites per cycle. The one axis that is
+  #   control     over-budget prompts per cycle - output or growth ceilings only.
   #               purely about how the session was driven.
   function grade(v, med, invert,   r) {
     r = (med > 0) ? v / med : 1
@@ -2293,15 +4142,28 @@ render() {
   # No corpus median for control - the target is zero, so it is graded against
   # the doctrine directly: a clean cycle breaches nothing. Shared by the row
   # cell and the OVERALL line so the two ladders cannot drift apart.
+  # Refitted when control was narrowed to prompt-authored breaches. The old
+  # numerator carried rewrites at double weight, so the distribution shifted
+  # down: the median per cycle went 0.38 to 0.25. Zero is still the target - a
+  # clean cycle authors no over-budget prompt - so A stays near it.
   function ctlgrade(v) {
-    return (v <= 0.05) ? "A" : (v <= 0.25) ? "B" : (v <= 0.5) ? "C" : (v <= 0.9) ? "D" : "E" }
+    return (v <= 0.05) ? "A" : (v <= 0.2) ? "B" : (v <= 0.45) ? "C" : (v <= 0.8) ? "D" : "E" }
+
+  # Churn has no corpus median either, for the same reason control does not:
+  # the target is zero. It is what a cycle paid to have its window rewritten
+  # rather than to put new material into it or to produce anything, so it is
+  # graded against the doctrine, not against how much of it you usually do.
+  # The ladder is fitted to the measured distribution over 103 sessions -
+  # median 6.4 percent, p90 26.2 - rather than to round numbers.
+  function churngrade(v) {
+    return (v <= 2) ? "A" : (v <= 7) ? "B" : (v <= 15) ? "C" : (v <= 30) ? "D" : "E" }
 
   function gcol(g) {
     return (g == "A") ? GRN : (g == "B") ? GRN : (g == "C") ? BLU : (g == "D") ? YEL : RED }
 
   # Fills g[1..3] with the letters and g[4..6] with the figures behind them, so
   # the table cell and the panel line can never disagree about a session.
-  function gvals(i, g,   wtd, ctl, dis) {
+  function gvals(i, g,   wtd, ctl, dis, chn) {
     if (cy[i] < 2) return 0
     wtd = ot[i] * 5 + rt[i] * 2 + cx[i] * RPC * 0.1 * cy[i]
     if (wtd <= 0) return 0
@@ -2317,10 +4179,17 @@ render() {
     dis = wtd - FLOOR * 2000
     if (dis < wtd * 0.15) dis = wtd * 0.15
     g[4] = dis / cy[i] / 1000
-    g[5] = ot[i] * 5 * 100 / wtd
-    ctl  = (fb[i] + gp[i] * 2) / cy[i]
+    # Churn share: of everything this session paid, the part that went on
+    # rewriting a window rather than on new material or on output. gt[] is the
+    # growth already accumulated per session, so the rest of the re-cache is
+    # churn. The cold load comes off with the same FLOOR estimate spend uses,
+    # because cycle 1 is defined to have zero growth and would otherwise land
+    # the entire opening window in churn.
+    chn = rt[i] - gt[i] - FLOOR * 1000; if (chn < 0) chn = 0
+    g[5] = chn * 2 * 100 / wtd
+    ctl  = fb[i] / cy[i]
     g[1] = grade(g[4], p_wpc, 1)
-    g[2] = grade(g[5], p_prod, 0)
+    g[2] = churngrade(g[5])
     g[3] = ctlgrade(ctl)
     return 1 }
 
@@ -2340,7 +4209,7 @@ render() {
     # Kept short on purpose - this line sits inside a panel 74 columns wide on
     # a default terminal, and it is the only one here carrying three figures.
     s = sprintf("%s%s%s spend %s%.0fk%s%s/cyc (med %.0f)%s  ", gcol(g1), g1, R, B, wpc, R, D, p_wpc, R)
-    s = s sprintf("%s%s%s prod %s%.0f%%%s%s (med %.0f)%s  ", gcol(g2), g2, R, B, prod, R, D, p_prod, R)
+    s = s sprintf("%s%s%s churn %s%.0f%%%s%s (med %.0f)%s  ", gcol(g2), g2, R, B, prod, R, D, p_churn, R)
     s = s sprintf("%s%s%s control %s%db %dgap%s", gcol(g3), g3, R, B, fb[i], gp[i], R)
     return s }
 
@@ -2423,7 +4292,8 @@ render() {
     if (pk[i]) s = s sprintf("  %s%s%s  %sparked %s ago%s%s", D, vv, R, \
       (pstale(i) ? YEL : BLU), ago(ck[i]), \
       (pstale(i) ? sprintf(", %s behind", pbehind(i)) : ""), R)
-    if (rn[i]) s = s sprintf("  %s%s%s  %s%s working%s", D, vv, R, B CYN, (watch ? spin() : here), R)
+    if (rn[i] == 1) s = s sprintf("  %s%s%s  %s%s working %s%s", D, vv, R, B CYN, (watch ? spin() : here), runstr(i), R)
+    else if (rn[i] >= 2) s = s sprintf("  %s%s%s  %s%s %s %s%s", D, vv, R, YEL, here, (rn[i] == 2 ? "waiting" : "stalled"), runstr(i), R)
     dput(s)
     t = tip(i, 1)
     if (t != "") dputb(advice(urgency(i), t, w))
@@ -2449,11 +4319,9 @@ render() {
     # nothing here rewrites it.
     if (watch)
       dput(sprintf("    %s%s%s%s%s%s   %s%s%s", GRY, pad("name", 9), R, \
-        ((nv[i] || nc[i] != "") ? CYN : ""), nk[i], R, D, \
-        (nc[i] != "" ? sprintf("typed with /n %s n clears it", vv) \
-         : nv[i] ? sprintf("re-roll %d/%d %s n cycles, %d back to the default", \
-                         nv[i], nvar - 1, vv, nvar - nv[i]) \
-               : sprintf("from its first prompt %s n re-rolls it, /n NAME names it", vv)), R))
+        ((nc[i] != "") ? CYN : ""), nk[i], R, D, \
+        (nc[i] != "" ? sprintf("typed %s n renames it, empty clears it", vv) \
+               : sprintf("from its first prompt %s n names it", vv)), R))
     # What the fail-safe is doing to this window, in the one place with room to
     # say why. The miss line is the important one: it means the ping landed on a
     # different prefix and REBUILT the window rather than reading it, so holding
@@ -2491,7 +4359,9 @@ render() {
       dput(sprintf("    %s%s%s%sCOLD for %dm%s  %s%s%s  a full rewrite is already due", GRY, pad("cache", 9), R, RED, -lf[i], R, D, vv, R))
     t = sprintf("    %s%s%s", GRY, pad("state", 9), R)
     if (al[i] == 0)      t = t sprintf("%sclosed%s", GRY, R)
-    else if (rn[i])      t = t sprintf("%sa turn is running%s", B CYN, R)
+    else if (rn[i] == 1) t = t sprintf("%sa turn is running%s%s", B CYN, (runstr(i) != "" ? ", " runstr(i) " in" : ""), R)
+    else if (rn[i] == 2) t = t sprintf("%swaiting on you%s%s", YEL, (runstr(i) != "" ? " - " runstr(i) " so far" : ""), R)
+    else if (rn[i] == 3) t = t sprintf("%sbusy, but nothing written for a while - stopped, or stuck%s", YEL, R)
     else                 t = t sprintf("%swaiting for you%s", GRN, R)
     if (pk[i]) t = t sprintf("  %s%s%s  %sparked%s %s%s, %s ago%s%s", D, vv, R, \
       (pstale(i) ? YEL : BLU), R, D, ckt[i], ago(ck[i]), \
@@ -2739,9 +4609,11 @@ analytics() {
   [ "$AW" -gt 104 ] && AW=104
   awk -F, -v now="${EPOCHSECONDS:-$(date +%s)}" -v cols="${COLS:-92}" -v rpc="$RPC" \
       -v price="$PRICE_IN" -v obud="$OBUD" -v gbud="$GBUD" -v watch="$WATCH" \
+      -v daycap="$DAYCAP" -v metacap="$METACAP" -v selfl="$SELF_LABELS" \
+      -v toolre="$TOOLRE" \
       -v plan5="$PLAN_5H" -v planwk="$PLAN_WK" -v titles="$TITLES" \
       -v projmap="$PROJMAP" \
-      -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v wk="$BUCKET" -v hud="$HUD" \
+      -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v p_churn="$M_CHURN" -v wk="$BUCKET" -v hud="$HUD" \
       -v floor="$M_FLOOR" -v heatbar="$M_HEAT" -v m_rem="$M_REM" \
       -v full="$G_FULL" -v empt="$G_EMPT" -v sparks="$SPARKS" -v arrow="$G_ARROW" \
       -v gtl="$G_TL" -v gtr="$G_TR" -v gbl="$G_BL" -v gbr="$G_BR" -v ghh="$G_H" \
@@ -2815,8 +4687,21 @@ analytics() {
     r = (med > 0) ? v / med : 1
     if (invert) r = (r > 0) ? 1 / r : 9
     return (r >= 1.5) ? "A" : (r >= 1.15) ? "B" : (r >= 0.85) ? "C" : (r >= 0.6) ? "D" : "E" }
+  # Refitted when control was narrowed to prompt-authored breaches. The old
+  # numerator carried rewrites at double weight, so the distribution shifted
+  # down: the median per cycle went 0.38 to 0.25. Zero is still the target - a
+  # clean cycle authors no over-budget prompt - so A stays near it.
   function ctlgrade(v) {
-    return (v <= 0.05) ? "A" : (v <= 0.25) ? "B" : (v <= 0.5) ? "C" : (v <= 0.9) ? "D" : "E" }
+    return (v <= 0.05) ? "A" : (v <= 0.2) ? "B" : (v <= 0.45) ? "C" : (v <= 0.8) ? "D" : "E" }
+
+  # Churn has no corpus median either, for the same reason control does not:
+  # the target is zero. It is what a cycle paid to have its window rewritten
+  # rather than to put new material into it or to produce anything, so it is
+  # graded against the doctrine, not against how much of it you usually do.
+  # The ladder is fitted to the measured distribution over 103 sessions -
+  # median 6.4 percent, p90 26.2 - rather than to round numbers.
+  function churngrade(v) {
+    return (v <= 2) ? "A" : (v <= 7) ? "B" : (v <= 15) ? "C" : (v <= 30) ? "D" : "E" }
   function gcol(g) {
     return (g == "A") ? GRN : (g == "B") ? GRN : (g == "C") ? BLU : (g == "D") ? YEL : RED }
   # One graded series across the buckets: a sparkline of the magnitude, and the
@@ -2830,8 +4715,8 @@ analytics() {
       GB[i] = -1
       if (bkn[i] < 1) continue
       if      (kind == 1) v = dg[i] / bkn[i] / 1000            # weighted per cycle, above the floor
-      else if (kind == 2) v = (dw[i] > 0) ? bko[i] * 100 / dw[i] : 0
-      else                v = bkc[i] / bkn[i]                   # breaches + rewrites
+      else if (kind == 2) v = (dwp[i] > 0) ? bkh[i] * 100 / dwp[i] : 0
+      else                v = bkc[i] / bkn[i]                   # prompt breaches per cycle
       GB[i] = v
       if (v > mx) mx = v }
     sp = ""; ls = ""
@@ -2840,7 +4725,7 @@ analytics() {
       if (v < 0) { sp = sp GRY SP[1] R " "; ls = ls D "." R " "; continue }
       g = (bkn[i] < 2) ? "-" \
         : (kind == 1) ? grade(v, p_wpc, 1) \
-        : (kind == 2) ? grade(v, p_prod, 0) : ctlgrade(v)
+        : (kind == 2) ? churngrade(v) : ctlgrade(v)
       ix = (mx > 0) ? int(v / mx * 7) + 1 : 1
       if (ix > 8) ix = 8
       if (ix < 1) ix = 1
@@ -2851,8 +4736,20 @@ analytics() {
     if (g0 != "" && g0 != "-") printf "  %s%s%s %s%s%s", gcol(g0), g0, R, D, (wk ? "this week" : "today"), R
     printf "\n%s%s%s\n", lab(""), rep(" ", SUBW), ls }
 
+  # Was this session the tooling working on itself? Memoised: it is asked once
+  # per history row and the answer cannot change within a run.
+  function istool(sid,   t) {
+    if (sid in ISTL) return ISTL[sid]
+    t = (sid in PJ) ? PJ[sid] : ""
+    if (t == "claude" || t == "claude-tests--rig-session") ISTL[sid] = 1
+    else if ((t in SELFL) && toolre != "" && tolower(TT[substr(sid, 1, 8)]) ~ tolower(toolre)) ISTL[sid] = 1
+    else ISTL[sid] = 0
+    return ISTL[sid] }
+
   BEGIN {
     split(sparks, SP, " ")
+    # The workshop labels, as a set - the same string --exclude-self reads.
+    nsl = split(selfl, sla, " "); for (si = 1; si <= nsl; si++) SELFL[sla[si]] = 1
     LB = 12
     NB = wk ? 12 : 14                    # a fortnight of days, or a quarter of weeks
     BUNIT = wk ? "weeks" : "days"
@@ -2885,11 +4782,20 @@ analytics() {
     # was worth a whole letter. See the note in measure_constants.
     wg = w
     if ($3 + 0 == 1 && floor > 0) { wg = w - floor * 2000; if (wg < w * 0.15) wg = w * 0.15 }
-    bch = ($7 != "-" && $7 != "") ? 1 : 0
+    bch = ($7 ~ /[og]/) ? 1 : 0
     grw = ($3 + 0 > 1 && ch > 60000) ? 1 : 0
+    # Column 8. A held cycle is one this machine started by typing into a session
+    # to keep its cache warm - a prompt, a reply, a history row, a real bill, and
+    # no work. It stays in every total and gets its own line under spend, because
+    # it was spent. It is dropped from every PER-CYCLE figure below, because a
+    # window held warm overnight would otherwise show sixteen near-zero cycles
+    # and grade as the least productive session on the machine, which is exactly
+    # backwards: it was the cheapest thing running.
+    hld = ($8 == "renew" || $8 == "park") ? 1 : 0
     N++
+    if (hld) { HN++; HW += w; HK[$8]++ }
     TW += w; TO += $4 * 5; TWR += $5 * 2; TRD += $6 * rpc * 0.1
-    WV[N] = w; OV[N] = $4; GV[N] = g
+    if (!hld) { NP++; WV[NP] = w; OV[NP] = $4; GV[NP] = g }
     # A running top-8 by weighted cost, kept here rather than sorted at the end
     # so the whole history never has to be held twice. Only 5 are printed; the
     # spare three absorb ties without the list going short.
@@ -2899,8 +4805,8 @@ analytics() {
         z = cw[q]; cw[q] = cw[q-1]; cw[q-1] = z; z = ct[q]; ct[q] = ct[q-1]; ct[q-1] = z
         z = cs[q]; cs[q] = cs[q-1]; cs[q-1] = z; z = co[q]; co[q] = co[q-1]; co[q-1] = z
         z = cg[q]; cg[q] = cg[q-1]; cg[q-1] = z; z = cb[q]; cb[q] = cb[q-1]; cb[q-1] = z } }
-    if ($4 > obud) OB++
-    if (g > gbud) GB++
+    if (!hld && $4 > obud) OB++
+    if (!hld && g > gbud) GB++
     NBR += bch; NGR += grw
     # What a gap rewrite actually cost is the churn it paid at the write rate,
     # not the whole cycle it happened to land on.
@@ -2910,7 +4816,7 @@ analytics() {
     # Output by position within its session, in fifths. Needs a second pass to
     # know how long each session turned out to be, so the rows are held and the
     # banding happens in END.
-    PS[N] = $2; PO[N] = $4; PC[N] = $3 + 0
+    if (!hld) { PS[NP] = $2; PO[NP] = $4; PC[NP] = $3 + 0 }
     if (grw) GRS[$2]++
     # Hoisted above its old home a few lines down: the per-project block wants
     # it too, and two assignments that must agree is one more than there needs
@@ -2931,10 +4837,22 @@ analytics() {
     # rows and the letters under them can never disagree about which day is
     # which.
     di = int(age / (wk ? 604800 : 86400))
-    if (di < NB) { dw[di] += w; dg[di] += wg; bko[di] += $4 * 5; bkn[di]++; bkc[di] += bch + 2 * grw }
-    if      (age <= 604800)  { A7 += w; A7G += wg; A7O += $4 * 5; A7N++; A7C += bch + 2 * grw }
-    else if (age <= 1209600) { B7 += w; B7G += wg; B7O += $4 * 5; B7N++; B7C += bch + 2 * grw }
-    else                     { C7 += w; C7G += wg; C7O += $4 * 5; C7N++; C7C += bch + 2 * grw }
+    # dw is the height of the spend sparkline and keeps held cycles - they were
+    # spent. Everything the three GRADES are computed from drops them, dwp being
+    # the denominator for production, which has to match its own numerator.
+    if (di < NB) {
+      dw[di] += w
+      if (!hld) { dwp[di] += w; dg[di] += wg; bko[di] += $4 * 5; bkn[di]++; bkc[di] += bch
+                 bkh[di] += ($3 + 0 > 1) ? ch * 2 : 0 } }
+    if (!hld) {
+      chw = ($3 + 0 > 1) ? ch * 2 : 0
+      if      (age <= 604800)  { A7 += w; A7G += wg; A7O += $4 * 5; A7N++; A7C += bch; A7H += chw }
+      else if (age <= 1209600) { B7 += w; B7G += wg; B7O += $4 * 5; B7N++; B7C += bch; B7H += chw }
+      else                     { C7 += w; C7G += wg; C7O += $4 * 5; C7N++; C7C += bch; C7H += chw } }
+    # The workshop, per cycle rather than per project - see METACAP and TOOLRE.
+    # Counted in the same !hld branch A7 uses, so the percentage it is quoted as
+    # has the same denominator it is divided by.
+    if (!hld && age <= 604800 && istool($2)) MW7 += w
     if (age <= 86400) TDAY += w
     if (age <= 18000) T5H += w }
 
@@ -2949,20 +4867,30 @@ analytics() {
 
     printf "%s%s%s weighted%s   %s~$%.0f at $%d/MTok in, output x5 write x2 read x0.1%s\n", \
       lab("spend"), B, hum(TW), R, D, usd(TW), price, R
-    printf "%s%s   %s%s%s %.0f%% output   %s%s%s %.0f%% cache writes   %s%s%s %.0f%% cache reads\n\n", \
+    printf "%s%s   %s%s%s %.0f%% output   %s%s%s %.0f%% cache writes   %s%s%s %.0f%% cache reads\n", \
       lab(""), splitbar(TO, TWR, TRD, 16), \
       GRN, full, R, TO * 100 / TW, ORG, full, R, TWR * 100 / TW, \
       BLU, full, R, TRD * 100 / TW
+    # The one place held cycles are counted. Every figure after this line is
+    # per cycle, and drops them.
+    if (HN > 0)
+      printf "%s%s%s held%s   %s%d cycles (%d renew, %d park) - warmth, not work%s\n", \
+        lab(""), B, hum(HW), R, D, HN, HK["renew"] + 0, HK["park"] + 0, R
+    printf "\n"
 
-    sortv(WV, N); sortv(OV, N); sortv(GV, N)
+    # NPD is NP with a floor of 1: a history that is nothing but held cycles is
+    # a legitimate state (a machine that only ever renewed), and a percentage of
+    # nothing must read as zero rather than kill the whole view.
+    NPD = (NP > 0) ? NP : 1
+    sortv(WV, NP); sortv(OV, NP); sortv(GV, NP)
     printf "%s%sweighted%s  med %s   p90 %s\n", lab("per cycle"), D, R, \
-      hum(pctl(WV, N, 0.5)), hum(pctl(WV, N, 0.9))
+      hum(pctl(WV, NP, 0.5)), hum(pctl(WV, NP, 0.9))
     printf "%s%soutput%s    med %s   p90 %s   %s%.0f%% of cycles over the %.0fk budget%s\n", \
-      lab(""), D, R, hum(pctl(OV, N, 0.5)), hum(pctl(OV, N, 0.9)), \
-      (OB * 100 / N >= 20 ? YEL : D), OB * 100 / N, obud / 1000, R
+      lab(""), D, R, hum(pctl(OV, NP, 0.5)), hum(pctl(OV, NP, 0.9)), \
+      (OB * 100 / NPD >= 20 ? YEL : D), OB * 100 / NPD, obud / 1000, R
     printf "%s%sgrowth%s    med %s   p90 %s   %s%.0f%% of cycles over the %.0fk budget%s\n\n", \
-      lab(""), D, R, hum(pctl(GV, N, 0.5)), hum(pctl(GV, N, 0.9)), \
-      (GB * 100 / N >= 20 ? YEL : D), GB * 100 / N, gbud / 1000, R
+      lab(""), D, R, hum(pctl(GV, NP, 0.5)), hum(pctl(GV, NP, 0.9)), \
+      (GB * 100 / NPD >= 20 ? YEL : D), GB * 100 / NPD, gbud / 1000, R
 
     # Concentration, not average - and it is the line that decides what the fix
     # even IS. The doctrine claims a breach is one prompt that bundled three
@@ -2972,13 +4900,13 @@ analytics() {
     # correct one and the lever would be trimming every cycle instead. An
     # average can never tell those two apart, which is why it needed its own
     # line rather than another percentile on the ones above.
-    k10 = int(N * 0.1 + 0.5); if (k10 < 1) k10 = 1
-    for (i = 1; i <= N; i++) { ao_ += OV[i]; ag_ += GV[i] }
-    for (i = N - k10 + 1; i <= N; i++) { to_ += OV[i]; tg_ += GV[i] }
+    k10 = int(NP * 0.1 + 0.5); if (k10 < 1) k10 = 1
+    for (i = 1; i <= NP; i++) { ao_ += OV[i]; ag_ += GV[i] }
+    for (i = NP - k10 + 1; i <= NP; i++) { to_ += OV[i]; tg_ += GV[i] }
     po = (ao_ > 0) ? to_ * 100 / ao_ : 0
     pg = (ag_ > 0) ? tg_ * 100 / ag_ : 0
     printf "%s%sthe dearest %d%% of cycles carry%s   %s%.0f%%%s %sof all output%s   %s%.0f%%%s %sof all growth%s\n", \
-      lab("shape"), D, int(k10 * 100 / N + 0.5), R, \
+      lab("shape"), D, int(k10 * 100 / NPD + 0.5), R, \
       (po >= 25 ? YEL : B), po, R, D, R, (pg >= 25 ? YEL : B), pg, R, D, R
     printf "%s%s%s%s\n\n", lab(""), D, \
       ((po >= 25 || pg >= 25) \
@@ -2991,16 +4919,26 @@ analytics() {
     # fortnight. Every series below draws the same SPAN, so they stay aligned.
     SPAN = 1
     for (i = 0; i < NB; i++) if (bkn[i] > 0) SPAN = i + 1
-    mx = 0
-    for (i = 0; i < SPAN; i++) if (dw[i] > mx) mx = dw[i]
+    # Full scale is a BUDGET (TOKEN_DAY_CAP), not the tallest bucket, so the
+    # height of a day means the same thing from one week to the next and one
+    # enormous day cannot flatten the rest of the series. Colour is the ramp
+    # the plan bars use: green under 60% of the cap, then yellow, orange, and
+    # red for a bucket that went over it. Set the cap to 0 for the old
+    # relative scale, which is the honest reading when no budget is meant.
+    dcap = daycap + 0; if (wk) dcap *= 7
+    if (dcap <= 0) for (i = 0; i < SPAN; i++) { if (dw[i] > dcap) dcap = dw[i] }
+    dover = 0
     sp = ""
     for (i = SPAN - 1; i >= 0; i--) {
-      ix = (mx > 0 && dw[i] > 0) ? int(dw[i] / mx * 7) + 1 : 1
+      ix = (dcap > 0 && dw[i] > 0) ? int(dw[i] / dcap * 7) + 1 : 1
       if (ix > 8) ix = 8
-      sp = sp ((dw[i] > 0) ? BLU : GRY) SP[ix] }
-    printf "%s%s%s   %s%d %s, total%s   today %s%s%s   7d %s%s%s   5h %s%s%s\n\n", \
-      lab(wk ? "weekly" : "daily"), sp, R, D, SPAN, BUNIT, R, \
-      B, hum(TDAY), R, B, hum(A7), R, B, hum(T5H), R
+      if (dw[i] > dcap) dover++
+      sp = sp ((dw[i] <= 0) ? GRY : (dw[i] > dcap) ? RED \
+             : (dw[i] > dcap * 0.85) ? ORG : (dw[i] > dcap * 0.6) ? YEL : GRN) SP[ix] }
+    printf "%s%s%s   %s%d %s, %s%d%s%s over the %s cap%s   today %s%s%s   7d %s%s%s   5h %s%s%s\n\n", \
+      lab(wk ? "weekly" : "daily"), sp, R, D, SPAN, BUNIT, \
+      (dover ? RED : GRN), dover, R, D, hum(dcap), R, \
+      (TDAY > dcap ? RED : B), hum(TDAY), R, B, hum(A7), R, B, hum(T5H), R
 
     # The same three axes the sessions tab grades one row on, per bucket, over
     # the whole history: height is the magnitude, the letter under each glyph is
@@ -3014,35 +4952,36 @@ analytics() {
     # worse than no letter.
     printf "%s%sheight is the amount, the letter under it is the grade%s\n", \
       lab("grades"), D, R
-    gser("spend", 1); gser("production", 2); gser("control", 3)
+    gser("spend", 1); gser("churn", 2); gser("control", 3)
     leg = sprintf("%sA%s %sB%s %sC%s %sD%s %sE%s  %s- under 2 cycles  . none%s", \
       GRN, R, GRN, R, BLU, R, YEL, R, RED, R, D, R)
     hint = watch ? "w  " (wk ? "days" : "weeks") : "--" (wk ? "daily" : "weekly")
     printf "%s%s%s   %s%s%s\n\n", lab(""), rep(" ", SUBW), leg, D, hint, R
 
-    printf "%s%s%d breaches%s   %s%.0f%% of cycles%s\n", lab("control"), \
-      (NBR ? YEL : GRN), NBR, R, D, NBR * 100 / N, R
+    printf "%s%s%d prompt breaches%s   %s%.0f%% of cycles%s\n", lab("control"), \
+      (NBR ? YEL : GRN), NBR, R, D, NBR * 100 / NPD, R
     printf "%s%s%d gap rewrites%s   %s%.0f%% of cycles, costing ~%s - %.0f%% of everything%s\n\n", \
-      lab(""), (NGR ? RED : GRN), NGR, R, D, NGR * 100 / N, hum(GRW), GRW * 100 / TW, R
+      lab(""), (NGR ? RED : GRN), NGR, R, D, NGR * 100 / NPD, hum(GRW), GRW * 100 / TW, R
     # A quiet fortnight leaves the prior week too thin to compare against, so it
     # widens to everything older rather than reporting a swing measured off two
     # cycles.
-    if (B7N < 5) { B7 += C7; B7G += C7G; B7O += C7O; B7N += C7N; B7C += C7C }
+    if (B7N < 5) { B7 += C7; B7G += C7G; B7O += C7O; B7N += C7N; B7C += C7C; B7H += C7H }
     if (A7N >= 5 && B7N >= 5) {
       aw = A7G / A7N / 1000; bw = B7G / B7N / 1000
       ao = A7O * 100 / A7;  bo = B7O * 100 / B7
+      ah = A7H * 100 / A7;  bh = B7H * 100 / B7
       ac = A7C / A7N;       bc = B7C / B7N
       printf "%s%slast 7 days against the stretch before them%s\n", lab("trend"), D, R
       printf "%s%sspend/cycle%s    %.0fk %s %s%.0fk%s   %s   %sabove the ~%.0fk floor%s\n", lab(""), D, R, bw, arrow, B, aw, R, delta(bw, aw, 1), D, floor, R
       printf "%s%soutput share%s   %.0f%% %s %s%.0f%%%s   %s\n", lab(""), D, R, bo, arrow, B, ao, R, delta(bo, ao, 0)
-      printf "%s%sper cycle%s      %.2f %s %s%.2f%s %sbreaches+rewrites%s   %s\n", lab(""), D, R, bc, arrow, B, ac, R, D, R, delta(bc, ac, 1)
+      printf "%s%sper cycle%s      %.2f %s %s%.2f%s %sprompt breaches%s   %s\n", lab(""), D, R, bc, arrow, B, ac, R, D, R, delta(bc, ac, 1)
       # Graded against the corpus medians, NOT against the previous window -
       # the arrows above already carry the movement. If this graded against
       # last week instead, a C here and a C on the sessions tab would be two
       # different claims, and the whole point of a letter is that it means one
       # thing wherever it appears.
-      g1 = grade(aw, p_wpc, 1); g2 = grade(ao, p_prod, 0); g3 = ctlgrade(ac)
-      printf "%s%sgraded%s         %s%s%s spend   %s%s%s production   %s%s%s control   %sagainst your own median%s\n\n", \
+      g1 = grade(aw, p_wpc, 1); g2 = churngrade(ah); g3 = ctlgrade(ac)
+      printf "%s%sgraded%s         %s%s%s spend   %s%s%s churn   %s%s%s control   %sspend vs median, churn and control vs zero%s\n\n", \
         lab(""), D, R, gcol(g1), g1, R, gcol(g2), g2, R, gcol(g3), g3, R, D, R }
 
     if (planwk + 0 > 0 || plan5 + 0 > 0) {
@@ -3095,6 +5034,27 @@ analytics() {
         lab(""), D, pm - 6, PJW[pk[7]] * 100 / TW, R
       printf "\n" }
 
+    # ----------------------------------------------------------------- tooling
+    # The workshop, as its own line rather than three rows you have to add up
+    # yourself. Same labels --exclude-self uses, and the same honest error: "~"
+    # is the home directory, so a little real work run from there lands in here
+    # too. That error is in the safe direction for a budget - it overstates the
+    # tooling rather than letting it hide - but it is an error, and the second
+    # line names the labels rather than pretending the figure is exact.
+    mw = MW7 + 0
+    if (mw > 0 && A7 > 0) {
+      mf = (metacap + 0 > 0) ? mw / metacap : 0
+      mc = (mf >= 1) ? RED : (mf >= 0.85) ? ORG : (mf >= 0.6) ? YEL : GRN
+      mb = int(mf * 8 + 0.5); if (mb > 8) mb = 8; if (mb < 0) mb = 0
+      printf "%s%s%s%s this week   %s%.0f%%%s %sof %s%s", lab("tooling"), \
+        mc, hum(mw), R, mc, mw * 100 / A7, R, D, hum(A7), R
+      if (metacap + 0 > 0)
+        printf "   %s%s%s%s%s   %s%s the %s cap%s", mc, rep(full, mb), D, rep(empt, 8 - mb), R, \
+          mc, (mw > metacap ? hum(mw - metacap) " over" : hum(metacap - mw) " left under"), \
+          hum(metacap), R
+      printf "\n%s%ssessions in %s whose subject matched /%s/, plus anything in .claude - --exclude-self drops them from every figure above%s\n\n", \
+        lab(""), D, selfl, toolre, R }
+
     m = 0
     for (k in sw) { m++; kk[m] = k }
     for (i = 2; i <= m; i++) {
@@ -3138,8 +5098,8 @@ analytics() {
     #    same shape rather than the long one dominating the tail. This is the
     #    evidence under the heat column: rent rises with the window AND the work
     #    it returns falls, and the two meet.
-    for (i = 1; i <= N; i++) SLEN[PS[i]]++
-    for (i = 1; i <= N; i++) {
+    for (i = 1; i <= NP; i++) SLEN[PS[i]]++
+    for (i = 1; i <= NP; i++) {
       if (SLEN[PS[i]] < 6) continue
       fi = int(5 * (PC[i] - 1) / SLEN[PS[i]]); if (fi > 4) fi = 4
       FO[fi] += PO[i]; FN[fi]++ }
@@ -3403,71 +5363,1010 @@ do_update() {
 
 # One writer for token-nicks.tsv, so the file can only ever hold one shape:
 #
-#   sid <TAB> variant <TAB> typed-name
+#   sid <TAB> name
 #
-# The third field is optional and older two-field rows keep working, which is
-# the whole reason it went on the end rather than into a second file.
-write_nick() {  # write_nick <sid> <variant> [typed name]
-  local sid="$1" v="$2" nm="${3:-}" tmp
+# A name is only ever one a person typed. The derived name - the opening words
+# of the session's first prompt - is computed in the renderer from the
+# transcript, so it follows a session that is still talking and never needs
+# storing. That leaves nothing to keep here but the override, which is why the
+# variant column this file used to carry for re-rolls is gone: clearing a name
+# now deletes the row rather than leaving a stub behind.
+#
+# Rows written by the old shape (sid, variant, name) still READ correctly - the
+# renderer skips a numeric second field - and are rewritten to two columns the
+# first time that session is named.
+write_nick() {  # write_nick <sid> [name]
+  local sid="$1" nm="${2:-}" tmp
   [ -n "$sid" ] || return 0
   tmp="$NICKS.$$"
   { [ -f "$NICKS" ] && grep -v "^$sid$(printf '\t')" "$NICKS"
-    if [ -n "$nm" ]; then printf '%s\t%s\t%s\n' "$sid" "$v" "$nm"
-    else                  printf '%s\t%s\n'     "$sid" "$v"; fi
+    [ -n "$nm" ] && printf '%s\t%s\n' "$sid" "$nm"
+    :
   } > "$tmp" 2>/dev/null
   mv -f "$tmp" "$NICKS" 2>/dev/null
 }
 
-# The variant a row is on, and the name typed for it if there is one. Both read
-# back rather than remembered, because the file is the state and a second copy
-# of it in a shell variable is a second thing to get wrong.
-nick_var() {  # nick_var <sid>
-  [ -f "$NICKS" ] || { echo 0; return 0; }
-  awk -F'\t' -v s="$1" '$1 == s { v = $2 + 0 } END { print v + 0 }' "$NICKS"
-}
+# The name typed for a session, if any. Read back rather than remembered,
+# because the file is the state and a second copy of it in a shell variable is
+# a second thing to get wrong. Old three-field rows keep their name in field 3.
 typed_nick() {  # typed_nick <sid>
   [ -f "$NICKS" ] || return 0
-  awk -F'\t' -v s="$1" '$1 == s { print $3; exit }' "$NICKS"
+  awk -F'\t' -v s="$1" '$1 == s {
+    print ($3 != "") ? $3 : (($2 ~ /^[0-9]+$/) ? "" : $2); exit }' "$NICKS"
 }
 
-reroll_nick() {
-  local row="$1" sid v
-  [ "$row" -gt 0 ] || return 0
-  sid=$(row_field "$row" 1)
-  [ -n "$sid" ] || return 0
-  v=$(nick_var "$sid")
-  # A typed name is not a variant, so it cannot be advanced past. n clears it
-  # and hands the row back to the derived pool at the variant it left off on,
-  # which means one key both undoes /n and resumes re-rolling.
-  if [ -n "$(typed_nick "$sid")" ]; then write_nick "$sid" "$v" ""; return 0; fi
-  write_nick "$sid" "$(( (v + 1) % NVAR ))" ""
-}
-
-# /n NAME, typed at the prompt line that / opens. The name is the rest of the
-# line: leading and trailing blanks go, and any run of blanks inside becomes a
-# single dash, so a name typed as three words still arrives as one token and the
-# column stays a column. A bare /n clears back to the derived name.
+# A typed name, made safe to store. Leading and trailing blanks go and any run
+# of blanks inside becomes a single dash, so a name typed as three words still
+# arrives as one token and the column stays a column. Empty in, empty out, which
+# is how both callers spell "clear it".
 #
 # Sanitised for the two delimiters this program is built on - the snapshot is
 # pipe-separated and this file tab-separated, so neither may reach a stored name
 # - and cut to the width a row can actually show.
+clean_nick() {  # clean_nick <raw text>
+  printf '%s' "$1" | tr '|\t' '  ' \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+          -e 's/[[:space:]][[:space:]]*/-/g' \
+    | cut -c1-24
+}
+
+# Name a row on screen. The pane's spelling: it knows a row index, not an id.
 set_nick() {  # set_nick <row> <raw text>
-  local row="$1" raw="$2" sid nm
+  local row="$1" sid
   [ "$row" -gt 0 ] || return 0
   sid=$(row_field "$row" 1)
   [ -n "$sid" ] || return 0
-  nm=$(printf '%s' "$raw" | tr '|\t' '  ' \
-       | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-             -e 's/[[:space:]][[:space:]]*/-/g')
-  nm=${nm:0:24}
-  write_nick "$sid" "$(nick_var "$sid")" "$nm"
+  write_nick "$sid" "$(clean_nick "$2")"
+}
+
+# Extension marks, in the same shape and for the same reasons as the names:
+#
+#   sid <TAB> allowed <TAB> used
+#
+# Keyed by the SHORT id, like every other side table here. A session with no row
+# is on the default, so the file only ever holds the ones you have changed - and
+# deleting it resets everything to one mark each, which is the intended way out.
+# Machine-typed prompts, one row each, written by token-poke.ps1:
+#
+#   ISO8601 <TAB> short <TAB> pid <TAB> kind <TAB> contextK <TAB> marksLeft
+#
+# Read here so the panel can tell a window that was HELD warm from one that was
+# worked. Both add cycles, context and cost to a session, and only one of them
+# is work - a window poked hourly overnight would otherwise show sixteen cycles
+# of near-zero output and be graded as the least productive session on the
+# machine, which is exactly backwards: it was the cheapest thing running.
+#
+# mktime on BOTH sides of the subtraction, never date +%s against a parsed
+# local timestamp. The log is written in local time and mktime reads local time,
+# so going through it twice cancels the zone offset; mixing the two silently
+# shifts every age by however many hours you are from UTC.
+# Windows the tooling opened rather than the person at the keyboard - the unpark
+# launcher, and anything else that spawns a session on someone's behalf.
+#
+#   pid <TAB> ISO8601 <TAB> reason
+#
+# Keyed by PID and not by session id, because at spawn time there is no session
+# id yet: the row has to be written the moment the process appears, and the pid
+# is the only thing that exists then. Everything downstream already maps pid to
+# sid, so the join costs nothing.
+# Fill the side tables. One awk over the poke log (which has to do date
+# arithmetic and so cannot be a plain read), and a plain read for the other
+# two. Called once at the top of a collect, before anything walks sessions.
+load_side_tables() {
+  local k a b c
+  PKC=(); PKM=(); XA=(); XU=(); XX=(); SPW=()
+  if [ -f "$POKEF" ]; then
+    # nowspec is passed in rather than taken per row, so the whole file is one
+    # fork and every age in it is measured from the same instant. Same mktime
+    # on both sides, same local rule, so the zone offset cancels - see utcep.
+    while IFS=$'\t' read -r k a b; do
+      [ -n "$k" ] && { PKC[$k]=$a; PKM[$k]=$b; }
+    done < <(awk -F'\t' -v nowspec="$(date '+%Y %m %d %H %M %S')" '
+      $2 != "" {
+        n[$2]++
+        spec = $1; gsub(/[-T:]/, " ", spec); t = mktime(spec)
+        if (t > last[$2]) last[$2] = t }
+      END {
+        now = mktime(nowspec)
+        for (sh in n)
+          printf "%s\t%d\t%d\n", sh, n[sh], (last[sh] > 0 ? int((now - last[sh]) / 60) : -1) }' \
+      "$POKEF" 2>/dev/null)
+  fi
+  if [ -f "$EXTF" ]; then
+    # Every field validated here rather than at each use, which is what the
+    # three one-line functions were really for.
+    while IFS=$'\t' read -r k a b c; do
+      [ -n "$k" ] || continue
+      case "$a" in ''|*[!0-9]*) a="$EXT_DEFAULT" ;; esac
+      case "$b" in ''|*[!0-9]*) b=0 ;; esac
+      case "$c" in ''|*[!0-9]*) c=0 ;; esac
+      XA[$k]=$a; XU[$k]=$b; XX[$k]=$c
+    done < "$EXTF"
+  fi
+  if [ -f "$SPAWNF" ]; then
+    while IFS=$'\t' read -r k a b; do
+      [ -n "$k" ] && SPW[$k]="${b:-}"
+    done < "$SPAWNF"
+  fi
+}
+
+spawned_of() {  # spawned_of <pid>  ->  reason, or empty
+  [ -f "$SPAWNF" ] || return 0
+  awk -F'\t' -v p="$1" '$1 == p { print $3; exit }' "$SPAWNF" 2>/dev/null
+}
+
+pokes_of() {  # pokes_of <short>  ->  count|minutes since the most recent
+  local out=""
+  [ -f "$POKEF" ] || { printf '0|-1'; return 0; }
+  out=$(awk -F'\t' -v s="$1" -v nowspec="$(date '+%Y %m %d %H %M %S')" '
+    $2 == s {
+      n++
+      spec = $1; gsub(/[-T:]/, " ", spec)
+      t = mktime(spec)
+      if (t > last) last = t
+    }
+    END {
+      now = mktime(nowspec)
+      printf "%d|%d", n + 0, (last > 0 ? int((now - last) / 60) : -1)
+    }' "$POKEF" 2>/dev/null)
+  case "$out" in ''|*[!0-9|-]*) out="0|-1" ;; esac
+  printf '%s' "$out"
+}
+
+ext_allowed() {  # ext_allowed <short>
+  local v=""
+  [ -f "$EXTF" ] && v=$(awk -F'\t' -v s="$1" '$1 == s { print $2; exit }' "$EXTF" 2>/dev/null)
+  case "${v:-}" in ''|*[!0-9]*) printf '%s' "$EXT_DEFAULT" ;; *) printf '%s' "$v" ;; esac
+}
+ext_used() {  # ext_used <short>
+  local v=""
+  [ -f "$EXTF" ] && v=$(awk -F'\t' -v s="$1" '$1 == s { print $3; exit }' "$EXTF" 2>/dev/null)
+  case "${v:-}" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$v" ;; esac
+}
+# The newest extension already counted for this session. Field 4, added
+# 2026-09-02; a row written before that has three fields and reads as 0, which
+# replays that session's visible history once and then settles.
+ext_lastx() {  # ext_lastx <short>
+  local v=""
+  [ -f "$EXTF" ] && v=$(awk -F'\t' -v s="$1" '$1 == s { print $4; exit }' "$EXTF" 2>/dev/null)
+  case "${v:-}" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$v" ;; esac
+}
+write_ext() {  # write_ext <short> <allowed> <used> [last-extension-ts]
+  local sid="$1" a="$2" u="$3" x="${4:-}" tmp
+  [ -n "$sid" ] || return 0
+  # Omitted rather than zero: --extend and the renewer both rewrite this row
+  # without knowing anything about detection, and must not clear its history.
+  [ -n "$x" ] || x=$(ext_lastx "$sid")
+  tmp="$EXTF.$$"
+  { [ -f "$EXTF" ] && grep -v "^$sid$(printf '\t')" "$EXTF"
+    printf '%s\t%s\t%s\t%s\n' "$sid" "$a" "$u" "$x"
+    :
+  } > "$tmp" 2>/dev/null
+  mv -f "$tmp" "$EXTF" 2>/dev/null
+}
+
+# The input block: arm, lift, and the list the row is drawn from.
+#
+# The marker is a FILE per session rather than a line in a table, because the
+# UserPromptSubmit hook that reads it runs on every prompt in every session on
+# this machine and must answer "not blocked" in one failed stat. A table would
+# make it a read and a scan; a directory makes the common answer free, and the
+# directory itself does not exist until something has been blocked once.
+#
+# Keyed by the FULL session id, because that is what the hook is handed on
+# stdin and it has nothing to match a short form against. Everything a person
+# types accepts either, by prefix.
+block_file() {  # block_file <sid-or-short> -> path, existing or to-be
+  local sid="$1" f
+  [ -n "$sid" ] || return 1
+  if [ -e "$BLOCKD/$sid" ]; then printf '%s' "$BLOCKD/$sid"; return 0; fi
+  for f in "$BLOCKD"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in "$sid"*) printf '%s' "$f"; return 0 ;; esac
+  done
+  printf '%s' "$BLOCKD/$sid"
+}
+
+set_block() {  # set_block <sid> [reason]
+  local sid="$1" why="${2:-}" f
+  [ -n "$sid" ] || { printf 'token-sessions: --block needs a session id\n' >&2; return 2; }
+  [ -n "$why" ] || why="this window is out of extension marks"
+  mkdir -p "$BLOCKD" 2>/dev/null
+  f=$(block_file "$sid")
+  printf '%s\n' "$why" > "$f" 2>/dev/null
+  printf 'blocked %s: %s\n' "${sid:0:8}" "$why"
+}
+
+clear_block() {  # clear_block <sid>
+  local sid="$1" f
+  [ -n "$sid" ] || { printf 'token-sessions: --unblock needs a session id\n' >&2; return 2; }
+  f=$(block_file "$sid")
+  if [ -f "$f" ]; then
+    rm -f "$f" 2>/dev/null
+    # Emptied, the directory goes too - that failed stat is the hook's whole
+    # fast path, and leaving an empty directory behind quietly taxes every
+    # prompt typed on this machine from then on.
+    rmdir "$BLOCKD" 2>/dev/null
+    printf 'unblocked %s\n' "${sid:0:8}"
+  else
+    printf '%s was not blocked\n' "${sid:0:8}"
+  fi
+}
+
+# Space-delimited SHORT ids, for the one membership test the row needs. Padded
+# at both ends so index() cannot match across a boundary.
+blocks_list() {
+  local f b out=" "
+  [ -d "$BLOCKD" ] || { printf ' '; return 0; }
+  # Stale markers are swept here, and this is the only place that can do it.
+  #
+  # /clear out of a blocked session and the session id changes, so the marker
+  # is orphaned: nothing will ever submit a prompt under that id again and the
+  # hook can never lift it. On its own that is one dead byte - but an existing
+  # directory is exactly what the hook's fast path tests, so one orphan makes
+  # every prompt typed on this machine pay a JSON parse from then on, forever,
+  # to learn it is not blocked.
+  #
+  # A day, because a block is a thing you clear in minutes and no honest one
+  # outlives a working day. Age of the marker, not of the session: re-arming
+  # rewrites it, so a window that keeps earning the block keeps its marker.
+  find "$BLOCKD" -maxdepth 1 -type f -mmin +1440 -delete 2>/dev/null
+  rmdir "$BLOCKD" 2>/dev/null
+  [ -d "$BLOCKD" ] || { printf ' '; return 0; }
+  for f in "$BLOCKD"/*; do
+    [ -f "$f" ] || continue
+    b=${f##*/}
+    out="$out${b:0:8} "
+  done
+  printf '%s' "$out"
+}
+
+# --name's neighbour: the widget hands over an id and a delta or a number.
+# A bare +1 or -1 nudges, a plain number sets, and the result is clamped rather
+# than rejected - a key held down should stop at the end, not error.
+set_extend() {  # set_extend <sid> <+1|-1|N>
+  local sid="${1:0:8}" arg="${2:-+1}" a u rel=0
+  [ -n "$sid" ] || { printf 'token-sessions: --extend needs a session id\n' >&2; return 2; }
+  a=$(ext_allowed "$sid"); u=$(ext_used "$sid")
+  case "$arg" in
+    +*) a=$(( a + ${arg#+} )); rel=1 ;;
+    -*) a=$(( a - ${arg#-} )); rel=1 ;;
+    *[!0-9]*) printf 'token-sessions: --extend takes +N, -N or N\n' >&2; return 2 ;;
+    *)  a=$arg ;;
+  esac
+  # The floor is what has already been SPENT, not zero - for a RELATIVE change.
+  # A spent mark is a record of a crossing this window actually made, so
+  # decrementing past it would not give a ticket back, it would rewrite history
+  # and hand the session a free extension, because ext_left is allowed minus
+  # used. Holding shift-e down stops at the hollow ones.
+  #
+  # An ABSOLUTE value is the opposite kind of instruction: a person saying what
+  # the budget is, and `--extend <sid> 0` is the documented way to say leave this
+  # window alone entirely. The floor used to apply to both, so zeroing a session
+  # that had ever renewed clamped its budget UP to what it had spent - measured
+  # 2026-09-05 on b232d030, where `--extend ... 0` rewrote the row from 1/3 to
+  # 3/3 and the poke went on parking it every hour afterwards.
+  [ "$rel" = 1 ] && [ "$a" -lt "$u" ] && a="$u"
+  [ "$a" -lt 0 ] && a=0
+  [ "$a" -gt "$EXT_MAX" ] && a="$EXT_MAX"
+  write_ext "$sid" "$a" "$u"
+  printf '%s\t%s\t%s\n' "$sid" "$a" "$u"
+}
+
+# One extension. The window is kept warm by READING its own cached prefix: a
+# resumed fork sends byte-identical tools, system and messages, so the request
+# is a 0.1x cache read instead of the 2x rewrite that letting it lapse costs -
+# measured on this machine at 20x cheaper, and the TTL slides forward an hour
+# each time (verified: expires_at moved +1494s over 104 requests, 0 misses).
+#
+# Forked rather than resumed in place, because the renewal must not land in the
+# real session as a junk turn. The fork's transcript is deleted afterwards and
+# TOKEN_RENEWAL keeps the hooks from recording it, so nothing downstream can
+# tell a renewal happened except this log.
+#
+# Three things make it refuse rather than guess, and all three are cases where
+# renewing costs MORE than doing nothing:
+#   - a window under the floor: rebuilding it cold is cheaper than holding it
+#   - no marks left: the budget is the point, an unbounded renewer is a leak
+#   - near local midnight: the date is in the system prompt, so the prefix
+#     breaks at 00:00 whatever the TTL says, and a renewal bought minutes
+#     before it pays 2x to rebuild something that is about to be thrown away
+renew_session() {  # renew_session <sid> [dry]
+  local sid="$1" dry="${2:-}" short pay cwd ctx exp left allow used cl now mins
+  local claude out fork rd wr rc
+  short="${sid:0:8}"
+  now=$(now_s)
+  pay="$CL/session-usage/$sid.json"
+  if [ ! -f "$pay" ]; then
+    printf 'renew %s: no status-line payload - is the session open?\n' "$short" >&2
+    return 1
+  fi
+  ctx=$(awk 'BEGIN{RS="\0"} { if (match($0, /"total_input_tokens":[0-9]+/)) {
+         v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); print v + 0 } }' "$pay")
+  exp=$(awk 'BEGIN{RS="\0"} { if (match($0, /"expires_at":[0-9]+/)) {
+         v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); print v + 0 } }' "$pay")
+  cwd=$(sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pay" | head -1 \
+        | tr '\\' '/' | sed 's|//*|/|g')   # JSON doubles the separators
+  : "${ctx:=0}" "${exp:=0}"
+  mins=$(( (exp - now) / 60 ))
+  allow=$(ext_allowed "$short"); used=$(ext_used "$short"); left=$(( allow - used ))
+
+  # Local midnight, in minutes from now.
+  cl=$(( 1440 - ( $(date +%H) * 60 + $(date +%M) ) ))
+
+  printf 'renew %s: context %dk, cache %dm left, marks %d/%d used\n' \
+    "$short" $(( ctx / 1000 )) "$mins" "$used" "$allow"
+  printf '  extend  ~%dk  (0.1x)   let it lapse  ~%dk  (2x)   %sx cheaper\n' \
+    $(( ctx / 10000 )) $(( ctx / 500 )) 20
+
+  if [ "$left" -le 0 ]; then
+    printf '  refused: no extension marks left - add one with --extend %s +1\n' "$short" >&2
+    return 3
+  fi
+  if [ $(( ctx / 1000 )) -lt "$EXT_MIN_CTX" ]; then
+    printf '  refused: %dk is under the %sk floor - rebuilding it costs less than holding it\n' \
+      $(( ctx / 1000 )) "$EXT_MIN_CTX" >&2
+    return 3
+  fi
+  if [ "$cl" -lt 20 ]; then
+    printf '  refused: %dm to midnight - the date is in the system prompt, so the prefix breaks then anyway\n' "$cl" >&2
+    return 3
+  fi
+  if [ -n "$dry" ]; then
+    printf '  dry run: would resume %s in %s and spend one mark\n' "$short" "$cwd"
+    return 0
+  fi
+
+  # MEASURED 2026-09-02, and the answer was no.
+  #
+  #   run 1  MISS  wrote 16042, read 13463   (built the print-mode prefix)
+  #   run 2  HIT   read 29505,  wrote 0      (that prefix, now cached)
+  #
+  # The mechanism is perfect - a 0.1x read with no writes - but it warms the
+  # WRONG CACHE. claude -p renders a different tool set and system prompt than
+  # an interactive session, and the cache is a prefix cache, so a difference in
+  # the first tier means not one of the interactive session's blocks is touched.
+  # Proof: across both runs the target session stayed on requests=1 and its
+  # clock kept counting down, 57m to 56m to 55m.
+  #
+  # So only a session can refresh its own prefix. Anything typed into that
+  # window does it, for the price of the cache read this was trying to pay - and
+  # the widget already says which window and what it is worth. Left in, refusing,
+  # because the measurement is worth more than the code: without this note the
+  # idea reads as obviously correct and would be rebuilt.
+  if [ "${TOKEN_RENEW_ANYWAY:-0}" != 1 ]; then
+    printf '  refused: measured 2026-09-02 - this warms the print-mode prefix, not the\n' >&2
+    printf '  interactive one, so it spends quota and the session lapses anyway.\n' >&2
+    printf '  token-poke.ps1 does work - it types into that console directly, so the\n' >&2
+    printf '  request comes FROM the session and hits its own prefix. MEASURED\n' >&2
+    printf '  2026-09-02 on a 107k window: read 107,700 / write 40 / output 4, ~10.9k\n' >&2
+    printf '  against ~175k to let it lapse. Typing by hand does the same thing.\n' >&2
+    printf '  TOKEN_RENEW_ANYWAY=1 to run it regardless (see token-renew.log).\n' >&2
+    return 3
+  fi
+  claude=$(command -v claude 2>/dev/null || true)
+  [ -n "$claude" ] || { printf '  claude not on PATH\n' >&2; return 1; }
+  [ -d "$cwd" ] || cwd="$HOME"
+
+  out=$(cd "$cwd" && TOKEN_RENEWAL=1 "$claude" -r "$sid" --fork-session \
+        -p 'Reply with exactly: ok' --output-format json 2>&1)
+  rc=$?
+  # The result object carries its own usage, which is the whole measurement: a
+  # big cache_read and a small cache_creation means the prefix matched and this
+  # cost a tenth. A big creation means it MISSED and just paid the 2x it was
+  # supposed to prevent - which is a reason to stop, not to retry.
+  rd=$(printf '%s' "$out" | awk '{ if (match($0, /"cache_read_input_tokens":[0-9]+/)) {
+        v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); s = v + 0 } } END { print s + 0 }')
+  wr=$(printf '%s' "$out" | awk '{ if (match($0, /"cache_creation_input_tokens":[0-9]+/)) {
+        v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); s = v + 0 } } END { print s + 0 }')
+  fork=$(printf '%s' "$out" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+
+  # The fork was a means, not a session. Remove it before anything lists it.
+  if [ -n "${fork:-}" ] && [ "$fork" != "$sid" ]; then
+    find "$CL/projects" -name "$fork.jsonl" -delete 2>/dev/null
+  fi
+
+  if [ "$rc" != 0 ] || [ "$rd" -le 0 ]; then
+    printf '  FAILED (rc=%s, read %s, wrote %s)\n%s\n' "$rc" "$rd" "$wr" "$(printf '%s' "$out" | head -3)" >&2
+    printf '%s\t%s\tFAIL\t%s\t%s\t%s\n' "$(date +%FT%T)" "$short" "$ctx" "$rd" "$wr" >> "$RENEWLOG"
+    return 1
+  fi
+  write_ext "$short" "$allow" "$(( used + 1 ))"
+  if [ "$wr" -gt $(( rd / 4 )) ]; then
+    printf '  MISS: wrote %s against %s read - the prefix did not match, so this cost 2x.\n' "$wr" "$rd" >&2
+    printf '  Not repeating that. Check whether tools, the system prompt or the date changed.\n' >&2
+    printf '%s\t%s\tMISS\t%s\t%s\t%s\n' "$(date +%FT%T)" "$short" "$ctx" "$rd" "$wr" >> "$RENEWLOG"
+    return 2
+  fi
+  printf '  HIT: read %s from cache, wrote %s. Mark %d of %d spent.\n' "$rd" "$wr" "$(( used + 1 ))" "$allow"
+  printf '%s\t%s\tHIT\t%s\t%s\t%s\n' "$(date +%FT%T)" "$short" "$ctx" "$rd" "$wr" >> "$RENEWLOG"
+  return 0
+}
+
+# Every open session that is about to lapse and still has a mark. This is what a
+# scheduled task calls; it is deliberately not a loop of its own, so the schedule
+# lives somewhere you can see and cancel it.
+renew_due() {  # renew_due [dry]
+  local dry="${1:-}" f sid exp now mins n=0
+  now=$(now_s)
+  for f in "$CL"/session-usage/*.json; do
+    [ -f "$f" ] || continue
+    sid=$(basename "$f" .json)
+    exp=$(awk 'BEGIN{RS="\0"} { if (match($0, /"expires_at":[0-9]+/)) {
+           v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); print v + 0 } }' "$f")
+    : "${exp:=0}"
+    mins=$(( (exp - now) / 60 ))
+    [ "$mins" -gt 0 ] && [ "$mins" -le "$EXT_DUE_MIN" ] || continue
+    n=$((n + 1))
+    renew_session "$sid" "$dry" || true
+  done
+  [ "$n" = 0 ] && printf 'nothing due - no open window is within %sm of lapsing\n' "$EXT_DUE_MIN"
+  return 0
+}
+
+# Every open window inside the danger zone, renewed by the only thing that CAN
+# renew it: the session itself. renew_due above is this same scan with the
+# fork-resume renewer behind it, and that renewer refuses by design - measured
+# 2026-09-02, claude -p warms the print-mode prefix while the target's clock
+# keeps counting down. token-poke.ps1 does not have that problem: it writes into
+# the session's own console input buffer, so the request comes FROM the window
+# and hits its own prefix. Measured on a 107k window: read 107,700, write 40.
+#
+# This is the piece that was missing. Marks, the danger zone, the detector and
+# the poke all existed; nothing joined them, so a window could sit at 2 minutes
+# with a full mark in hand and lapse anyway, which is exactly what a mark is
+# supposed to prevent.
+#
+# No mark is spent here. A mark is spent when an extension is SEEN in the
+# transcript - a gap of ttl-due..ttl that came back a hit, see the probe - so
+# the ledger counts renewals that landed, not messages that were sent. That is
+# also why this fires in the same EXT_DUE_MIN window the detector counts: a poke
+# sent with half an hour still on the clock renews the cache and is never
+# counted, which is an unbounded renewer wearing a budget.
+#
+# Rails, because this types into live consoles unattended:
+#   - the danger zone only: 0 < minutes left <= EXT_DUE_MIN
+#   - the same three refusals renew_session makes - marks left, context over the
+#     floor, not inside 20m of local midnight (the date is in the system prompt,
+#     so the prefix breaks at 00:00 whatever the TTL says)
+#   - the pid must be alive AND look like Claude: pids are recycled and
+#     sessions/<pid>.json outlives its process, so this could otherwise type
+#     into something else entirely
+#   - never twice inside POKE_GAP_MIN minutes for one session, so a scheduler
+#     running every minute cannot spam a window that did not answer
+#   - token-poke.ps1 itself refuses a console with input already pending, which
+#     is what keeps it off a session someone is mid-sentence in
+# The session payload is one line of flat JSON and "requests" appears in it
+# exactly once, under prompt_cache. It counts requests that actually went out,
+# which is the only observable that tells a submitted prompt from a line still
+# sitting in a box.
+# Is there already a checkpoint for this window that nothing has happened since?
+#
+# /park sends a request, so an auto-park renews the very window it was closing.
+# Without this test the next lapse an hour later would park it again, and again,
+# for as long as the session stayed open - a checkpoint loop nobody asked for.
+#
+# "Nothing has happened since" is the CLI's own statusUpdatedAt, which moves on
+# every turn: a checkpoint newer than the last turn describes the session as it
+# stands, an older one is behind and re-parking is right. Reads STATAT from
+# poke_due's scope, which bash's dynamic scoping makes visible here.
+park_fresh() {  # park_fresh <sid> -> 0 when a current checkpoint exists
+  local sid="$1" f m turn
+  turn=$(( ${STATAT[$sid]:-0} ))
+  [ "$turn" -gt 0 ] || turn=$(( now - 3600 ))
+  # Both globs, because `*.md` does not match a dotfile: a project directory
+  # whose name starts with a dot - ~/.claude itself, where most of this tooling
+  # is worked on - produces checkpoints named `.claude.<topic>.md`. Missing them
+  # is what let the auto-park re-park a window it had just parked, every hour
+  # (b232d030, 2026-09-05: 05:01, 05:55, 06:49, growing it 237k -> 287k).
+  for f in $(grep -l "session=$sid" "$CL"/checkpoints/*.md "$CL"/checkpoints/.*.md 2>/dev/null); do
+    m=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+    [ "$m" -ge "$turn" ] && return 0
+  done
+  return 1
+}
+
+pc_requests() {  # pc_requests <sid> -> count, or empty
+  sed -n 's/.*"requests":\([0-9][0-9]*\).*/\1/p' "$CL/session-usage/$1.json" 2>/dev/null | head -1
+}
+
+# The verdict goes onto the row the poke already wrote, as a seventh field, so
+# there is still exactly one row per poke and everything that reads the log
+# keeps counting the way it did. A row with no verdict predates this.
+mark_poke_row() {  # mark_poke_row <short> <verdict>
+  local tmp
+  [ -f "$POKEF" ] || return 0
+  tmp="$POKEF.tmp.$$"
+  awk -F'\t' -v s="$1" -v v="$2" '
+    { r[NR] = $0; if ($2 == s) last = NR }
+    END { for (i = 1; i <= NR; i++) print (i == last ? r[i] "\t" v : r[i]) }' "$POKEF" > "$tmp" 2>/dev/null &&
+    mv -f "$tmp" "$POKEF"
+}
+
+# Did the line become a request? Polled rather than slept: a warm session
+# answers in a second or two and there is no reason to hold the scan open for
+# the whole budget.
+poke_landed() {  # poke_landed <sid> <requests-before>
+  local sid="$1" b="${2:-0}" i=0 r
+  while [ "$i" -lt "$POKE_VERIFY_SEC" ]; do
+    sleep 3; i=$((i + 3))
+    r=$(pc_requests "$sid")
+    [ -n "$r" ] && [ "$r" -gt "$b" ] 2>/dev/null && return 0
+  done
+  return 1
+}
+
+poke_due() {  # poke_due [dry]
+  local dry="${1:-}" f sid short exp ctx mins now n=0 seen=0 done=0 pid cl psout pidset last gap ps1 w req0 pout prc sent
+  local mode left u nextdue= due_at
+  now=$(now_s)
+  # The stop switch the installer advertises. A file rather than a flag, because
+  # the thing you want to stop is the SCHEDULE, and at the moment you want it
+  # stopped you are not the one calling this.
+  if [ -e "$CL/token-pokedue.off" ]; then
+    printf 'poke-due: disabled by %s
+' "$CL/token-pokedue.off"; return 0
+  fi
+  ps1="$CL/token-poke.ps1"
+  [ -f "$ps1" ] || { printf 'poke-due: %s is missing - nothing can renew\n' "$ps1" >&2; return 1; }
+  command -v powershell >/dev/null 2>&1 || { printf 'poke-due: powershell not on PATH\n' >&2; return 1; }
+  w=$(cygpath -w "$ps1" 2>/dev/null || printf '%s' "$ps1")
+  psout=$(COLUMNS=1000 ps -W 2>/dev/null)
+  pidset=" $(printf '%s\n' "$psout" |
+    awk 'NR > 1 && tolower($0) ~ /claude|node[.]exe/ { print $1; print $4 }' | tr '\n' ' ') "
+  cl=$(( 1440 - ( $(date +%H) * 60 + $(date +%M) ) ))
+  # ONE awk over every payload, not two per file, and one over the pid map. This
+  # scan has to fit inside an eight-minute window; there are dozens of payloads
+  # on disk and two spawns each measured most of a minute, which is most of the
+  # budget spent deciding whether to spend anything.
+  local -A PIDOF STATOF STATAT
+  while IFS='|' read -r sid pid st stat; do
+    [ -n "$sid" ] || continue
+    PIDOF[$sid]=$pid; STATOF[$sid]="$st"; STATAT[$sid]="$stat"
+  done < <(awk 'FNR == 1 {
+      s = ""; p = 0; st = ""; ts = 0
+      if (match($0, /"sessionId":"[^"]*"/)) s = substr($0, RSTART + 13, RLENGTH - 14)
+      if (match($0, /"pid":[0-9]+/)) {
+        v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); p = v + 0 }
+      if (match($0, /"status":"[^"]*"/)) st = substr($0, RSTART + 10, RLENGTH - 11)
+      if (match($0, /"statusUpdatedAt":[0-9]+/)) {
+        v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); ts = v / 1000 }
+      if (s != "" && p > 0) printf "%s|%s|%s|%d\n", s, p, st, ts }' "$CL"/sessions/*.json 2>/dev/null)
+
+  while IFS='|' read -r sid exp ctx; do
+    [ -n "$sid" ] || continue
+    seen=$((seen + 1))
+    short="${sid:0:8}"
+    mins=$(( (exp - now) / 60 ))
+    # The earliest moment anything on this machine will want attention, which is
+    # what the one-shot alarm is set to. Taken BEFORE every `continue` below,
+    # because a window that is not due on THIS pass is exactly the one the next
+    # alarm exists for - the old blind poll never needed to know this and so
+    # never worked it out.
+    #
+    # Only windows worth holding count: over the floor, and with a process still
+    # on this machine to type into. Arming for a dead payload would wake the
+    # machine to discover it has nothing to do.
+    # Windows NOT yet due only. One already inside the zone is being decided on
+    # THIS pass, and its next decision point is an hour after the renewal lands -
+    # a time this pass cannot know. Arming for a moment already past would fire
+    # the alarm at once, find the work done and re-arm: a wake for nothing, every
+    # pass, for as long as anything sat in the zone.
+    #
+    # The one case that does want a short alarm is a renewal typed that did not
+    # go out, and that is armed further down, where it is known.
+    if [ "$mins" -gt "$EXT_DUE_MIN" ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; then
+      case "$pidset" in
+        *" ${PIDOF[$sid]:-nopid} "*)
+          due_at=$(( exp - EXT_DUE_MIN * 60 ))
+          if [ -z "$nextdue" ] || [ "$due_at" -lt "$nextdue" ]; then nextdue=$due_at; fi ;;
+      esac
+    fi
+    # A window that went cold while nothing could reach it - the machine asleep,
+    # the scheduler stopped, the tick hung. It used to fall out of this loop in
+    # silence, which is how a 152k session with a mark in hand lapsed on
+    # 2026-09-04 (machine suspended 14:30-15:11, cache due 14:44) while the log
+    # said "nothing due" throughout. Nothing can be done by then; the point is
+    # that it SAYS so, because an invisible miss is indistinguishable from the
+    # feature working.
+    #
+    # Bounded to windows worth holding, that lapsed recently, whose process is
+    # still alive - anything else is a dead payload on disk.
+    if [ "$mins" -le 0 ]; then
+      if [ "$mins" -gt -60 ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; then
+        pid="${PIDOF[$sid]:-}"
+        case "$pidset" in
+          *" ${pid:-nopid} "*)
+            printf 'cold %s: %dk, lapsed %dm ago with %d mark(s) unspent - nothing could renew it\n' \
+              "$short" $(( ctx / 1000 )) $(( 0 - mins )) \
+              $(( $(ext_allowed "$short") - $(ext_used "$short") ))
+            # Marks buy continuous life, and this window's ran out. Whatever was
+            # spent applied to a prefix that no longer exists, so the count is
+            # released rather than carried: if this session is typed into again
+            # it starts a new hour from a cold rewrite it has already paid for,
+            # and it starts it with its full allowance. The allowance itself is
+            # left alone - that is the person's setting, not a running total.
+            # Prints once, because after the reset there is nothing spent to say.
+            u=$(ext_used "$short")
+            if [ "$u" -gt 0 ]; then
+              write_ext "$short" "$(ext_allowed "$short")" 0
+              printf '  budget released - %d spent mark(s) belonged to the prefix that just died\n' "$u"
+            fi ;;
+        esac
+      fi
+      continue
+    fi
+    [ "$mins" -le "$EXT_DUE_MIN" ] || continue
+    n=$((n + 1))
+    printf 'due %s: %dk, %dm left, marks %d/%d used\n' \
+      "$short" $(( ctx / 1000 )) "$mins" "$(ext_used "$short")" "$(ext_allowed "$short")"
+    # Out of marks. The budget ending is not the same as the session mattering
+    # less - a mark was SPENT on this window, which is the only evidence on disk
+    # that it was wanted - so the last act is a checkpoint rather than a shrug.
+    #
+    #   marks left > 0   renew
+    #   left <= 0, used > 0, allowed > 0   park it, while it is still warm
+    #   allowed = 0      neither: zeroing the marks is how you say leave it alone
+    #
+    # Parking cold would cost the context twice, which is the rewrite the whole
+    # feature exists to avoid, so this fires in the same danger zone the renewal
+    # does. /park sends a request of its own and therefore buys another hour as a
+    # side effect - which is why the checkpoint test below has to exist.
+    mode=renew
+    left=$(( $(ext_allowed "$short") - $(ext_used "$short") ))
+    # EVERY mark is spent on "reply ok". The park comes AFTER the budget, not
+    # out of it.
+    #
+    # Until 2026-09-10 the last mark was reserved for the /park, on the grounds
+    # that both are a request and the park buys the same hour. True, but it spent
+    # a ticket the person had been given for renewals and ended the window one
+    # crossing early. Now the marks mean exactly what they say - N renewals - and
+    # the park is what happens once they are gone: it still sends a request, so
+    # it is still written while the window is warm, and it is the last thing this
+    # window does before the block arms.
+    if [ "${PARK_ON_LAPSE:-}" ] && [ "$left" -le 0 ] &&
+       [ "$(ext_allowed "$short")" -gt 0 ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ] &&
+       ! park_fresh "$sid"; then
+      # Warm is the whole premise of the auto-park, so it is asserted here
+      # rather than assumed from having got this far - see EXT_PARK_MIN.
+      if [ "$mins" -lt "$EXT_PARK_MIN" ]; then
+        printf '  out of marks with %dm left - too close to the edge to park warm, letting it lapse\n' "$mins"
+        continue
+      fi
+      mode=park
+      printf '  out of marks - parking it while it is still warm, then blocking the prompt\n'
+    fi
+    if [ "$left" -le 0 ] && [ "$mode" != park ]; then
+      printf '  skipped: no marks left%s\n' \
+        "$(park_fresh "$sid" && printf ', and its checkpoint is current' || printf " - /park it, the budget is the point")"
+      continue
+    fi
+    if [ $(( ctx / 1000 )) -lt "$EXT_MIN_CTX" ]; then
+      printf '  skipped: %dk is under the %sk floor - rebuilding it costs less than holding it\n' \
+        $(( ctx / 1000 )) "$EXT_MIN_CTX"; continue
+    fi
+    # Only the renewal is pointless near midnight. A checkpoint written at 23:50
+    # is worth exactly as much as one written at noon - more, if anything, since
+    # the prefix is about to break whatever anyone does.
+    if [ "$mode" = renew ] && [ "$cl" -lt "$EXT_MIDNIGHT_MIN" ]; then
+      printf '  skipped: %dm to midnight - the prefix breaks then anyway\n' "$cl"; continue
+    fi
+    # An input block is a person saying "stop feeding this window", and nothing
+    # in this path read it: --block only set "blocked":1 in the JSON for the
+    # widget to draw, so the poke typed into blocked windows anyway (b232d030
+    # was blocked at 07:45 on 2026-09-05 and parked again at 13:37 at 306k).
+    # A renewal into a blocked window is worse than useless - token-block.sh
+    # refuses the prompt and the line is cut to the clipboard - but /park is the
+    # documented way OUT of a block and the hook passes it through, so the park
+    # half still fires.
+    if [ "$mode" = renew ] && [ -f "$(block_file "$sid")" ]; then
+      printf '  skipped: blocked - a renewal would be refused by the prompt hook (lift it from the widget)\n'
+      continue
+    fi
+    # sessions/<pid>.json is pid -> sessionId; that map is the only place the
+    # poke can learn which console to attach to.
+    pid="${PIDOF[$sid]:-}"
+    if [ -z "${pid:-}" ]; then
+      printf '  skipped: no pid file - the payload is open but the process is not on this machine\n'; continue
+    fi
+    case "$pidset" in
+      *" $pid "*) ;;
+      *) printf '  skipped: pid %s is gone (or is no longer Claude) - nothing to type into\n' "$pid"; continue ;;
+    esac
+    # A session mid-turn renews its own cache with the request it is already
+    # making, and typing into it queues a message the person did not write.
+    # Read from the CLI's own status field rather than guessed at - but only
+    # while it is fresh, because sessions/<pid>.json outlives the process that
+    # wrote it and a stale "busy" would park a real window forever.
+    if [ "${STATOF[$sid]:-}" = busy ] &&
+       [ $(( now - ${STATAT[$sid]:-0} )) -lt $(( POKE_GAP_MIN * 60 )) ]; then
+      printf '  skipped: busy - its own turn is renewing the cache\n'; continue
+    fi
+    last=$(awk -F'\t' -v s="$short" '$2 == s { t = $1 } END { print t }' "$POKEF" 2>/dev/null)
+    if [ -n "${last:-}" ]; then
+      gap=$(( ( now - $(date -d "$last" +%s 2>/dev/null || echo 0) ) / 60 ))
+      if [ "$gap" -ge 0 ] && [ "$gap" -lt "$POKE_GAP_MIN" ]; then
+        printf '  skipped: poked %dm ago, inside the %sm backstop\n' "$gap" "$POKE_GAP_MIN"; continue
+      fi
+    fi
+    if [ -n "$dry" ]; then
+      if [ "$mode" = park ]; then
+        printf '  dry run: would type /park into pid %s - a checkpoint written warm, at ~%dk\n' \
+          "$pid" $(( ctx / 10000 ))
+      else
+        printf '  dry run: would type into pid %s - read ~%dk against ~%dk to let it lapse\n' \
+          "$pid" $(( ctx / 10000 )) $(( ctx / 500 ))
+      fi
+      done=$((done + 1)); continue
+    fi
+    # Not a pipeline any more: piping into sed handed the exit status to sed,
+    # so a poke that failed outright still counted as done. Read once, print
+    # once, judge once.
+    req0=$(pc_requests "$sid"); req0="${req0:-0}"
+    # -Preserve: a forgotten line in the prompt box is not a reason to lose the
+    # window. The poke takes it out, renews, and types it back unsent - and
+    # refuses outright if it cannot verify the box actually emptied. Without the
+    # flag the poke now REFUSES on a non-empty box rather than sending its
+    # renewal on the end of someone's sentence, which is what it used to do.
+    # MSYS_NO_PATHCONV, because Git Bash rewrites any argument that looks like a
+    # unix absolute path before a native binary sees it. Measured 2026-09-04:
+    # the first real auto-park typed "C:/Program Files/Git/park" into a session
+    # - 26 records, sent, logged POKE ok - and no checkpoint was written. The
+    # renewal half was unaffected the whole time because its text starts with
+    # "[auto-renew:", which is why this survived every earlier test.
+    pout=$(MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+           powershell -NoProfile -File "$w" -TargetPid "$pid" -Short "$short" \
+             -ContextK $(( ctx / 1000 )) -CacheLeftMin "$mins" \
+             ${POKE_PRESERVE:+-Preserve} \
+             $([ "$mode" = park ] && printf '%s %s' -Text /park) 2>&1); prc=$?
+    printf '%s\n' "$pout" | sed 's/^/  /'
+    case "$pout" in
+      *"POKE ok"*) ;;
+      *"SKIP"*)    continue ;;
+      *)           printf '  poke FAILED on pid %s (exit %s)\n' "$pid" "$prc" >&2; continue ;;
+    esac
+    # Typed is not sent. Verify it, and if it was not sent, press Enter again -
+    # the text is in the box and one keypress commits it - then verify again.
+    # This is the whole point of the rework: the old code could not tell the
+    # two apart and reported both as a renewal.
+    sent=0
+    if poke_landed "$sid" "$req0"; then
+      printf '  landed: requests %s -> %s\n' "$req0" "$(pc_requests "$sid")"
+      mark_poke_row "$short" landed
+      done=$((done + 1)); sent=1
+    else
+      printf '  typed but NOT sent after %ss - nudging with a lone Enter\n' "$POKE_VERIFY_SEC"
+      powershell -NoProfile -File "$w" -TargetPid "$pid" -Short "$short" -CrOnly 2>&1 | sed 's/^/    /'
+      if poke_landed "$sid" "$req0"; then
+        printf '  landed after the nudge: requests %s -> %s\n' "$req0" "$(pc_requests "$sid")"
+        mark_poke_row "$short" nudged
+        done=$((done + 1)); sent=1
+      else
+        printf '  NOT SENT: %s was typed into and no request went out - it will lapse\n' "$short" >&2
+        mark_poke_row "$short" nosubmit
+        # The one reason to come back inside the danger zone. Everything else on
+        # this pass is either done or not yet due; this is a window that was
+        # reached, typed into, and still has minutes left to try again in.
+        due_at=$(( now + 180 ))
+        if [ -z "$nextdue" ] || [ "$due_at" -lt "$nextdue" ]; then nextdue=$due_at; fi
+      fi
+    fi
+
+    # The auto-park is the end of this window's budgeted life, so the block arms
+    # with it rather than being left to the widget's own arming pass - that one
+    # only runs while the widget is open, and this sweep runs whether anyone is
+    # watching or not. Armed only once the /park actually went out: blocking a
+    # window whose checkpoint was never written would be a trap rather than a
+    # budget, and the checkpoint is the whole condition of the block. Nothing in
+    # the session can lift it any more - the widget is the only key.
+    if [ "$mode" = park ] && [ "$sent" = 1 ] && [ ! -f "$(block_file "$sid")" ]; then
+      set_block "$sid" "out of extension marks - auto-parked at $(( ctx / 1000 ))k" | sed 's/^/  /'
+    fi
+  done < <(awk 'BEGIN { RS = "\0" } FNR == 1 {
+      sid = FILENAME; sub(/.*\//, "", sid); sub(/\.json$/, "", sid)
+      e = 0; c = 0
+      if (match($0, /"expires_at":[0-9]+/)) {
+        v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); e = v + 0 }
+      if (match($0, /"total_input_tokens":[0-9]+/)) {
+        v = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", v); c = v + 0 }
+      print sid "|" e "|" c }' "$CL"/session-usage/*.json 2>/dev/null)
+  # A scan that read no payload at all is broken, not idle. The awk above went
+  # to /dev/null once for an unterminated regexp and this said "nothing due"
+  # over a window three minutes from lapsing - the exact failure the whole
+  # feature exists to prevent, reported as good news.
+  if [ "$seen" = 0 ] && [ -f "$(set -- "$CL"/session-usage/*.json; printf '%s' "$1")" ]; then
+    printf 'poke-due: read 0 payloads while %s holds some - the scan is broken, not idle\n' \
+      "$CL/session-usage" >&2
+    return 1
+  fi
+  [ "$n" = 0 ] && printf 'nothing due - no open window is within %sm of lapsing (%d open)
+'     "$EXT_DUE_MIN" "$seen"
+  # Last thing every pass does, whatever else it did. The alarm is a chain - each
+  # firing sets the next one - so this is the link, and it has to be re-set even
+  # on a pass that renewed nothing, because a renewal is precisely what moves the
+  # next due moment an hour out.
+  arm_wake "$nextdue" "$dry"
+  return 0
+}
+
+# The one-shot alarm, which is the thing that actually holds a window now.
+#
+# The blind poll this replaces could not survive the machine sleeping: Task
+# Scheduler counts a missed run and moves on, so on 2026-09-11 a 164k window with
+# both marks in hand lapsed during ten consecutive missed ticks. A wake timer
+# sits in the kernel's timer queue instead and fires at a named instant whether
+# the machine is awake or asleep.
+#
+# One alarm is enough because due moments only ever move LATER - see the long
+# note at the top of token-pokewake.ps1. The slow backstop poll covers the three
+# cases an alarm cannot: the machine off, wake timers disabled in the power plan,
+# or a re-arm that failed.
+arm_wake() {  # arm_wake <unix-ts|''> [dry]
+  local at="${1:-}" dry="${2:-}" wk n
+  wk="$CL/token-pokewake.ps1"
+  [ -f "$wk" ] || return 0
+  command -v powershell >/dev/null 2>&1 || return 0
+  wk=$(cygpath -w "$wk" 2>/dev/null || printf '%s' "$wk")
+  if [ -z "$at" ]; then
+    if [ -n "$dry" ]; then printf 'wake: would disarm - nothing open is worth holding
+'; return 0; fi
+    MSYS_NO_PATHCONV=1 powershell -NoProfile -File "$wk" -Remove 2>&1 | sed 's/^/  /'
+    return 0
+  fi
+  n=$(( (at - $(now_s)) / 60 ))
+  if [ -n "$dry" ]; then
+    printf 'wake: would arm for %s (%dm out)
+' "$(date -d "@$at" '+%H:%M:%S' 2>/dev/null || printf '%s' "$at")" "$n"
+    return 0
+  fi
+  MSYS_NO_PATHCONV=1 powershell -NoProfile -File "$wk" -At "$at" 2>&1 | sed 's/^/  /'
 }
 
 # What is parked, newest first. Read by a person deciding what to resume, and by
 # /park deciding whether this session's work is a topic that already has a file
 # or a new one - which is the whole reason a project may hold several.
+# Every checkpoint on disk as JSON, for the parked widget.
+#
+# Deliberately NOT part of emit_json. That one answers "what is running and what
+# is it costing", which means a transcript probe per live session and a hundred
+# short-lived processes; this answers "what did I put down and can I pick it up",
+# which is a directory of small files and two lookups. Sharing the collector
+# would have made the cheap question wait for the expensive one.
+#
+# The only per-session facts here are the two that change what unparking DOES:
+# whether the window that wrote the checkpoint is still open (unpark it and you
+# have two windows on one strand), and whether that window kept working after it
+# parked (unpark it and you resume from behind). Everything else a live row
+# carries - context, cache clock, cost, grades - is about a window that is
+# costing money, and a checkpoint is not one.
+parked_json() {
+  local now psout pidset live cf sid task
+  now=$(now_s)
+
+  # Liveness, the same way collect() decides it and for the same reason: a pid
+  # alone does not identify a session, so the pid must also belong to something
+  # that looks like Claude. See the long note in collect() for why COLUMNS=1000
+  # is load-bearing.
+  psout=$(COLUMNS=1000 ps -W 2>/dev/null)
+  pidset=" $(printf '%s\n' "$psout" |
+    awk 'NR > 1 && tolower($0) ~ /claude|node[.]exe/ { print $1; print $4 }' | tr '\n' ' ') "
+  [ "${#pidset}" -gt 2 ] || pidset=" $(printf '%s\n' "$psout" |
+    awk 'NR > 1 { print $1; print $4 }' | tr '\n' ' ') "
+  live=" $(awk -v pidset="$pidset" '
+      { p = FILENAME; sub(/.*[\/\\]/, "", p); sub(/\.json$/, "", p)
+        if (!match($0, /"sessionId":"[^"]*"/)) next
+        s = substr($0, RSTART + 13, RLENGTH - 14)
+        if (index(pidset, " " p " ")) print s }' \
+      "$CL"/sessions/*.json 2>/dev/null | sort -u | tr '\n' ' ') "
+
+  # Both globs, for the same reason scan_checkpoints uses both: *.md does not
+  # match a dotfile, and a checkpoint written from ~/.claude is called
+  # ".claude.<topic>.md".
+  stat -c '%Y|%n' "$CL"/checkpoints/*.md "$CL"/checkpoints/.*.md 2>/dev/null |
+    sort -t'|' -k1,1nr |
+    awk -F'|' -v now="$now" -v live="$live" -v meta="$META" -v stale="$CK_STALE" '
+    function jesc(s,   i, c, o) {
+      o = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if      (c == "\\") o = o "\\\\"
+        else if (c == "\"") o = o "\\\""
+        else if (c < " ")   o = o " "
+        else                o = o c }
+      return o }
+    # token-meta.tsv keeps the cwd exactly as sessions/<pid>.json had it, which
+    # is JSON-escaped - so the backslashes arrive already doubled and escaping
+    # them again is what turns C:\Users into C:\\Users.
+    function junesc(s,   i, c, o) {
+      o = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1); o = o c
+        if (c == "\\" && substr(s, i + 1, 1) == "\\") i++ }
+      return o }
+    function jstr(s) { return "\"" jesc(s) "\"" }
+    function base(p,   b) { b = p; gsub(/\\/, "/", b); sub(/\/$/, "", b); sub(/.*\//, "", b); return b }
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    # A paragraph of markdown as one line of prose. The row has three lines and
+    # no room for a bullet list, and the leading "- " of one would read as a
+    # dash in the middle of a sentence once the newline came out.
+    function flat(s) {
+      gsub(/\r/, " ", s); gsub(/`/, "", s); gsub(/\*\*/, "", s)
+      gsub(/[ \t]+/, " ", s); return trim(s) }
+    BEGIN {
+      # sid -> cwd, and project basename -> newest cwd. The first is exact and
+      # is what a stamped checkpoint gets; the second is the fallback for one
+      # written before the stamp existed, or by a session whose transcript has
+      # since been deleted. Newest wins, because the file is append-ordered and
+      # a project that moved should resolve to where it is now.
+      while ((getline ln < meta) > 0) {
+        nf = split(ln, f, "\t")
+        if (nf < 4 || f[1] == "") continue
+        cw = junesc(f[4]); if (cw == "") continue
+        CW[f[1]] = cw; ACT[f[1]] = f[3] + 0
+        if (nf >= 6) { MDL[f[1]] = f[5]; EFF[f[1]] = f[6] }
+        b = base(cw); if (b != "") PCW[b] = cw }
+      close(meta)
+      print "{\"checkpoints\":[" }
+    {
+      mt = $1 + 0; path = $2
+      if (mt <= 0 || path == "") next
+      name = path; sub(/.*[\/\\]/, "", name)
+      file = name; sub(/\.md$/, "", name)
+      # A leading dot is part of the project name (".claude"), not a separator.
+      lead = ""
+      if (substr(name, 1, 1) == ".") { lead = "."; name = substr(name, 2) }
+      d = index(name, ".")
+      if (d > 0) { proj = lead substr(name, 1, d - 1); topic = substr(name, d + 1) }
+      else       { proj = lead name; topic = "general" }
+
+      sid = ""; title = ""; task = ""; nxt = ""; blk = ""; sect = ""; ln = 0
+      while ((getline line < path) > 0) {
+        ln++
+        if (ln <= 4 && match(line, /session=[0-9a-f-]+/))
+          sid = substr(line, RSTART + 8, RLENGTH - 8)
+        if (line ~ /^# / && title == "") { title = substr(line, 3); continue }
+        if (line ~ /^#+ +Task in flight/)  { sect = "t"; continue }
+        if (line ~ /^#+ +Next step/)       { sect = "n"; continue }
+        if (line ~ /^#+ +Blocked/)         { sect = "b"; continue }
+        if (line ~ /^#+ /)                 { sect = "";  continue }
+        if (sect == "" || line !~ /[^ \t\r]/) continue
+        if (sect == "t" && length(task) < 400) task = task (task == "" ? "" : " ") line
+        if (sect == "n" && length(nxt)  < 300) nxt  = nxt  (nxt  == "" ? "" : " ") line
+        if (sect == "b" && length(blk)  < 300) blk  = blk  (blk  == "" ? "" : " ") line
+        if (ln > 400) break }
+      close(path)
+
+      cwd = (sid != "" && sid in CW) ? CW[sid] : ""
+      if (cwd == "" && proj in PCW) cwd = PCW[proj]
+      alive = (sid != "" && index(live, " " sid " ")) ? 1 : 0
+      # How far the work ran on past the checkpoint. Only meaningful with a
+      # stamp: without one there is no session to have kept working, and 0
+      # here means "not known to be behind", never "known to be current".
+      behind = 0
+      if (sid != "" && sid in ACT && ACT[sid] > mt) behind = int((ACT[sid] - mt) / 60)
+
+      printf "%s{\"file\":%s,\"path\":%s,\"project\":%s,\"topic\":%s,", \
+        (n++ ? "," : ""), jstr(file), jstr(path), jstr(proj), jstr(topic)
+      printf "\"written\":%d,\"age_min\":%d,\"sid\":%s,\"short\":%s,", \
+        mt, int((now - mt) / 60), jstr(sid), jstr(substr(sid, 1, 8))
+      printf "\"alive\":%d,\"behind_min\":%d,\"cwd\":%s,", alive, behind, jstr(cwd)
+      # What that session was last answering with, cached in token-meta.tsv by
+      # collect() in the sessions widget - empty for a session never yet
+      # measured. Read by token-parked.ps1 so resuming a checkpoint reopens on
+      # the same model and effort rather than snapping back to the account
+      # defaults, which is what a bare claude /unpark would do.
+      printf "\"model\":%s,\"effort\":%s,", \
+        jstr((sid != "" && sid in MDL) ? MDL[sid] : ""), \
+        jstr((sid != "" && sid in EFF) ? EFF[sid] : "")
+      printf "\"title\":%s,\"task\":%s,\"next\":%s,\"blocked\":%s}", \
+        jstr(flat(title)), jstr(flat(task)), jstr(flat(nxt)), jstr(flat(blk))
+    }
+    END { printf "],\"n\":%d,\"now\":%d,\"stale_after\":%d}\n", n + 0, now, stale }'
+}
+
 list_checkpoints() {
-  local now cf sid task line w proj hit=0
+  local now cf sid task line w proj hit=0 stale=0 aged pn
+  local -a gone=()
   now=$(now_s)
   scan_checkpoints
   proj="$CKPROJ"
@@ -3482,10 +6381,26 @@ list_checkpoints() {
     fi
     hit=1
     if [ "$proj" = all ]; then
-      topic_of "$cf" "${cf%%.*}"; TOPIC="${cf%%.*}/$TOPIC"
+      # A checkpoint written with the shell in ~/.claude is named
+      # ".claude.<topic>.md", so the project part before the first dot is empty
+      # and the row rendered as "/claude.design-spec" - one field short and
+      # the topic swallowed whole. Strip the leading dot before splitting.
+      pn="${cf%%.*}"
+      if [ -z "$pn" ]; then pn="${cf#.}"; pn="${pn%%.*}"; topic_of "${cf#.}" "$pn"
+      else topic_of "$cf" "$pn"; fi
+      TOPIC="$pn/$TOPIC"
     else topic_of "$cf" "$proj"; fi
     agestr $(( (now - ${CK[$cf]}) / 60 ))
     sid=${CS[$cf]:0:8}; [ -n "$sid" ] || sid="unstamped"
+    # Two separate ways a checkpoint stops being current, and they are worth
+    # saying apart: old enough that the work has moved on, or stamped with a
+    # session that has no transcript left on this machine at all.
+    aged=$(( (now - ${CK[$cf]}) / 86400 ))
+    if [ "$aged" -ge "$CKPT_STALE_D" ]; then
+      stale=$((stale + 1)); gone+=("$cf"); sid="$sid  ${aged}d stale"
+    elif [ "$sid" != unstamped ] && ! compgen -G "$CL/projects/*/$sid*.jsonl" >/dev/null; then
+      sid="$sid  no transcript"
+    fi
     printf '  %s%s%s %s%-22s%s %s%-5s%s %s%s%s\n' \
       "$C_BLU" "$G_PARK" "$C_R" "$C_B" "$TOPIC" "$C_R" "$C_GRY" "$AGE" "$C_R" \
       "$C_DIM" "$sid" "$C_R"
@@ -3493,6 +6408,15 @@ list_checkpoints() {
     [ -n "$task" ] && printf '    %s%s%s\n' "$C_DIM" "${task:0:$w}" "$C_R"
     printf '    %s%s/checkpoints/%s%s\n' "$C_GRY" "$CL" "$cf" "$C_R"
   done
+  if [ "$stale" -gt 0 ]; then
+    if [ "${CKPRUNE:-0}" = 1 ]; then
+      for cf in "${gone[@]}"; do
+        rm -f "$CL/checkpoints/$cf" && printf '  %sremoved %s%s\n' "$C_YEL" "$cf" "$C_R"
+      done
+    else
+      printf '  %s%d stale (over %dd old) - --checkpoints %s --prune removes them%s\n' "$C_DIM" "$stale" "$CKPT_STALE_D" "$proj" "$C_R"
+    fi
+  fi
   if [ "$hit" != 1 ]; then
     # "nothing parked" is only true if nothing is parked ANYWHERE. Said while a
     # dozen checkpoints sit on disk under other project names, it is a lie that
@@ -3500,7 +6424,7 @@ list_checkpoints() {
     # hear it is running this from the wrong directory - easy, silent, and
     # indistinguishable from genuinely having none.
     other=0
-    for cf in "$CL"/checkpoints/*.md; do [ -e "$cf" ] && other=$((other + 1)); done
+    for cf in "$CL"/checkpoints/*.md "$CL"/checkpoints/.*.md; do [ -e "$cf" ] && other=$((other + 1)); done
     if [ "$proj" != all ] && [ "$other" -gt 0 ]; then
       printf '  %snothing parked for %s%s%s, but %d exist elsewhere%s\n'         "$C_DIM" "$C_B" "$proj" "$C_DIM" "$other" "$C_R"
       printf '  %s--checkpoints all lists them, or cd to that project first%s\n' "$C_GRY" "$C_R"
@@ -3511,7 +6435,45 @@ list_checkpoints() {
   printf '\n'
 }
 
-if [ "$CKLIST" = 1 ]; then list_checkpoints; exit 0; fi
+# Naming exits without drawing: it is a write, not a view. The id is cut to
+# the short form the file is keyed by, so either spelling works from a caller
+# that only has one of them - the widget reads full sids out of --json.
+if [ "$EXTQ" = 1 ]; then
+  set_extend "$EXTSID" "$EXTVAL"; exit $?
+fi
+if [ "$RENEWQ" = 1 ]; then
+  [ -n "$RENEWSID" ] || { printf 'token-sessions: --renew needs a session id\n' >&2; exit 2; }
+  renew_session "$RENEWSID" "$RENEWDRY"; exit $?
+fi
+if [ "$RENEWQ" = 2 ]; then renew_due "$RENEWDRY"; exit $?; fi
+if [ "$RENEWQ" = 3 ]; then poke_due "$RENEWDRY"; exit $?; fi
+if [ "$BLKQ" = 1 ]; then set_block "$BLKSID" "$BLKWHY"; exit $?; fi
+if [ "$BLKQ" = 2 ]; then clear_block "$BLKSID"; exit $?; fi
+if [ "$BLKQ" = 3 ]; then
+  if [ -d "$BLOCKD" ] && [ -n "$(ls -A "$BLOCKD" 2>/dev/null)" ]; then
+    for _f in "$BLOCKD"/*; do
+      [ -f "$_f" ] || continue
+      printf '%s\t%s\n' "${_f##*/}" "$(head -1 "$_f" 2>/dev/null)"
+    done
+  else
+    printf 'no sessions are blocked\n'
+  fi
+  exit 0
+fi
+if [ "$NAMEQ" = 1 ]; then
+  if [ -z "$NAMESID" ]; then
+    printf 'token-sessions: --name needs a session id\n' >&2; exit 2
+  fi
+  write_nick "${NAMESID:0:8}" "$(clean_nick "$NAMEVAL")"
+  exit 0
+fi
+if [ "$CKLIST" = 1 ]; then
+  # --parked --json is the widget's entry point, and it exits here rather than
+  # falling through to the shared --json dispatch below: that one runs a full
+  # collect first, which is the expensive question this mode exists to avoid.
+  if [ "$JSONQ" != 0 ]; then parked_json; else list_checkpoints; fi
+  exit 0
+fi
 
 # Width is read the same way in all three entry points, and only here - tput
 # first because COLUMNS is not exported by every shell, the variable second.
@@ -3600,6 +6562,9 @@ term_cols() {
 # One-shot goes to a scrollback, which scrolls - so there is nothing to page
 # around and nothing to shed. Only the pane, which redraws in place, is bound by
 # the height of the window.
+# Machine-readable, and the only branch that draws nothing: the widget and
+# the dashboard are the terminal-free views, so this must not touch the screen.
+if [ "$JSONQ" != 0 ]; then emit_json $(( JSONQ == 2 ? 1 : 0 )); exit 0; fi
 if [ "$ANALYTICS" = 1 ] && [ "$WATCH" = 0 ]; then term_cols; ROWS=99999; analytics; exit 0; fi
 
 # Asked and answered before anything is collected - neither question needs a
@@ -3662,12 +6627,17 @@ if [ "$WATCH" = 1 ]; then
       # Field 18 is the running flag - the same one the renderer reads.
       ANYRUN=$(awk -F'|' '!/^#/ && $18 + 0 == 1 { c++ } END { print c + 0 }' "$SNAP" 2>/dev/null)
       ANYRUN=$((ANYRUN + 0))
-      # Running is decided at collect time, off transcript and history mtimes -
-      # so on the ordinary minute-long clock a marker could go on animating for
-      # most of a minute after the turn it describes had finished, which is an
+      # Running is decided at collect time, off the CLI's status flag - so on
+      # the ordinary minute-long clock a marker could go on animating for most
+      # of a minute after the turn it describes had finished, which is an
       # animation telling you something false. While anything is in flight the
       # collect tightens to 10s; the disk pass is local and only happens while
       # you are watching a session actually work.
+      #
+      # Only state 1 tightens the clock. A window that is waiting on you (2) or
+      # has gone quiet mid-turn (3) is not going to change on its own, and
+      # polling six times a minute for a change nobody is making is what the
+      # tighter rate exists to avoid.
       RATE="$EVERY"
       [ "$ANYRUN" -gt 0 ] && [ "$RATE" -gt 10 ] && RATE=10
       DEADLINE=$(( $(now_s) + RATE ))
@@ -3779,8 +6749,25 @@ if [ "$WATCH" = 1 ]; then
                         delete_log "$SEL"; DELCONF=""; SEL=0; DEADLINE=0
                       else DELCONF="$dsid"; fi
                     fi ;;
-        n)          if [ "$SEL" -gt 0 ]; then VIEW=0; reroll_nick "$SEL"
-                    elif [ "$N" -gt 0 ]; then VIEW=0; SEL=1; reroll_nick 1; fi ;;
+        # Naming a row is one key and then the name, rather than a key that
+        # walked a pool of words the session happened to use. Re-rolling was
+        # cheap to press and never landed on the name you wanted; typing it is
+        # one line and lands on it every time. The line opens on the current
+        # name, so the same key also edits and - emptied - clears one.
+        n)          if [ "$N" -gt 0 ]; then
+                      VIEW=0
+                      nrow=$SEL; [ "$nrow" -gt 0 ] || nrow=1
+                      nsid=$(row_field "$nrow" 1)
+                      printf '\033[%d;1H\033[K  %sname%s %s' "$ROWS" "$C_B" "$C_R" \
+                             "$(typed_nick "$nsid")"
+                      printf '\033[?25h'
+                      IFS= read -r NLINE || NLINE=""
+                      printf '\033[?25l'
+                      set_nick "$nrow" "$NLINE"
+                      nnm=$(typed_nick "$nsid")
+                      if [ -n "$nnm" ]; then FLASH="named row $nrow $nnm"
+                      else FLASH="row $nrow back to its derived name"; fi
+                    fi ;;
         w)          BUCKET=$((1 - BUCKET)); VIEW=1 ;;
         # Order and narrowing, both pure view state: they rewrite the view file
         # and cost no disk read, so they land on the next redraw a second away.

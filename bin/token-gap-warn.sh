@@ -75,8 +75,20 @@ key=$(printf '%s' "$sid" | cut -c1-8)
 # cheap: re-derivation drops from ~34k to ~5k, and the break-even context with
 # it, from ~224k to ~157k. Point at it rather than making the model rediscover it.
 cwd=$(printf '%s' "$payload" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tr '\' '/' 2>/dev/null)
+# /park writes one checkpoint per TOPIC - `<project>.<topic>.md` - so the bare
+# `<project>.md` this used to test for has never existed for any project, and the
+# hook always took the "no checkpoint" branch below: the wrong advice at the most
+# expensive moment there is (found 2026-09-05). Newest first, preferring the one
+# stamped with THIS session; basename keeps any leading dot, so a project like
+# ~/.claude matches its own dotfile checkpoints through the same pattern.
 CKPT=""
-[ -n "$cwd" ] && [ -f "$HOME/.claude/checkpoints/$(basename "$cwd").md" ]   && CKPT="$HOME/.claude/checkpoints/$(basename "$cwd").md"
+if [ -n "$cwd" ]; then
+  for f in $(ls -t "$HOME/.claude/checkpoints/$(basename "$cwd")".*.md 2>/dev/null); do
+    [ -f "$f" ] || continue
+    if grep -q "session=$sid" "$f" 2>/dev/null; then CKPT="$f"; break; fi
+    [ -n "$CKPT" ] || CKPT="$f"
+  done
+fi
 
 awk -F, -v key="$key" -v gapmin="$GAP_MIN" -v ctxmin="$CTX_MIN" -v ctxnote="$CTX_NOTE" \
        -v ckpt="$CKPT"        -v nowts="$(date '+%Y %m %d %H %M %S')" \
