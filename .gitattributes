@@ -5,3 +5,10 @@
 *.sh        text eol=lf
 *.minttyrc  text eol=lf
 *.md        text eol=lf
+# The Windows side is LF too - that is how the live copies are written, and an
+# install that flips endings would back up every file as "changed" for nothing.
+*.ps1       text eol=lf
+*.vbs       text eol=lf
+*.cmd       text eol=lf
+*.html      text eol=lf
+*.ico       binary
