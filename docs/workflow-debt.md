@@ -321,8 +321,11 @@ pay their own floor. This reframes the whole gap problem from a discipline issue
 concurrency one. `CLAUDE.md` now caps it at two concurrent sessions.
 
 **2. The floor is drifting up fast.** First 10 cold starts averaged 60,284; last 10 averaged
-**76,661 (+27%)**. Nothing in the repo caused it - it is MCP connectors, agent types and deferred
-tool schemas. Every threshold in the policy is expressed relative to the floor, so unwatched
+**76,661 (+27%)**. Nothing in the repo caused it - it is agent types and deferred tool schemas.
+(CORRECTED 2026-09-05: this used to name MCP connectors first. Measured A/B with
+`mcp-floor.sh` puts all four connected servers at **515 tokens**, under 4% of the drift, because
+MCP tool schemas are deferred to names at ~11 tokens each. MCP is not the cause; see
+`mcp-notes.md`.) Every threshold in the policy is expressed relative to the floor, so unwatched
 floor drift silently invalidates all of them. Confirms debt item 1b and upgrades it from "read
 the table as +/-40%" to "this needs a periodic check".
 
@@ -399,3 +402,245 @@ with a throwaway `HOME` (`HOME=/tmp/fake bash ~/.claude/token-cycles.sh --alert 
 with `$HOME/.claude` created first). The transcript path comes from the payload and is absolute,
 so it still resolves. A synthetic two-cycle `.jsonl` — a `"type":"user"` line with a `promptId`,
 then a line carrying a `usage` object — is enough to exercise every branch.
+
+## The extension mark had no actor (found 2026-09-03)
+
+`ad3ed1b3` (vfx-rework, ProjectB) lapsed twice on 2026-09-02 with a full mark in
+hand — 69.6 min and 88.2 min gaps, cache writes of 139,759 and 181,308 against reads of 29,682.
+The mark was still filled because a mark is spent only when the detector SEES an extension
+(`token-sessions.sh`, probe mode: a gap of `ttl-due..ttl` that came back a hit). Both gaps were
+past the TTL, so they were lapses, not extensions, and the ledger was right.
+
+The gap was in the wiring, not the accounting:
+
+- `renew_session` / `--renew-due` refuse by design — `claude -p` warms the print-mode prefix,
+  measured 2026-09-02, and the target's clock keeps counting down.
+- `token-poke.ps1` does work — measured read 107,700 / write 40 / output 4 on a 107k window —
+  but **nothing called it**. No scheduled task (only `ClaudeTokenWindowKeeper` exists), no widget
+  key, no pane key. The single row in `token-poke.log` was typed by hand, ~50 minutes early, and
+  bought nothing.
+
+So the marker was honest and the budget was real; there was simply no actor. Fixed by
+`token-sessions.sh --poke-due [--dry-run]`, which is `renew_due`'s scan with the poke behind it,
+the same three refusals plus a live-pid check and a `POKE_GAP_MIN` backstop. It spends no mark
+itself — the detector still does that when the extension lands, which is why it must fire inside
+the same `EXT_DUE_MIN` window the detector counts.
+
+Two performance notes, because this has to fit inside an 8-minute window: the first version took
+**87s** (two awk spawns per payload, ~22 payloads), 10s once those were collapsed into one pass,
+and 3-18s once non-rendering modes (`--poke-due`, `--renew-due`, `--extend`, `--block`, `--name`)
+were made to skip `measure_constants` and `measure_ollama`. Run it on a 2-3 minute schedule; a
+10-minute one can step over the danger zone entirely.
+
+Still open: nothing is scheduled yet, so the fix is a command, not a behaviour.
+
+### 2026-09-04 — the schedule exists now, and is UNVALIDATED
+
+The line above ("nothing is scheduled yet") is closed: `ClaudeTokenPokeDue` is registered, every
+3 minutes, `token-pokedue-install.ps1`. It had never been registered until today, which is why
+every window since 2026-09-02 lapsed with a full mark in hand — the ledger read "1 allowed, 0
+used" the whole time and that was accurate, nothing had ever spent one.
+
+Two things were added with it:
+
+- **The widget re-arms the task.** `token-widget.ps1` `Ensure-PokeDue`, called from
+  `Start-Collect` and throttled to once an hour: a timestamp compare per refresh, one
+  `Get-ScheduledTask` per hour, and the installer only when the task is missing. Honours
+  `token-pokedue.off` as the deliberate off switch, so `-Remove` plus that file is the way to
+  keep it down. Reason: a missing scheduled task is invisible, and the widget is the thing
+  always running when sessions are.
+- **`-Preserve` in `token-poke.ps1`.** Pending input events are drained and written back after
+  the renewal; a line already sitting in the prompt box is scraped off the screen buffer,
+  cleared with Ctrl+U, and typed back **without** an Enter. It refuses unless a re-read shows the
+  box actually emptied. This also fixed a worse bug in the old path: the prompt box was never
+  checked at all, only the input buffer, so a poke would happily append its renewal to a
+  forgotten half-sentence and send both. Without `-Preserve` that case now refuses.
+  `TOKEN_POKE_PRESERVE=` turns it back into a refusal.
+
+**Validated end to end, 2026-09-04**, on a throwaway session (`8a452f59`, 46k) with
+"can you read this?" left unsent in its box:
+
+```
+held 'can you read this?' out of the prompt box - typed back, unsent, after the renewal
+POKE ok: wrote 105 of 86 records to pid 172908 (split)
+```
+
+Afterwards: `requests` 1 -> 2, `expires_at` - now = **3,576s** (the clock reset to a full hour),
+context 46.1k -> 46.2k (**grew +70, out 4**), and the line was back in the box unsent. All four
+steps - scrape, clear, renew, restore - confirmed in one run.
+
+Two bugs found getting there, both of which would have sent a renewal onto the end of someone's
+line:
+
+- **The marker is U+276F, not '>'.** Claude Code draws the prompt as `❯` followed by U+00A0. The
+  first version matched ASCII `>` only and called a perfectly readable box unreadable.
+- **The cursor row is not the input row.** A session mid-turn parks its cursor on a row reading
+  just `>`, which read as an *empty* box while the real box below it held queued text - measured
+  live on the other session, which was holding "1. go ahead and commit 2. yes 3." at the time.
+  Now found by searching up from the window bottom for the marker row, and an unreadable box
+  refuses instead of proceeding.
+
+Also added: `--poke-due` skips a session whose `sessions/<pid>.json` says `"status":"busy"` (with
+a freshness test, since that file outlives its process). A running turn renews its own cache, and
+typing into it queues a message the person did not write.
+
+`token-boxdump.ps1 -TargetPid <pid>` dumps the bottom rows of any session's screen buffer with
+non-ASCII escaped - that is what made both bugs visible, and is the tool to reach for next time
+the box read looks wrong.
+
+**Unattended ticks confirmed, 2026-09-04.** Session `983a3eb8` (157k) was left idle and the
+schedule renewed it twice with nobody at the keyboard:
+
+```
+14:28:52  983a3eb8  49584  renew  157  1  landed     (requests 94 -> 95)
+15:22:57  983a3eb8  49584  renew  157  0  landed     (requests 95 -> 96)
+```
+
+Each reset `expires_at` to a full hour (3,579s measured after the second) for ~15.7k
+input-equivalents against ~314k to let a 157k window lapse - about **20x**. The floor gate was
+seen refusing a real session in the same window (`due 5ffa226f: 50k ... under the 60k floor`).
+
+### Sleep is the hole this cannot cover
+
+Same afternoon, session `3587115a` (152k, one mark unspent) lapsed anyway. Not a gate failure:
+**the machine suspended 14:30:00 and resumed 15:11:35** (System log, Kernel-Power 42 / Kernel-
+General 1, the clock jumping 17:30:01Z -> 18:11:35Z), and that window was due at 14:44. No tick
+could run, and on resume it was already 27 minutes cold.
+
+The TTL runs on wall-clock time, so **any suspend longer than the remaining cache life kills the
+window regardless of marks**. On a laptop that is most overnight gaps and many lunches. Marks
+cover an idle machine, not a sleeping one; `/park` remains the only thing that covers sleep.
+
+Worse, it was *silent*: a cold window fell out of the scan loop without a line, so the log read
+"nothing due" throughout. Fixed - `--poke-due` now reports windows that lapsed within the last
+hour, over the floor, whose process is still alive:
+
+```
+cold 3587115a: 152k, lapsed 44m ago with 1 mark(s) unspent - nothing could renew it
+```
+
+### Auto-park on a spent budget (built 2026-09-04)
+
+A window whose marks are used up is not a window that stopped mattering - a mark was *spent* on
+it, which is the only evidence on disk that it was wanted. So the budget now ends in a
+checkpoint rather than a shrug. `--poke-due` types `/park` into it, in the same danger zone the
+renewal fires in:
+
+| ledger | what happens |
+|---|---|
+| marks left >= 2 | renew ("reply with only: ok") |
+| **left = 1** | **spend the last mark on `/park`** |
+| left <= 0, no current checkpoint | park anyway - fallback for a park that never landed |
+| allowed = 0 | neither - `--extend <sid> 0` is how you say leave it alone |
+
+**The last mark is the park.** Both are requests and a request is what renews a prefix, so the
+park buys the same hour the renewal would have *and* leaves the checkpoint behind for the lapse
+after it. Parking on the mark after the last one would spend a whole extra cycle writing the same
+file, into a window with no way left to stay warm.
+
+That is why `EXT_DEFAULT` went 1 -> **2** on 2026-09-04: at one mark a session can only ever
+park, never renew. At two the ordinary life of an idle window is "renew once, then checkpoint".
+
+Four things that make it safe rather than merely automatic:
+
+- **Warm, not cold.** Parking a lapsed window costs `context x 2`, the exact rewrite this exists
+  to avoid; inside the danger zone the park cycle is a 0.1x read.
+- **The midnight gate is skipped for a park.** A renewal bought at 23:50 buys nothing, a
+  checkpoint written at 23:50 is worth more than one written at noon.
+- **`park_fresh`** - `/park` sends a request, so an auto-park renews the very window it was
+  closing, and without a guard the next lapse would park it again, hourly, forever. A checkpoint
+  stamped `session=<sid>` and newer than the CLI's own `statusUpdatedAt` (which moves every turn)
+  means nothing has happened since; older means the session moved on and re-parking is right.
+- **Cold windows are never auto-parked**, and their spent marks are **released**. After a suspend
+  a checkpoint would cost the full 2x rewrite, so that call stays with the person. And the marks
+  that were spent applied to a prefix that no longer exists: a session typed into again starts a
+  new hour, from a cold rewrite it has already paid for, with its full allowance back. The
+  *allowance* is never touched - that is a setting, not a running total.
+
+`TOKEN_PARK_ON_LAPSE=` turns the parking half off and keeps the renewals.
+
+#### The first real auto-park typed nonsense
+
+At 17:07:49 the branch fired correctly on `983a3eb8` (197k) and typed
+**`C:/Program Files/Git/park`** into the session. Git Bash rewrites any argument that looks like a
+unix absolute path before a native binary sees it, and `/park` is the first thing this tool has
+ever typed that begins with a slash - the renewal text starts `[auto-renew:`, which is why every
+earlier test passed. Fixed with `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'` on the poke call
+(`token-sessions.sh:5714-5721`); A/B probe: `would type: C:/Program Files/Git/park` before,
+`would type: /park` after.
+
+The retry landed unattended at **18:01:53** - `park 201`, six characters, and the verify path did
+its job: `typed but NOT sent after 30s - nudging with a lone Enter -> landed after the nudge:
+requests 134 -> 135`. The checkpoint it wrote is
+`checkpoints/.claude.extension-autopark.md`. That closes the last unproven path in the chain:
+**every step now has an unattended, measured run behind it except the widget's re-arm branch
+(the task has never gone missing since) and the wrapped-box refusal (no long forgotten line has
+turned up yet).**
+
+**Still to watch across a few real sessions:**
+
+1. Does the renewal cost what the install header claims (~10.9k input-equivalents against ~175k
+   to lapse) on windows much larger than 46k?
+3. Does anything hit the wrapped-box refusal in practice? A long forgotten line wraps, and that
+   case still refuses rather than restoring a fragment.
+
+The renewal path is proven. `/park` is still the actual plan for a known gap, because sleep
+defeats every mark you own.
+
+## cswap usage: how fresh it actually is, and which account a session is on
+
+Established 2026-09-04 while fixing the widget's PLAN LEFT panel.
+
+- **cswap has no daemon.** Usage lives in `~/.claude-swap-backup/cache/usage.json`
+  with a per-account `nextPollAt` / `pollIntervalS` of **270s**. A poll happens only
+  when something invokes cswap, and `cswap list --json` **does not force a refresh** -
+  it returns `lastGood` and re-polls only the account whose `nextPollAt` has passed.
+  So an account's reading is up to 4.5 minutes stale, and `usageAgeSeconds` is the
+  only honest statement of that. There is no config key for the interval
+  (`cswap config` has autoswitch.* and ui.theme, nothing else).
+- **Nothing on disk records which account a session is signed into.**
+  `sessions/<pid>.json` has no account field, and a session started before a
+  `cswap switch` keeps the credentials it opened with while its transcript stays in
+  the shared `projects/` tree with no `sessions/<n>-<slug>` profile segment to name
+  it. The ONLY per-session fingerprint is the status-line payload's own
+  `rate_limits` - the percentages are the account. `live_usage_rows` now matches on
+  those (seven-day weighted 4x, five-hour as tiebreak, clear-winner-or-fall-back).
+- Two bugs this caused, both fixed:
+  1. `live_usage_rows` attributed every profile-less payload to cswap's active
+     account, so the old-account session's limits were drawn on the NEW account's
+     row - measured: account 1 shown at account 2's 88% and flagged AHEAD OF PACE,
+     while account 2 sat marked idle and was offered as the escape route.
+  2. `Guard-Pct` in token-widget.ps1 held any percentage drop unless the countdown
+     jumped back UP. A window that resets untouched comes back with a **null**
+     countdown (cswap emits one only once a window has usage), which never jumps up,
+     so the account you are not signed into froze at its pre-reset percentage
+     indefinitely - a row reading 'idle' beside a used bar. The guard now holds a dip
+     only while it can prove the clock was and still is running.
+
+## Parallel cap raised 2 -> 3 (2026-09-05)
+
+Measured over 2026-09-01..09-05: 328 cycles, 77 sessions, 37.6M weighted (`output x5 + recache
+x2`, cache reads not in the CSV). 29 cycles rewrote a >=60k window whole — 8.8% of cycles but
+**13.9M weighted, 37% of the five-day spend**, against 15% all-time.
+
+Split by project dir, the rewrite cost is **45% the workshop and 53% real work**: `C--Users-you`
+6.26M (building the extension marks and auto-park — self-inflicted by testing, and expected),
+real projects 7.29M, one session unmapped 0.33M. Of the real-project half, **4.17M sits in a
+single overnight cluster of five parallel ProjectC windows, 09-01 20:50 -> 09-02 01:53**
+(`04adfc17`, `2626ac36`, `3203387a`, `8a1f8031`, `bef678aa`) — nine of the 29 rewrites, 30% of
+all rewrite cost in the window.
+
+Concurrency itself: 80% of cycles had >=2 of the user's own sessions active within +/-15 min,
+51% had >=3. So the old two-session cap was being broken in half of all cycles while the actual
+damage concentrated at five. The cap is now **three**, and the number to instrument is the
+fourth window, not the second.
+
+Two things this leaves open:
+
+- **The workshop needs excluding from control grades.** `C--Users-you` is 17% of all-time spend
+  and 25.7M of the last 7 days; grading self-testing as workflow failure will read E on exactly
+  the days the tooling gets built. Wants `--exclude-self`, or a second "workshop" grade line.
+- **Widget-initiated resumes are not logged.** The user now opens parked sessions only from
+  `token-parked.ps1`, and nothing on disk records it — no launch or resume line in any `*.log`.
+  That behaviour change cannot be verified now or measured next week, and it is the same
+  measurement debt item 6 has been waiting on: what actually happens after an intervention.
