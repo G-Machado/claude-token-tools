@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+__REFRESH__
+<title>Claude token dashboard</title>
+<style>
+  :root {
+    --bg:#16171c; --card:#1d1e24; --card2:#212228; --line:#2c2e36;
+    --text:#e6e7ea; --dim:#8a8d97; --faint:#5a5d66;
+    --green:#4ade80; --yellow:#facc15; --orange:#fb923c; --red:#f87171;
+    --blue:#60a5fa; --grey:#6b6f7a;
+    --mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
+    --ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:#f4f4f6; --card:#ffffff; --card2:#fafafb; --line:#e3e4e8;
+      --text:#1b1c22; --dim:#5f636e; --faint:#9297a3;
+      --green:#16a34a; --yellow:#ca8a04; --orange:#ea580c; --red:#dc2626;
+      --blue:#2563eb; --grey:#7b8090;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--ui);
+         font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1120px; margin:0 auto; padding:28px 22px 64px; }
+
+  header { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:22px; }
+  h1 { font-size:17px; font-weight:600; margin:0; letter-spacing:.2px; }
+  .sub { font-family:var(--mono); font-size:11px; color:var(--faint); }
+
+  nav { display:flex; gap:2px; margin:0 0 20px; border-bottom:1px solid var(--line); }
+  nav a { font-family:var(--mono); font-size:11px; color:var(--dim); text-decoration:none;
+          padding:8px 14px; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  nav a:hover { color:var(--text); }
+  nav a.on { color:var(--text); border-bottom-color:var(--blue); }
+
+  section { display:none; }
+  section.on { display:block; }
+
+  .grid { display:grid; gap:14px; }
+  .g3 { grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+  .g2 { grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); }
+
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  .card h2 { font-size:10px; font-weight:600; letter-spacing:1.4px; text-transform:uppercase;
+             color:var(--faint); margin:0 0 12px; }
+  .note { font-size:12px; color:var(--dim); margin:10px 0 0; line-height:1.55; }
+
+  .big { font-family:var(--mono); font-size:26px; font-weight:600; letter-spacing:-.5px; }
+  .unit { font-family:var(--mono); font-size:12px; color:var(--faint); margin-left:5px; }
+
+  .gradeRow { display:flex; align-items:center; gap:12px; }
+  .grade { font-family:var(--mono); font-size:32px; font-weight:700; line-height:1; }
+  .A,.B { color:var(--green); } .C { color:var(--blue); }
+  .D { color:var(--yellow); } .E { color:var(--red); } .X { color:var(--faint); }
+  .delta { font-family:var(--mono); font-size:11px; color:var(--dim); }
+
+  .bar { height:8px; border-radius:4px; overflow:hidden; display:flex; background:var(--line); }
+  .bar i { display:block; height:100%; }
+  .key { display:flex; gap:14px; font-family:var(--mono); font-size:10px; color:var(--faint); margin-top:8px; flex-wrap:wrap; }
+  .key b { font-weight:400; color:var(--dim); }
+  .sw { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
+  th { text-align:left; font-weight:400; color:var(--faint); font-size:10px; letter-spacing:.6px;
+       text-transform:uppercase; padding:0 10px 8px 0; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:9px 10px 9px 0; border-bottom:1px solid var(--line); vertical-align:middle; }
+  tr:last-child td { border-bottom:none; }
+  td.n, th.n { text-align:right; }
+  .scroll { overflow-x:auto; }
+
+  .sess { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:start;
+          padding:14px 0; border-bottom:1px solid var(--line); }
+  .sess:last-child { border-bottom:none; }
+  .dot { font-size:11px; line-height:1.6; }
+  .nick { font-family:var(--mono); font-size:13px; }
+  .meta { font-family:var(--mono); font-size:11px; color:var(--faint); margin-top:2px;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .adv { font-size:12px; color:var(--dim); margin-top:9px; max-width:70ch; }
+  .rt { text-align:right; font-family:var(--mono); font-size:12px; white-space:nowrap; }
+  .clock { font-size:14px; }
+  .cold { color:var(--red); font-weight:600; }
+
+  .ctx { position:relative; height:8px; border-radius:4px; background:var(--line); margin-top:8px; }
+  .ctx i { position:absolute; left:0; top:0; bottom:0; border-radius:4px; }
+  .ctx u { position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--faint); opacity:.55; }
+
+  svg { display:block; width:100%; height:auto; overflow:visible; }
+  .axis { font-family:var(--mono); font-size:9px; fill:var(--faint); }
+  .gl { stroke:var(--line); stroke-width:1; }
+
+  footer { margin-top:34px; font-family:var(--mono); font-size:10px; color:var(--faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Claude token dashboard</h1>
+    <span class="sub" id="stamp"></span>
+  </header>
+
+  <nav>
+    <a href="#overview" data-tab="overview">overview</a>
+    <a href="#sessions" data-tab="sessions">sessions</a>
+    <a href="#history"  data-tab="history">history</a>
+  </nav>
+
+  <section id="overview">
+    <div class="grid g3" id="scorecard"></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <h2>Where the money went &mdash; 7 days</h2>
+        <div class="bar" id="split7"></div>
+        <div class="key" id="split7key"></div>
+        <p class="note">Weighted into input-equivalents: output &times;5, cache write &times;2,
+        cache read &times;0.1. Mostly green is work; mostly blue is rent on a window.</p>
+      </div>
+      <div class="card">
+        <h2>Spend per day</h2>
+        <div id="daily"></div>
+      </div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <h2>Cost per cycle</h2>
+        <div id="percycle"></div>
+      </div>
+      <div class="card">
+        <h2>Control &mdash; breaches and gap rewrites</h2>
+        <div id="control"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sessions">
+    <div class="card"><h2>Live now</h2><div id="live"></div></div>
+    <div class="card" style="margin-top:14px">
+      <h2>Bands</h2>
+      <div id="bands"></div>
+    </div>
+  </section>
+
+  <section id="history">
+    <div class="card">
+      <h2>Every session on record</h2>
+      <div class="scroll"><table id="hsess"></table></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Context carried, per cycle</h2>
+      <div id="ctxchart"></div>
+    </div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script id="payload" type="application/json">
+__DATA__
+</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("payload").textContent);
+const CN = D.constants, RPC = CN.rpc, PRICE = CN.price_in;
+const $ = (s, r) => (r || document).querySelector(s);
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c;
+                          if (x != null) n.textContent = x; return n; };
+const SVGNS = "http://www.w3.org/2000/svg";
+const sv = (t, a) => { const n = document.createElementNS(SVGNS, t);
+                       for (const k in a) n.setAttribute(k, a[k]); return n; };
+// Node.append() returns undefined, so the tooltip has to be built and
+// attached in one place rather than chained off the append.
+const tip = (n, s) => { const t = sv("title"); t.textContent = s; n.append(t); return n; };
+const css = k => getComputedStyle(document.documentElement).getPropertyValue("--" + k).trim();
+
+const fk  = v => (v / 1000).toFixed(v < 10000 ? 1 : 0) + "k";
+const fM  = v => v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : fk(v);
+const usd = v => "$" + (v * PRICE / 1e6).toFixed(v * PRICE / 1e6 >= 100 ? 0 : 2);
+const pct = v => v.toFixed(v < 10 ? 1 : 0) + "%";
+const gcl = g => ["A","B","C","D","E"].includes(g) ? g : "X";
+
+// --- derive everything the page shows from the raw history rows --------------
+// Growth is a per-session delta, so the rows have to be walked in order and
+// grouped; churn is what is left of a recache once growth is taken out, which
+// is the term a gap rewrite shows up in.
+const prev = {}, rows = D.history.map(r => {
+  const g = (r.session in prev) ? Math.max(0, r.context - prev[r.session]) : 0;
+  prev[r.session] = r.context;
+  const churn = Math.max(0, r.recache - g);
+  return { ...r,
+    growth: g, churn,
+    day: r.ts.slice(0, 10),
+    out: r.output * 5, write: r.recache * 2, read: r.context * RPC * 0.1,
+    weighted: r.output * 5 + r.recache * 2 + r.context * RPC * 0.1,
+    breach: r.fired !== "" ? 1 : 0,
+    gap: (r.cycle > 1 && churn > 60000) ? 1 : 0 };
+});
+const now = D.generated * 1000;
+const within = d => rows.filter(r => now - Date.parse(r.day + "T00:00:00") <= d * 86400000);
+const sum = (a, f) => a.reduce((s, r) => s + f(r), 0);
+const med = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y);
+                   const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const quant = (a, q) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y);
+                          return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
+
+const R7 = within(7), R14 = within(14);
+
+// --- scorecard ---------------------------------------------------------------
+(function scorecard() {
+  const box = $("#scorecard");
+  const O = D.overall, P = O.prev;
+  const add = (label, grade, prevGrade, value, unit, note) => {
+    const c = el("div", "card");
+    c.append(el("h2", null, label));
+    const row = el("div", "gradeRow");
+    row.append(el("div", "grade " + gcl(grade), grade || "-"));
+    const right = el("div");
+    const v = el("div", "big"); v.textContent = value;
+    if (unit) { const u = el("span", "unit", unit); v.append(u); }
+    right.append(v);
+    if (prevGrade && grade && prevGrade !== grade) {
+      const better = grade < prevGrade;
+      const d = el("div", "delta");
+      d.textContent = (better ? "↑ " : "↓ ") + "was " + prevGrade + " the week before";
+      d.style.color = better ? css("green") : css("red");
+      right.append(d);
+    } else if (prevGrade) {
+      right.append(el("div", "delta", "held at " + prevGrade));
+    }
+    row.append(right);
+    c.append(row);
+    if (note) c.append(el("p", "note", note));
+    box.append(c);
+  };
+  add("Spend · weighted per cycle", O.grades.spend, P ? D.overall.prev_grades.spend : "",
+      O.wpc.toFixed(0), "k/cycle",
+      "Graded against this machine's own median of " + D.overall.median.wpc.toFixed(0) +
+      "k. Lower is better — it is what the cycle cost, not what it was worth.");
+  add("Production · output share", O.grades.production, D.overall.prev_grades.production,
+      O.prod.toFixed(0), "%",
+      "Share of every token spent that went into output rather than into re-caching a window.");
+  add("Control · bad cycles", O.grades.control, D.overall.prev_grades.control,
+      O.ctl.toFixed(2), "/cycle",
+      "Budget breaches plus gap rewrites, the rewrite counted double. Target is zero.");
+})();
+
+// --- 7d split ----------------------------------------------------------------
+(function split7() {
+  const o = sum(R7, r => r.out), w = sum(R7, r => r.write), rd = sum(R7, r => r.read);
+  const t = o + w + rd || 1;
+  const bar = $("#split7"), key = $("#split7key");
+  [["output", o, "green"], ["cache write", w, "orange"], ["cache read", rd, "blue"]]
+    .forEach(([n, v, c]) => {
+      const i = el("i"); i.style.width = (v * 100 / t) + "%"; i.style.background = css(c);
+      i.title = n + " " + fM(v) + " (" + pct(v * 100 / t) + ")";
+      bar.append(i);
+      const k = el("span");
+      const s = el("span", "sw"); s.style.background = css(c);
+      k.append(s, el("b", null, n + " "), document.createTextNode(pct(v * 100 / t) + " · " + fM(v)));
+      key.append(k);
+    });
+  key.append(el("span", null, "total " + fM(t) + " · " + usd(t)));
+})();
+
+// --- daily stacked bars ------------------------------------------------------
+(function daily() {
+  const days = {};
+  within(21).forEach(r => {
+    const d = days[r.day] || (days[r.day] = { o: 0, w: 0, r: 0, n: 0 });
+    d.o += r.out; d.w += r.write; d.r += r.read; d.n++;
+  });
+  const ks = Object.keys(days).sort();
+  if (!ks.length) { $("#daily").append(el("p", "note", "no history yet")); return; }
+  const max = Math.max(...ks.map(k => days[k].o + days[k].w + days[k].r));
+  const W = 640, H = 150, pad = 22, bw = (W - pad) / ks.length;
+  const s = sv("svg", { viewBox: "0 0 " + W + " " + (H + 20), preserveAspectRatio: "none" });
+  [0.5, 1].forEach(f => {
+    s.append(sv("line", { x1: pad, x2: W, y1: H - H * f, y2: H - H * f, class: "gl" }));
+    const t = sv("text", { x: 0, y: H - H * f + 3, class: "axis" });
+    t.textContent = fM(max * f); s.append(t);
+  });
+  ks.forEach((k, i) => {
+    const d = days[k], tot = d.o + d.w + d.r;
+    let y = H;
+    [["read", d.r, "blue"], ["write", d.w, "orange"], ["output", d.o, "green"]].forEach(([n, v, c]) => {
+      const h = (v / max) * H; y -= h;
+      const rc = sv("rect", { x: pad + i * bw + 1, y: y, width: Math.max(1, bw - 3), height: Math.max(0, h),
+                              fill: css(c), rx: 1 });
+      tip(rc, k + "  " + n + " " + fM(v));
+      s.append(rc);
+    });
+    if (i % Math.ceil(ks.length / 7) === 0) {
+      const t = sv("text", { x: pad + i * bw, y: H + 13, class: "axis" });
+      t.textContent = k.slice(5); s.append(t);
+    }
+    const tt = sv("rect", { x: pad + i * bw, y: 0, width: bw, height: H, fill: "transparent" });
+    tip(tt, k + "  " + fM(tot) + " · " + usd(tot) + " · " + d.n + " cycles");
+    s.append(tt);
+  });
+  $("#daily").append(s);
+  $("#daily").append(el("p", "note",
+    "Stacked into input-equivalents. A day that is mostly blue paid rent; mostly green did work."));
+})();
+
+// --- per-cycle distribution --------------------------------------------------
+(function percycle() {
+  const box = $("#percycle");
+  const w7 = R7.map(r => r.weighted), wAll = rows.map(r => r.weighted);
+  const stat = (label, v, note) => {
+    const d = el("div"); d.style.marginBottom = "10px";
+    const b = el("span", "big", fk(v)); b.style.fontSize = "20px";
+    d.append(b, el("span", "unit", label));
+    if (note) { const n = el("span", "delta", "  " + note); d.append(n); }
+    return d;
+  };
+  box.append(stat("median, 7d", med(w7), "all-time " + fk(med(wAll))));
+  box.append(stat("p90, 7d", quant(w7, 0.9), "the top decile is where the budget goes"));
+
+  // Histogram of weighted cost per cycle, log-ish buckets so the long tail is
+  // visible without squashing everything else into the first bar.
+  const edges = [0, 50e3, 100e3, 200e3, 400e3, 800e3, 1.6e6, Infinity];
+  const lbl = ["<50k", "50-100k", "100-200k", "200-400k", "400-800k", "0.8-1.6M", ">1.6M"];
+  const cnt = edges.slice(0, -1).map((lo, i) => w7.filter(v => v >= lo && v < edges[i + 1]).length);
+  const max = Math.max(1, ...cnt);
+  const W = 420, H = 90, bw = W / cnt.length;
+  const s = sv("svg", { viewBox: "0 0 " + W + " " + (H + 16) });
+  cnt.forEach((c, i) => {
+    const h = (c / max) * H;
+    const rc = sv("rect", { x: i * bw + 2, y: H - h, width: bw - 5, height: Math.max(0, h),
+                            fill: i >= 4 ? css("red") : i >= 2 ? css("orange") : css("blue"), rx: 2 });
+    tip(rc, lbl[i] + ": " + c + " cycles");
+    s.append(rc);
+    const t = sv("text", { x: i * bw + bw / 2, y: H + 12, class: "axis", "text-anchor": "middle" });
+    t.textContent = lbl[i]; s.append(t);
+  });
+  box.append(s);
+  box.append(el("p", "note", "Last 7 days, " + w7.length + " cycles. Breaches are single prompts that " +
+    "bundled several tasks — splitting those is what collapses the tail."));
+})();
+
+// --- control -----------------------------------------------------------------
+(function control() {
+  const box = $("#control");
+  const b7 = sum(R7, r => r.breach), g7 = sum(R7, r => r.gap);
+  const line = (label, n, of, colour, note) => {
+    const d = el("div"); d.style.marginBottom = "12px";
+    const head = el("div"); head.style.display = "flex"; head.style.justifyContent = "space-between";
+    head.append(el("span", "delta", label));
+    const v = el("span", "delta", n + " of " + of + " cycles · " + pct(of ? n * 100 / of : 0));
+    v.style.color = css("text"); head.append(v);
+    d.append(head);
+    const bar = el("div", "bar"); bar.style.marginTop = "6px";
+    const i = el("i"); i.style.width = (of ? Math.max(1.5, n * 100 / of) : 0) + "%";
+    i.style.background = css(colour); bar.append(i);
+    d.append(bar);
+    if (note) d.append(el("p", "note", note));
+    return d;
+  };
+  box.append(line("budget breaches, 7d", b7, R7.length, "yellow"));
+  box.append(line("gap rewrites, 7d", g7, R7.length, "red",
+    "A parked window rewritten from cold. 9% of cycles historically, but 26% of the weighted cost."));
+
+  // 14-day sparkline of weighted cost per cycle: the only line that answers
+  // whether any of this is getting better.
+  const days = {};
+  R14.forEach(r => { const d = days[r.day] || (days[r.day] = []); d.push(r.weighted); });
+  const ks = Object.keys(days).sort();
+  if (ks.length > 1) {
+    const vals = ks.map(k => med(days[k]));
+    const max = Math.max(...vals), min = Math.min(...vals);
+    const W = 420, H = 46;
+    const x = i => (i / (ks.length - 1)) * W;
+    const y = v => H - ((v - min) / ((max - min) || 1)) * (H - 6) - 3;
+    const s = sv("svg", { viewBox: "0 0 " + W + " " + H });
+    s.append(sv("polyline", { points: vals.map((v, i) => x(i) + "," + y(v)).join(" "),
+                              fill: "none", stroke: css("blue"), "stroke-width": 1.5,
+                              "stroke-linejoin": "round" }));
+    vals.forEach((v, i) => {
+      const c = sv("circle", { cx: x(i), cy: y(v), r: 2, fill: css("blue") });
+      tip(c, ks[i] + "  median " + fk(v) + "/cycle");
+      s.append(c);
+    });
+    box.append(el("p", "note", "median weighted cost per cycle, last " + ks.length + " days"));
+    box.append(s);
+  }
+})();
+
+// --- live sessions -----------------------------------------------------------
+(function live() {
+  const box = $("#live");
+  if (!D.sessions.length) { box.append(el("p", "note", "no live sessions")); return; }
+  const vc = { now: "red", soon: "orange", cut: "yellow", ok: "green", gone: "grey" };
+  const band = k => k >= CN.cut_no ? "red" : k >= CN.cut_pk ? "orange"
+                  : k >= CN.overheat ? "orange" : k >= CN.park_at ? "yellow" : "green";
+  D.sessions.forEach(s => {
+    const row = el("div", "sess");
+    const dot = el("div", "dot", s.running ? "▶" : s.verdict === "cut" ? "▷"
+                 : s.urank >= 2 ? "▶" : "○");
+    dot.style.color = css(vc[s.verdict] || "grey");
+    row.append(dot);
+
+    const mid = el("div");
+    mid.append(el("div", "nick", s.nick));
+    mid.append(el("div", "meta", s.project + "  ·  " + s.title));
+    const ctx = el("div", "ctx");
+    const fill = el("i");
+    fill.style.width = Math.min(100, s.context_k * 100 / CN.ctxmax) + "%";
+    fill.style.background = css(band(s.context_k));
+    ctx.append(fill);
+    [CN.floor, CN.park_at, CN.cut_pk, CN.cut_no].forEach(b => {
+      if (b > CN.ctxmax) return;
+      const m = el("u"); m.style.left = (b * 100 / CN.ctxmax) + "%";
+      m.title = b.toFixed(0) + "k"; ctx.append(m);
+    });
+    mid.append(ctx);
+    const sp = el("div", "bar"); sp.style.height = "4px"; sp.style.marginTop = "6px";
+    [[s.cost.pct_output, "green"], [s.cost.pct_write, "orange"], [s.cost.pct_read, "blue"]]
+      .forEach(([v, c]) => { const i = el("i"); i.style.width = v + "%";
+                             i.style.background = css(c); sp.append(i); });
+    mid.append(sp);
+    if (s.advice) {
+      const a = el("div", "adv", s.advice);
+      if (s.urank >= 2) a.style.color = css("text");
+      mid.append(a);
+    }
+    row.append(mid);
+
+    const rt = el("div", "rt");
+    const k = el("div"); k.textContent = s.context_k.toFixed(0) + "k";
+    k.style.color = css(band(s.context_k)); k.style.fontSize = "14px";
+    rt.append(k);
+    const c = el("div", "clock");
+    if (!s.alive) { c.textContent = "gone"; c.style.color = css("faint"); }
+    else if (s.cache_left_min <= 0) { c.textContent = "COLD"; c.className = "clock cold"; }
+    else { c.textContent = s.cache_left_min + "m";
+           c.style.color = css(s.cache_left_min <= 10 ? "orange" : s.cache_left_min <= 20 ? "yellow" : "dim"); }
+    rt.append(c);
+    const g = el("div", "delta",
+      [s.grades.spend, s.grades.production, s.grades.control].filter(Boolean).join(" ") || "—");
+    rt.append(g);
+    rt.append(el("div", "delta", usd(s.cost.total)));
+    row.append(rt);
+    box.append(row);
+  });
+})();
+
+// --- bands -------------------------------------------------------------------
+(function bands() {
+  const box = $("#bands");
+  const B = [
+    ["floor", CN.floor, "grey", "A fresh session starts here. You cannot clear your way below it."],
+    ["park at", CN.park_at, "yellow", "Above this, /park + /clear beats carrying one gap."],
+    ["overheat", CN.overheat, "orange", "Rent overtakes work: the window has stopped earning its keep."],
+    ["cut (parked)", CN.cut_pk, "orange", "With a checkpoint, a restart pays from here."],
+    ["cut (unparked)", CN.cut_no, "red", "Without one, the bar is this much higher."],
+    ["clear (parked)", CN.clear_pk, "blue", "After a gap, with a checkpoint: clear before typing."],
+    ["clear (unparked)", CN.clear_no, "blue", "After a gap, without one."]
+  ];
+  const t = el("table");
+  const hd = el("tr");
+  ["band", "k", "", "why"].forEach((h, i) => { const th = el("th", i === 1 ? "n" : null, h); hd.append(th); });
+  t.append(hd);
+  B.forEach(([n, v, c, why]) => {
+    const tr = el("tr");
+    const a = el("td"); const s = el("span", "sw"); s.style.background = css(c);
+    a.append(s, document.createTextNode(n)); tr.append(a);
+    tr.append(el("td", "n", v.toFixed(0)));
+    const bar = el("td"); bar.style.width = "34%";
+    const b = el("div", "bar"); b.style.height = "5px";
+    const i = el("i"); i.style.width = Math.min(100, v * 100 / CN.ctxmax) + "%";
+    i.style.background = css(c); b.append(i); bar.append(b); tr.append(bar);
+    const w = el("td", null, why); w.style.color = css("dim"); w.style.fontFamily = "var(--ui)";
+    tr.append(w);
+    t.append(tr);
+  });
+  box.append(t);
+  box.append(el("p", "note", "Measured, not chosen: every band is derived from this machine's own " +
+    "floor (" + CN.floor.toFixed(0) + "k), re-derivation cost (" + CN.rd_no.toFixed(0) +
+    "k unparked, " + CN.rd_park.toFixed(0) + "k with a checkpoint) and " + CN.rem.toFixed(0) +
+    " remaining cycles per window."));
+})();
+
+// --- history: per session ----------------------------------------------------
+(function hsess() {
+  const by = {};
+  rows.forEach(r => {
+    const s = by[r.session] || (by[r.session] = { n: 0, w: 0, o: 0, cx: 0, b: 0, g: 0, first: r.ts, last: r.ts });
+    s.n++; s.w += r.weighted; s.o += r.out; s.cx = Math.max(s.cx, r.context);
+    s.b += r.breach; s.g += r.gap; s.last = r.ts;
+  });
+  const list = Object.entries(by).map(([k, v]) => ({ sid: k, ...v }))
+                     .sort((a, b) => b.w - a.w).slice(0, 40);
+  const t = $("#hsess");
+  const hd = el("tr");
+  [["session", ""], ["cycles", "n"], ["peak ctx", "n"], ["weighted", "n"], ["$", "n"],
+   ["output share", "n"], ["bad", "n"], ["last seen", ""]]
+    .forEach(([h, c]) => hd.append(el("th", c, h)));
+  t.append(hd);
+  const max = Math.max(...list.map(s => s.w), 1);
+  list.forEach(s => {
+    const tr = el("tr");
+    tr.append(el("td", null, s.sid));
+    tr.append(el("td", "n", s.n));
+    const cx = el("td", "n", fk(s.cx));
+    cx.style.color = css(s.cx / 1000 >= CN.cut_no ? "red" : s.cx / 1000 >= CN.park_at ? "yellow" : "dim");
+    tr.append(cx);
+    const w = el("td", "n");
+    const wrap = el("div"); wrap.style.display = "flex"; wrap.style.alignItems = "center";
+    wrap.style.justifyContent = "flex-end"; wrap.style.gap = "8px";
+    const b = el("div", "bar"); b.style.width = "70px"; b.style.height = "5px";
+    const i = el("i"); i.style.width = (s.w * 100 / max) + "%"; i.style.background = css("blue");
+    b.append(i); wrap.append(document.createTextNode(fM(s.w)), b); w.append(wrap); tr.append(w);
+    tr.append(el("td", "n", usd(s.w)));
+    tr.append(el("td", "n", pct(s.w ? s.o * 100 / s.w : 0)));
+    const bad = el("td", "n", (s.b + s.g) || "—");
+    if (s.g) bad.style.color = css("red"); else if (s.b) bad.style.color = css("yellow");
+    bad.title = s.b + " breaches, " + s.g + " gap rewrites";
+    tr.append(bad);
+    tr.append(el("td", null, s.last.slice(0, 10)));
+    t.append(tr);
+  });
+})();
+
+// --- history: context carried ------------------------------------------------
+(function ctxchart() {
+  const box = $("#ctxchart");
+  const R = R14;
+  if (R.length < 2) { box.append(el("p", "note", "not enough history")); return; }
+  const W = 900, H = 190, pad = 30;
+  const maxc = Math.max(CN.ctxmax * 1000, ...R.map(r => r.context));
+  const t0 = Math.min(...R.map(r => Date.parse(r.ts.replace(" ", "T")))),
+        t1 = Math.max(...R.map(r => Date.parse(r.ts.replace(" ", "T"))));
+  const x = t => pad + ((t - t0) / ((t1 - t0) || 1)) * (W - pad);
+  const y = v => H - (v / maxc) * H;
+  const s = sv("svg", { viewBox: "0 0 " + W + " " + (H + 16) });
+  [["floor", CN.floor, "grey"], ["park", CN.park_at, "yellow"],
+   ["cut", CN.cut_no, "red"]].forEach(([n, k, c]) => {
+    const yy = y(k * 1000);
+    s.append(sv("line", { x1: pad, x2: W, y1: yy, y2: yy, stroke: css(c),
+                          "stroke-width": 1, "stroke-dasharray": "3 4", opacity: .5 }));
+    const t = sv("text", { x: 0, y: yy + 3, class: "axis" }); t.textContent = n; s.append(t);
+  });
+  R.forEach(r => {
+    const t = Date.parse(r.ts.replace(" ", "T"));
+    const c = sv("circle", { cx: x(t), cy: y(r.context), r: r.gap ? 3.4 : 2,
+                             fill: r.gap ? css("red") : r.breach ? css("yellow") : css("blue"),
+                             opacity: r.gap || r.breach ? .95 : .5 });
+    tip(c, r.ts + "  " + r.session + " c" + r.cycle + "  " + fk(r.context) +
+      (r.gap ? "  GAP REWRITE" : "") + (r.breach ? "  breach:" + r.fired : ""));
+    s.append(c);
+  });
+  box.append(s);
+  box.append(el("p", "note", "Each dot is one cycle over the last 14 days, placed at the window it " +
+    "carried. Red is a gap rewrite, yellow a budget breach."));
+})();
+
+// --- tabs (state in the hash, so a meta refresh keeps your place) ------------
+function show(tab) {
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === tab));
+  document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.tab === tab));
+}
+window.addEventListener("hashchange", () => show(location.hash.slice(1) || "overview"));
+show(location.hash.slice(1) || "overview");
+
+$("#stamp").textContent = new Date(D.generated * 1000).toLocaleString() +
+  "  ·  " + D.sessions.length + " live  ·  " + rows.length + " cycles on record";
+$("#foot").textContent = "token-sessions " + D.version +
+  "  ·  written by token-dashboard.sh  ·  no server, no network, no dependencies" +
+  "  ·  weights: output ×5, cache write ×2, cache read ×0.1 at " + RPC + " requests/cycle";
+</script>
+</body>
+</html>
