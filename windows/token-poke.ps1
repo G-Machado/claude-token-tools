@@ -458,6 +458,20 @@ function Send-Chars([char[]]$cs) {
   return $r
 }
 
+# One key WITH its virtual-key code, for the one place the encodings differ.
+# Measured 2026-09-13 on a live prompt: 0x7F under VK_BACK deletes ONE
+# character, while 0x08 - with or without VK_BACK - deletes a whole word.
+function Send-Key([uint16]$vk, [uint16]$ch) {
+  $k = New-Object ConIn+KEY_EVENT_RECORD
+  $k.bKeyDown = 1; $k.wRepeatCount = 1; $k.wVirtualKeyCode = $vk; $k.UnicodeChar = $ch
+  $r = New-Object ConIn+INPUT_RECORD
+  $r.EventType = $KEY_EVENT; $r.KeyEvent = $k
+  $a = New-Object 'ConIn+INPUT_RECORD[]' 1
+  $a[0] = $r
+  $n = 0
+  return [ConIn]::WriteConsoleInputW($h, $a, 1, [ref]$n)
+}
+
 # WHY THIS IS SPLIT.
 #
 # The receiving end is Ink on a raw stdin, and Ink tells a paste from a keypress
@@ -525,6 +539,31 @@ if (-not $CrOnly -and $box.ok -and $box.text -ne '') {
     $after = Get-Box
     if ($after.ok -and $after.text -eq '') { break }
   }
+  # A SUGGESTION, not a draft. Claude Code draws a predicted next prompt into
+  # the empty box as dim ghost text, and the screen buffer keeps no colour to
+  # tell it apart (every cell reads attribute 0x07). There is nothing in the box
+  # to kill, so the kills change nothing and this used to refuse: measured
+  # 2026-09-13, not one clear in the whole log had ever succeeded, and ea8530a3
+  # (110k, a mark in hand) lapsed behind "deleted the repo, continue with install
+  # and docs" - a sentence nobody typed.
+  #
+  # One character settles it: a suggestion is REPLACED by what is typed, a real
+  # draft is appended to. Tested live on that window. Asked only when the kills
+  # moved nothing at all, so a draft that did answer them never sees the probe,
+  # and the probe comes back out with the one-character backspace either way.
+  $ghost = $false
+  if ($after.ok -and $after.text -eq $box.text) {
+    [void](Send-Key 0 ([uint16][char]'q'))
+    Start-Sleep -Milliseconds 400
+    $g = Get-Box
+    [void](Send-Key 0x08 0x7F)
+    Start-Sleep -Milliseconds 400
+    if ($g.ok -and $g.text -eq 'q') {
+      $ghost = $true
+      Write-Output "  '$($box.text)' is a prompt suggestion, not a draft - typing over it"
+    }
+    $after = Get-Box
+  }
   # Still in the way. At this point the window is worth more than the sentence
   # blocking it: a lapse costs the whole context at 2x, and when this poke is a
   # park it also loses the checkpoint that was the last thing this window was
@@ -537,8 +576,10 @@ if (-not $CrOnly -and $box.ok -and $box.text -ne '') {
   # the box was read. The margin covers a cursor that did not end up where
   # Ctrl+E was supposed to put it.
   $forced = $false
-  if (-not $after.ok -or $after.text -ne '') {
-    $stuck = $(if ($after.ok -and $after.text -ne '') { $after.text } else { $box.text })
+  if (-not $ghost -and (-not $after.ok -or $after.text -ne '')) {
+    # The FIRST read, not the latest: a kill that took the head and left the
+    # tail would otherwise save only the tail.
+    $stuck = $box.text
     $cutd  = Join-Path $env:USERPROFILE '.claude\token-cut'
     $cutf  = Join-Path $cutd ("{0}.draft" -f $(if ($Short) { $Short } else { "pid$TargetPid" }))
     try {
@@ -561,7 +602,7 @@ if (-not $CrOnly -and $box.ok -and $box.text -ne '') {
       Write-Output "  erased '$stuck' by hand - it is in the cut file, not in the prompt box"
     }
   }
-  if (-not $after.ok -or $after.text -ne '') {
+  if (-not $ghost -and (-not $after.ok -or $after.text -ne '')) {
     Write-Output "SKIP: could not clear the prompt box even by erasing it (still '$($after.text)') - leaving it alone"
     [void][ConIn]::CloseHandle($h)
     if ($ho -ne $INVALID) { [void][ConIn]::CloseHandle($ho) }
@@ -574,7 +615,7 @@ if (-not $CrOnly -and $box.ok -and $box.text -ne '') {
   # keys it is sent, and typing a sentence into a prompt that may not be where
   # it looks is how the renewal itself gets appended to somebody's half-written
   # line. The copy on disk is the recovery path, and it is a better one.
-  if ($forced) {
+  if ($forced -or $ghost) {
     $restore = ''
   } else {
     $restore = $box.text
@@ -583,6 +624,7 @@ if (-not $CrOnly -and $box.ok -and $box.text -ne '') {
 }
 
 $ok = $true
+$script:Written = 0   # count the renewal only, not the clearing keys before it
 $body = $Text.ToCharArray()
 if ($CrOnly) { $body = @() }
 switch ($TypeMode) {

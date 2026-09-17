@@ -770,6 +770,37 @@ POKE_PRESERVE="${TOKEN_POKE_PRESERVE-1}"
 # window was wanted; zeroing a session's marks (--extend <sid> 0) opts it out of
 # all of it. Set empty to turn the parking half off and keep only the renewals.
 PARK_ON_LAPSE="${TOKEN_PARK_ON_LAPSE-1}"
+# Safe-park (2026-09-15): no window over the floor should go cold without a
+# checkpoint, whatever its marks say. cfd9882a (326k) and 5f5698cf (312k, a mark
+# in hand) lapsed unparked on 2026-09-14 in a 20:56-23:01 sleep - the renewals
+# were never going to reach them, because this machine sleeps 15m (AC) / 10m
+# (battery) after the last input and a window's hour runs out ~52m after its
+# last request. Two rules, both only for windows with no current checkpoint:
+#   hour mark  the crossing's request is /park instead of "reply ok" - it renews
+#              exactly the same, and leaves a checkpoint behind
+#   idle       once the machine has been idle SAFEPARK_IDLE_MIN, park every warm
+#              window now, while there are still minutes left before sleep
+# "Current" means written after the last HUMAN prompt (token-human/<sid>, stamped
+# by token-block.sh), so renewals and parks never make a checkpoint look stale.
+# Set empty to turn both off; --extend <sid> 0 still opts one session out.
+SAFEPARK="${TOKEN_SAFEPARK-1}"
+# Idle minutes before the idle rule fires. Empty = sleep-after minus 5 (floor 3):
+# 10m on AC, 5m on battery here, so a 5-minute tick always lands inside the gap.
+# A park on the very last tick still finishes, because every park the sweep types
+# starts a 180s hold on idle sleep first (token-idle.ps1 -HoldAwake).
+SAFEPARK_IDLE_MIN="${TOKEN_SAFEPARK_IDLE_MIN:-}"
+# Keep-awake (2026-09-15): instead of parking ahead of idle sleep, don't let the
+# machine sleep while a warm window still has a crossing coming - a renewal with
+# marks left, or the end-of-budget park. The idle rule resets the sleep timer
+# (token-idle.ps1 -Nudge) rather than parking, and the hour-mark rule renews
+# rather than parking while marks remain. Parks then happen only once the
+# budget is spent. Sleep resumes a full sleep-after past the last nudge.
+# Nudges from sleep-after minus KEEPAWAKE_MARGIN idle minutes (floor 3); the
+# sweep ticks every 5, so 15 leaves two ticks of slack. A failed nudge falls
+# back to the safe-park. Set empty to go back to parking ahead of sleep.
+KEEPAWAKE="${TOKEN_KEEPAWAKE-1}"
+KEEPAWAKE_MARGIN="${TOKEN_KEEPAWAKE_MARGIN:-15}"
+HUMAND="${TOKEN_HUMAN_DIR:-$HOME/.claude/token-human}"
 # How close to local midnight is too close. The date sits in the system
 # prompt, so the prefix breaks at 00:00 whatever the TTL says and a renewal
 # bought just before it buys nothing. A knob because it is the one rail a
@@ -5692,7 +5723,7 @@ renew_session() {  # renew_session <sid> [dry]
   allow=$(ext_allowed "$short"); used=$(ext_used "$short"); left=$(( allow - used ))
 
   # Local midnight, in minutes from now.
-  cl=$(( 1440 - ( $(date +%H) * 60 + $(date +%M) ) ))
+  cl=$(( 1440 - ( 10#$(date +%H) * 60 + 10#$(date +%M) ) ))  # 10#: "08" and "09" are not octal
 
   printf 'renew %s: context %dk, cache %dm left, marks %d/%d used\n' \
     "$short" $(( ctx / 1000 )) "$mins" "$used" "$allow"
@@ -5852,7 +5883,12 @@ renew_due() {  # renew_due [dry]
 # poke_due's scope, which bash's dynamic scoping makes visible here.
 park_fresh() {  # park_fresh <sid> -> 0 when a current checkpoint exists
   local sid="$1" f m turn
-  turn=$(( ${STATAT[$sid]:-0} ))
+  # The last HUMAN prompt when token-block.sh has stamped one. Falling back to
+  # the last turn of any kind is what it did before, and it errs stale: a
+  # renewal's "reply ok" is a turn, so after one the checkpoint looked old and
+  # a safe-park would have re-parked a window nobody had touched.
+  turn=$(stat -c %Y "$HUMAND/$sid" 2>/dev/null || echo 0)
+  [ "$turn" -gt 0 ] || turn=$(( ${STATAT[$sid]:-0} ))
   [ "$turn" -gt 0 ] || turn=$(( now - 3600 ))
   # Both globs, because `*.md` does not match a dotfile: a project directory
   # whose name starts with a dot - ~/.claude itself, where most of this tooling
@@ -5896,9 +5932,35 @@ poke_landed() {  # poke_landed <sid> <requests-before>
   return 1
 }
 
+# Is the machine about to sleep on an absent person? -> "go <why>" | "wait" | "err <why>"
+# Raw numbers from token-idle.ps1; the threshold is decided here (SAFEPARK_IDLE_MIN).
+safepark_idle() {  # safepark_idle [minutes-before-sleep, default 5]
+  local margin="${1:-5}" out idle ac sac sdc sb thr src
+  out=$(powershell -NoProfile -File "$(cygpath -w "$CL/token-idle.ps1" 2>/dev/null || printf '%s' "$CL/token-idle.ps1")" 2>&1 |
+        tr -d '\r' | tail -1)
+  read -r idle ac sac sdc _ <<<"$out"
+  if ! [[ $idle =~ ^-?[0-9]+$ && $ac =~ ^-?[0-9]+$ && $sac =~ ^[0-9]+$ && $sdc =~ ^[0-9]+$ ]]; then
+    printf 'err idle probe said: %s' "${out:-nothing}"; return
+  fi
+  [ "$idle" -ge 0 ] || { printf 'err GetLastInputInfo failed'; return; }
+  if [ "$ac" = 0 ]; then sb=$sdc; src=battery; else sb=$sac; src=AC; fi
+  thr="$SAFEPARK_IDLE_MIN"
+  if [ -z "$thr" ]; then
+    # Never sleeps: nothing is coming that the hour-mark rule will not see first.
+    [ "$sb" -gt 0 ] || { printf 'wait'; return; }
+    thr=$(( sb / 60 - margin )); [ "$thr" -ge 3 ] || thr=3
+  fi
+  if [ $(( idle / 60 )) -ge "$thr" ]; then
+    printf 'go idle %dm (bar %dm, sleeps at %s on %s)' $(( idle / 60 )) "$thr" \
+      "$([ "$sb" -gt 0 ] && printf '%dm' $(( sb / 60 )) || printf never)" "$src"
+  else
+    printf 'wait'
+  fi
+}
+
 poke_due() {  # poke_due [dry]
   local dry="${1:-}" f sid short exp ctx mins now n=0 seen=0 done=0 pid cl psout pidset last gap ps1 w req0 pout prc sent
-  local mode left u nextdue= due_at
+  local mode left u nextdue= due_at idleq= idlewarn= awq=
   now=$(now_s)
   # The stop switch the installer advertises. A file rather than a flag, because
   # the thing you want to stop is the SCHEDULE, and at the moment you want it
@@ -5914,7 +5976,7 @@ poke_due() {  # poke_due [dry]
   psout=$(COLUMNS=1000 ps -W 2>/dev/null)
   pidset=" $(printf '%s\n' "$psout" |
     awk 'NR > 1 && tolower($0) ~ /claude|node[.]exe/ { print $1; print $4 }' | tr '\n' ' ') "
-  cl=$(( 1440 - ( $(date +%H) * 60 + $(date +%M) ) ))
+  cl=$(( 1440 - ( 10#$(date +%H) * 60 + 10#$(date +%M) ) ))  # 10#: "08" and "09" are not octal
   # ONE awk over every payload, not two per file, and one over the pid map. This
   # scan has to fit inside an eight-minute window; there are dozens of payloads
   # on disk and two spawns each measured most of a minute, which is most of the
@@ -5996,10 +6058,60 @@ poke_due() {  # poke_due [dry]
       fi
       continue
     fi
-    [ "$mins" -le "$EXT_DUE_MIN" ] || continue
-    n=$((n + 1))
-    printf 'due %s: %dk, %dm left, marks %d/%d used\n' \
-      "$short" $(( ctx / 1000 )) "$mins" "$(ext_used "$short")" "$(ext_allowed "$short")"
+    mode=
+    left=$(( $(ext_allowed "$short") - $(ext_used "$short") ))
+    if [ "$mins" -gt "$EXT_DUE_MIN" ]; then
+      # Not at its hour mark yet, so the only rule that can act is the safe-park's
+      # idle half (see SAFEPARK). Cheapest tests first; the idle probe is a
+      # PowerShell spawn (~0.8s), so it runs at most once a sweep and only once a
+      # window has actually qualified.
+      { { [ "${SAFEPARK:-}" ] || [ "${KEEPAWAKE:-}" ]; } && [ "$(ext_allowed "$short")" -gt 0 ] &&
+        [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; } || continue
+      case "$pidset" in *" ${PIDOF[$sid]:-nopid} "*) ;; *) continue ;; esac
+      if [ "${KEEPAWAKE:-}" ] && { { [ "$left" -gt 0 ] && [ ! -f "$(block_file "$sid")" ]; } || ! park_fresh "$sid"; }; then
+        # A crossing is still coming for this window: a renewal, or the park
+        # that ends its budget. Hold the machine for it instead of parking now.
+        # One nudge a sweep covers every window.
+        if [ -z "$awq" ]; then
+          awq=$(safepark_idle "$KEEPAWAKE_MARGIN")
+          case "$awq" in
+            go\ *)
+              if [ -n "$dry" ]; then
+                printf 'keep-awake %s: dry run: would reset the sleep timer - %s\n' "$short" "${awq#go }"
+                awq=held
+              elif powershell -NoProfile -File "$(cygpath -w "$CL/token-idle.ps1" 2>/dev/null || printf '%s' "$CL/token-idle.ps1")" -Nudge >/dev/null 2>&1; then
+                printf 'keep-awake %s: %dk, %dm left, marks %d/%d used - %s: sleep timer reset\n' \
+                  "$short" $(( ctx / 1000 )) "$mins" "$(ext_used "$short")" "$(ext_allowed "$short")" "${awq#go }"
+                awq=held
+              else
+                printf 'keep-awake: nudge FAILED - falling back to the safe-park\n' >&2
+                awq=failed
+              fi ;;
+            err\ *) printf 'keep-awake: %s\n' "${awq#err }" >&2; awq=failed ;;
+          esac
+        fi
+        [ "$awq" = failed ] || continue
+      fi
+      [ "${SAFEPARK:-}" ] || continue
+      park_fresh "$sid" && continue
+      [ -n "$idleq" ] || idleq=$(safepark_idle)
+      case "$idleq" in
+        go\ *) ;;
+        err\ *)
+          # Loud, once a sweep: a probe that silently says "not idle" is a
+          # safe-park that never fires, and nothing else would show it.
+          [ -n "$idlewarn" ] || { printf 'safe-park: %s\n' "${idleq#err }" >&2; idlewarn=1; }
+          continue ;;
+        *) continue ;;
+      esac
+      n=$((n + 1)); mode=safepark
+      printf 'idle %s: %dk, %dm left, marks %d/%d used - %s, no current checkpoint: safe-parking before the machine sleeps\n' \
+        "$short" $(( ctx / 1000 )) "$mins" "$(ext_used "$short")" "$(ext_allowed "$short")" "${idleq#go }"
+    else
+      n=$((n + 1))
+      printf 'due %s: %dk, %dm left, marks %d/%d used\n' \
+        "$short" $(( ctx / 1000 )) "$mins" "$(ext_used "$short")" "$(ext_allowed "$short")"
+    fi
     # Out of marks. The budget ending is not the same as the session mattering
     # less - a mark was SPENT on this window, which is the only evidence on disk
     # that it was wanted - so the last act is a checkpoint rather than a shrug.
@@ -6012,8 +6124,7 @@ poke_due() {  # poke_due [dry]
     # feature exists to avoid, so this fires in the same danger zone the renewal
     # does. /park sends a request of its own and therefore buys another hour as a
     # side effect - which is why the checkpoint test below has to exist.
-    mode=renew
-    left=$(( $(ext_allowed "$short") - $(ext_used "$short") ))
+    [ -n "$mode" ] || mode=renew
     # EVERY mark is spent on "reply ok". The park comes AFTER the budget, not
     # out of it.
     #
@@ -6024,19 +6135,38 @@ poke_due() {  # poke_due [dry]
     # the park is what happens once they are gone: it still sends a request, so
     # it is still written while the window is warm, and it is the last thing this
     # window does before the block arms.
-    if [ "${PARK_ON_LAPSE:-}" ] && [ "$left" -le 0 ] &&
-       [ "$(ext_allowed "$short")" -gt 0 ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ] &&
-       ! park_fresh "$sid"; then
-      # Warm is the whole premise of the auto-park, so it is asserted here
-      # rather than assumed from having got this far - see EXT_PARK_MIN.
-      if [ "$mins" -lt "$EXT_PARK_MIN" ]; then
-        printf '  out of marks with %dm left - too close to the edge to park warm, letting it lapse\n' "$mins"
-        continue
+    #
+    # Since 2026-09-15 the safe-park moves the checkpoint to the FIRST crossing
+    # that finds none current: that crossing's request is /park rather than
+    # "reply ok". Later crossings renew as before, and once the marks are gone the
+    # post-budget request is /park only if the checkpoint has gone stale since -
+    # otherwise it is a plain renewal ("final"), and the block arms behind either.
+    if [ "$mode" = renew ] && [ "${PARK_ON_LAPSE:-}" ] &&
+       [ "$(ext_allowed "$short")" -gt 0 ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; then
+      if ! park_fresh "$sid"; then
+        # Warm is the whole premise of any park, so it is asserted here
+        # rather than assumed from having got this far - see EXT_PARK_MIN.
+        if [ "$left" -gt 0 ] && { [ -z "${SAFEPARK:-}" ] || [ "${KEEPAWAKE:-}" ]; }; then
+          :
+        elif [ "$mins" -lt "$EXT_PARK_MIN" ]; then
+          if [ "$left" -le 0 ]; then
+            printf '  out of marks with %dm left - too close to the edge to park warm, letting it lapse\n' "$mins"
+            continue
+          fi
+          printf '  no current checkpoint, but %dm left is too close to park warm - renewing instead\n' "$mins"
+        elif [ "$left" -gt 0 ]; then
+          mode=safepark
+          printf '  safe-park: no current checkpoint - /park renews this crossing and leaves one behind\n'
+        else
+          mode=park
+          printf '  out of marks - parking it while it is still warm, then blocking the prompt\n'
+        fi
+      elif [ "$left" -le 0 ] && [ "${SAFEPARK:-}" ]; then
+        mode=final
+        printf '  out of marks, checkpoint current - one last renewal, then blocking the prompt\n'
       fi
-      mode=park
-      printf '  out of marks - parking it while it is still warm, then blocking the prompt\n'
     fi
-    if [ "$left" -le 0 ] && [ "$mode" != park ]; then
+    if [ "$left" -le 0 ] && [ "$mode" = renew ]; then
       printf '  skipped: no marks left%s\n' \
         "$(park_fresh "$sid" && printf ', and its checkpoint is current' || printf " - /park it, the budget is the point")"
       continue
@@ -6048,8 +6178,14 @@ poke_due() {  # poke_due [dry]
     # Only the renewal is pointless near midnight. A checkpoint written at 23:50
     # is worth exactly as much as one written at noon - more, if anything, since
     # the prefix is about to break whatever anyone does.
-    if [ "$mode" = renew ] && [ "$cl" -lt "$EXT_MIDNIGHT_MIN" ]; then
-      printf '  skipped: %dm to midnight - the prefix breaks then anyway\n' "$cl"; continue
+    if { [ "$mode" = renew ] || [ "$mode" = final ]; } && [ "$cl" -lt "$EXT_MIDNIGHT_MIN" ]; then
+      printf '  skipped: %dm to midnight - the prefix breaks then anyway\n' "$cl"
+      # The last renewal is skipped, not the end of the budget: the checkpoint is
+      # current, so the block still arms.
+      if [ "$mode" = final ] && [ ! -f "$(block_file "$sid")" ]; then
+        set_block "$sid" "out of extension marks - checkpoint current at $(( ctx / 1000 ))k" | sed 's/^/  /'
+      fi
+      continue
     fi
     # An input block is a person saying "stop feeding this window", and nothing
     # in this path read it: --block only set "blocked":1 in the JSON for the
@@ -6059,7 +6195,7 @@ poke_due() {  # poke_due [dry]
     # refuses the prompt and the line is cut to the clipboard - but /park is the
     # documented way OUT of a block and the hook passes it through, so the park
     # half still fires.
-    if [ "$mode" = renew ] && [ -f "$(block_file "$sid")" ]; then
+    if { [ "$mode" = renew ] || [ "$mode" = final ]; } && [ -f "$(block_file "$sid")" ]; then
       printf '  skipped: blocked - a renewal would be refused by the prompt hook (lift it from the widget)\n'
       continue
     fi
@@ -6090,7 +6226,7 @@ poke_due() {  # poke_due [dry]
       fi
     fi
     if [ -n "$dry" ]; then
-      if [ "$mode" = park ]; then
+      if [ "$mode" = park ] || [ "$mode" = safepark ]; then
         printf '  dry run: would type /park into pid %s - a checkpoint written warm, at ~%dk\n' \
           "$pid" $(( ctx / 10000 ))
       else
@@ -6103,6 +6239,12 @@ poke_due() {  # poke_due [dry]
     # so a poke that failed outright still counted as done. Read once, print
     # once, judge once.
     req0=$(pc_requests "$sid"); req0="${req0:-0}"
+    # A park is minutes of requests, and this tick may be the last one before the
+    # machine sleeps. Start-Process, so the hold outlives this sweep.
+    case "$mode" in park|safepark)
+      powershell -NoProfile -Command "Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-File','$(cygpath -w "$CL/token-idle.ps1")','-HoldAwake','180'" \
+        >/dev/null 2>&1 || printf '  warning: could not hold off sleep - the park may not finish if the machine sleeps\n' ;;
+    esac
     # -Preserve: a forgotten line in the prompt box is not a reason to lose the
     # window. The poke takes it out, renews, and types it back unsent - and
     # refuses outright if it cannot verify the box actually emptied. Without the
@@ -6118,11 +6260,20 @@ poke_due() {  # poke_due [dry]
            powershell -NoProfile -File "$w" -TargetPid "$pid" -Short "$short" \
              -ContextK $(( ctx / 1000 )) -CacheLeftMin "$mins" \
              ${POKE_PRESERVE:+-Preserve} \
-             $([ "$mode" = park ] && printf '%s %s' -Text /park) 2>&1); prc=$?
+             $(case "$mode" in park|safepark) printf '%s %s' -Text /park ;; esac) 2>&1); prc=$?
     printf '%s\n' "$pout" | sed 's/^/  /'
     case "$pout" in
       *"POKE ok"*) ;;
-      *"SKIP"*)    continue ;;
+      *"SKIP"*)
+        # A refusal is a verdict on this moment, not on the window. It used to
+        # arm nothing, so the wake disarmed and the machine slept through every
+        # later tick that could have tried again - ea8530a3 on 2026-09-13 had two
+        # more chances before it lapsed and got neither.
+        due_at=$(( $(now_s) + 180 ))
+        if [ "$due_at" -lt "$exp" ] && { [ -z "$nextdue" ] || [ "$due_at" -lt "$nextdue" ]; }; then
+          nextdue=$due_at
+        fi
+        continue ;;
       *)           printf '  poke FAILED on pid %s (exit %s)\n' "$pid" "$prc" >&2; continue ;;
     esac
     # Typed is not sent. Verify it, and if it was not sent, press Enter again -
@@ -6161,6 +6312,9 @@ poke_due() {  # poke_due [dry]
     # the session can lift it any more - the widget is the only key.
     if [ "$mode" = park ] && [ "$sent" = 1 ] && [ ! -f "$(block_file "$sid")" ]; then
       set_block "$sid" "out of extension marks - auto-parked at $(( ctx / 1000 ))k" | sed 's/^/  /'
+    fi
+    if [ "$mode" = final ] && [ "$sent" = 1 ] && [ ! -f "$(block_file "$sid")" ]; then
+      set_block "$sid" "out of extension marks - checkpoint current at $(( ctx / 1000 ))k" | sed 's/^/  /'
     fi
   done < <(awk 'BEGIN { RS = "\0" } FNR == 1 {
       sid = FILENAME; sub(/.*\//, "", sid); sub(/\.json$/, "", sid)

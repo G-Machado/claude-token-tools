@@ -39,7 +39,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$TaskName = 'ClaudeTokenPokeWake'
+# Renamed from ClaudeTokenPokeWake on 2026-09-15: that name went bad in the task
+# store on 2026-09-14 (~15:00). Any task registered under it - even a minimal
+# one - reads back as HRESULT 0x80070057, and because Get-ScheduledTask
+# enumerates the folder, it broke EVERY lookup in \ : this script said "not
+# armed" and threw on each re-arm, and the widget saw ClaudeTokenPokeDue as
+# missing and re-installed it hourly. Cleaning the stale TaskCache entry needs
+# admin; a new name does not. Suspected cause: the scheduler's own
+# DeleteExpiredTaskAfter pass, which is why that setting is gone below.
+$TaskName = 'ClaudeTokenWakeAlarm'
 $Vbs      = Join-Path $HOME '.claude\token-pokedue.vbs'
 
 # Whether a wake timer can fire at all under the current power plan. The labels
@@ -119,12 +127,10 @@ if ($cur) {
 
 $action  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}"' -f $Vbs)
 $trigger = New-ScheduledTaskTrigger -Once -At $when
-# An end boundary is the PRICE of DeleteExpiredTaskAfter: Task Scheduler refuses
-# the pair without it (HRESULT 0x80041319, "unsupported account option", which
-# is not what is wrong and cost a registration to find out). Ten minutes past
-# the alarm - long enough that StartWhenAvailable can still run it late after a
-# boot, short enough that the spent task tidies itself up the same hour.
-$trigger.EndBoundary = $when.AddMinutes(10).ToString('yyyy-MM-ddTHH:mm:ss')
+# No EndBoundary / DeleteExpiredTaskAfter any more (see $TaskName). They existed
+# so spent alarms would not pile up, but there is only ever ONE alarm: every
+# sweep overwrites it with -Force or removes it with -Remove, so a spent one is
+# a single idle task until the next backstop tick replaces it.
 
 # WakeToRun is the whole point and has no parameter on the settings cmdlet.
 # StartWhenAvailable is the consolation prize: if the machine was off through
@@ -135,9 +141,6 @@ $settings = New-ScheduledTaskSettingsSet `
               -StartWhenAvailable -MultipleInstances IgnoreNew `
               -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -Hidden
 $settings.WakeToRun = $true
-# One-shot triggers leave the task behind once they have fired. Without this the
-# task store slowly fills with spent alarms.
-$settings.DeleteExpiredTaskAfter = 'PT2H'
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
   -Settings $settings -Force `

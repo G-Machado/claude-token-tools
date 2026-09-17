@@ -33,7 +33,11 @@
 # desktop only.
 
 param(
-  [int]    $Every  = 15,
+  # 15 -> 5 on 2026-09-15: the safe-park's idle rule has to land a tick in the
+  # 5-10 minutes between "idle" and "asleep", and the alarm cannot wake this
+  # machine on battery. The widget re-installs with this default, so it is the
+  # value that sticks.
+  [int]    $Every  = 5,
   [switch] $Remove,
   [switch] $Status
 )

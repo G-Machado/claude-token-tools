@@ -60,11 +60,28 @@ BD="${TOKEN_BLOCK_DIR:-$HOME/.claude/token-blocks}"
 # people wrote in the other, and the first can be emptied and removed.
 CD="${TOKEN_CUT_DIR:-$HOME/.claude/token-cut}"
 
+# The one thing done for every prompt (2026-09-15): stamp when a PERSON last
+# prompted this session, for the safe-park in token-sessions.sh --poke-due. It
+# needs "has anyone typed since the checkpoint", and the CLI's own last-turn
+# time cannot say - a renewal's "reply ok" and a /park are turns too. So the
+# poke's own two lines are not stamped, and neither is a prompt this hook is
+# about to refuse. Builtins only - read, =~, a redirection - so the fast path
+# still spawns nothing; mkdir runs once per machine.
+HD="${TOKEN_HUMAN_DIR:-$HOME/.claude/token-human}"
+IFS= read -r -d '' payload || true
+re_sid='"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"'
+re_auto='"prompt"[[:space:]]*:[[:space:]]*"(\[auto-renew:|/park["[:space:]])'
+if [[ $payload =~ $re_sid ]]; then
+  hsid=${BASH_REMATCH[1]}
+  if [ ! -f "$BD/$hsid" ] && ! [[ $payload =~ $re_auto ]]; then
+    { [ -d "$HD" ] || mkdir -p "$HD"; } 2>/dev/null && : > "$HD/$hsid" 2>/dev/null
+  fi
+fi
+
 # One stat, and the answer for the overwhelming majority of prompts ever
 # submitted on this machine. Created lazily by --block, removed when empty.
 [ -d "$BD" ] || exit 0
 
-payload=$(cat)
 [ -n "$payload" ] || exit 0
 
 # session_id and prompt out of the payload without a JSON parser. The prompt is
