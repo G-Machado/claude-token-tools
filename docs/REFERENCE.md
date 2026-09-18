@@ -6,13 +6,23 @@ while still working.
 
 ---
 
-## `token-sessions.sh` — the live pane
+## `token-sessions.sh` — the data engine
+
+The live readout is the **widget** (`token-widget.ps1`, the "Claude Widget" desktop shortcut).
+This script is what it reads: the same collection and the same renderers, reachable from a
+shell for snapshots, scripts and hooks.
+
+The terminal pane it used to draw is retired. `--watch`, `--browse` and `--analytics` exit with
+a pointer to the widget, because the pane needed a hand-made mintty shortcut and its own
+`.minttyrc` to look like anything, and without them it came up in whatever font and geometry the
+terminal happened to have. `TOKEN_PANE=1` opens it anyway; everything below still describes it,
+since the keys and columns are the widget's too.
 
 ```sh
 token-sessions.sh                     one snapshot, live sessions only
-token-sessions.sh --watch [secs]      live pane, redraws in place (default 60s)
-token-sessions.sh --browse            live pane, opened on the detail panel
-token-sessions.sh --analytics         history: where the spend went, and whether it improves
+token-sessions.sh --watch [secs]      retired pane, redraws in place (TOKEN_PANE=1)
+token-sessions.sh --browse            retired pane, opened on the detail panel (TOKEN_PANE=1)
+token-sessions.sh --analytics         retired pane, history tab (TOKEN_PANE=1)
 token-sessions.sh --weekly            analytics in weeks rather than days
 token-sessions.sh --all               include sessions whose process has exited
 token-sessions.sh --compact           one line per session, no titles
@@ -65,7 +75,7 @@ How it is built, because a version check is an easy thing to get obnoxiously wro
 | `TOKEN_UPDATE_REPO` | this repo | `owner/name` to check against |
 | `TOKEN_UPDATE_BRANCH` | `master` | branch the `VERSION` file is read from |
 
-### Keys in `--watch` / `--browse`
+### Keys in the widget (and in `--watch` / `--browse` under `TOKEN_PANE=1`)
 
 | key | does |
 |---|---|
@@ -234,7 +244,7 @@ command file; all the shell grammar in the script.
 | `TOKEN_RESTART_THRESHOLD` | — | context at which a restart is advised |
 | `TOKEN_CONTEXT_WARN` / `TOKEN_CONTEXT_HIGH` | — | the two context bars |
 
-### The pane — `token-sessions.sh`
+### The readouts — `token-sessions.sh`
 
 | var | default | means |
 |---|---|---|

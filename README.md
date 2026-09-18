@@ -4,7 +4,7 @@ A token-cost dashboard and budget enforcement layer for [Claude Code](https://cl
 
 Claude Code tells you nothing about what a session costs while you are in it. These tools
 read what the CLI already writes to disk and turn it into three things: a **status line** that
-prices the session you are typing into, a **live pane** that watches every session on the
+prices the session you are typing into, a **desktop widget** that watches every session on the
 machine at once, and two **hooks** that speak up at the two moments where money is actually
 lost — a prompt cycle that pulled in far more than it needed, and a big session resumed after
 its prompt cache expired.
@@ -58,7 +58,7 @@ row per cycle to `token-history.csv`. The history stores measured quantities onl
 bucket or a verdict — so retuning a threshold never invalidates it and `--stats` rescores
 whatever is already on disk.
 
-### `token-sessions.sh` — the live pane
+### `token-widget.ps1` — the live readout
 
 Every Claude Code session on the machine, sorted with the one about to lapse at the top.
 Per row: context size, spend so far split green/orange/blue (output / cache writes / cache
@@ -67,8 +67,16 @@ reads), a growth sparkline, an A–F grade, and **minutes of prompt-cache life l
 Each row also carries a verdict glyph — act now / a cut would pay / nothing to decide — off
 the same ladder the advice line underneath is written from. Rows are named from the words the
 session itself used, and `/n build-fix` names one yourself for the windows you live in.
-`--watch` redraws in place and takes keys live; `--analytics` opens the history tab (where the spend went, median and p90 per
-cycle, a 14-day sparkline, breach and gap-rewrite rates, 7d-vs-before with arrows).
+It is an always-on-top panel, opened from the **Claude Widget** shortcut that `install.sh`
+puts on your Desktop, and it reads everything through `token-sessions.sh`, which stays the data
+engine behind it (`--json`, `--checkpoints`, `--blocks`). The history view has where the spend
+went, median and p90 per cycle, a 14-day sparkline, breach and gap-rewrite rates, and
+7d-vs-before with arrows.
+
+The terminal pane that used to do this is retired: it needed a hand-made mintty shortcut and
+its own `.minttyrc`, and without both it came up in whatever font and geometry the terminal had,
+which read as a layout bug. `--watch`, `--browse` and `--analytics` now exit with a pointer to
+the widget.
 
 It exists because the expensive failure is **cross-session**: 59% of measured gap rewrites had
 another of your own sessions active during the idle window. The window you cannot see is the
@@ -122,7 +130,8 @@ failure, and nothing downloads without that keypress. `TOKEN_UPDATE_CHECK=0` tur
 
 - Claude Code, run at least once (so `~/.claude/` exists)
 - **bash 4+** and **awk** — Git Bash on Windows, or any Linux/macOS shell
-- Optional: `mintty` for the styled desktop window (`config/token-sessions.minttyrc`)
+- **Windows** for the widget itself (PowerShell/WinForms); the bash side runs anywhere
+- Optional: `clip.exe` / `pbcopy` / `xclip` for copying
 
 Developed on Windows 11 + Git Bash. The paths are all `$HOME`-relative and nothing is
 Windows-specific except the clipboard (`y`) and desktop-notification helpers, which degrade

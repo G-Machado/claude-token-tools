@@ -54,14 +54,12 @@ bash ~/.claude/token-cycles.sh 30000      # or a bare number
 You will find your breaches cluster. Measured here, the **top 10% of cycles carried 34% of all
 output** — budget overruns are not drift, they are single prompts that asked for three things.
 
-## Day 3 — open the pane
+## Day 3 — open the widget
 
-```sh
-bash ~/.claude/token-sessions.sh --watch
-```
+Double-click **Claude Widget** on your Desktop (`install.sh` put it there).
 
-Leave it in a spare terminal. Every Claude Code session on the machine, the one about to lapse
-at the top.
+Leave it running in a corner - it floats above everything. Every Claude Code session on the
+machine, the one about to lapse at the top.
 
 Per row: a **name** (derived from the session's own first prompt), the CLI's name beside it,
 **context** size, **cost** so far split green/orange/blue (output / cache writes / cache reads),
@@ -84,7 +82,7 @@ gaps in each other.
 ## Day 4 — name the rows you keep coming back to
 
 Derived names are fine for a session you will close in an hour. For the two or three you live
-in, name them yourself. In the pane, select a row and type:
+in, name them yourself. In the widget, select a row and type:
 
 ```
 /n build-fix
@@ -189,9 +187,7 @@ The floor, the break-even table, how often the hook actually fires and what set 
 rescored from `token-history.csv`. Because the history stores measured quantities and never a
 bucket or a verdict, changing a threshold never invalidates a single row already on disk.
 
-```sh
-bash ~/.claude/token-sessions.sh --analytics
-```
+Open the history view in the widget.
 
 Where the spend went, median and p90 per cycle, a 14-day sparkline, breach and gap-rewrite
 rates, and 7d-versus-before with arrows. `w` switches to weekly buckets, `[` and `]` page.
@@ -214,7 +210,7 @@ The full list is in [REFERENCE.md](REFERENCE.md); the derivations are in
 
 ## Keeping it current
 
-Once a day the pane asks GitHub whether a newer version exists. If one does, the footer says so:
+Once a day the widget asks GitHub whether a newer version exists. If one does, the footer says so:
 
 ```
 > update 1.1.0 available  u takes it, U dismisses

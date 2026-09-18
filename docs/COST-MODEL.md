@@ -201,12 +201,12 @@ they manufacture gaps in each other.
 context, idle minutes, and cache life — sorted with the one about to lapse at the top. Each row
 is nicknamed from that session's first prompt (`analyse-cycle-budget`, `experiences-playing`)
 with the CLI's derived-name suffix beside it, because the derived name alone says nothing about
-the work. `--watch [secs]` redraws it in a spare terminal and takes keys live (`j`/`k` or `1`-`9`
+the work. The **Claude Widget** shortcut on the Desktop draws it as an always-on-top panel and
+takes keys live (`j`/`k` or `1`-`9`
 select a session and open a panel with its opening and latest prompt, cycle stats and the
 park/clear call for *that* window; `t` the analytics tab, `esc` back one step, `a` closed
 sessions, `c` compact, `r` reload, `?` the key list, `q` quit);
-`--browse` starts on that panel, `--analytics` on the history tab, `--compact` drops the prompt
-line, `--all` includes closed
+`b` starts on that panel, `t` on the history tab, `c` drops the prompt line, `a` includes closed
 ones. A solid `▶` marks a session with a turn actually running — the Stop hook fires at the *end*
 of a cycle, so a transcript newer than that session's last history row means the next one has
 begun — a hollow `▷` merely the most recently touched, and `◇` a `/park` checkpoint on disk for
@@ -220,9 +220,10 @@ spend / production / control across the last week against your own median, which
 watch across weeks; `t` expands it into the whole history — where the spend went, median and p90
 per cycle, a 14-day sparkline, breach and gap-rewrite rates, and 7d-versus-before with arrows.
 Plan percentages need one calibration: run `/usage`, then set `TOKEN_PLAN_WEEK_USD` to match.
-The desktop shortcut "Claude
-Sessions" runs it in its own window — its flags live in
-`~/.claude/token-sessions-launch.sh`, not in the `.lnk`. The status line
+The shortcut runs `token-widget.vbs` through `wscript.exe`, and anything after the script path
+in its Arguments is passed to the widget (`-Every 30`, `-TopLeft`). The terminal pane this used
+to be is retired — it needed a hand-made mintty shortcut and its own `.minttyrc`, and without
+both it came up in whatever font the terminal had. The status line
 also appends ` | <id> <n>m` when *another* session is within 15 minutes of lapsing on a window
 above 60k, which is the only moment the information is still worth acting on. Both read from
 disk (`sessions/<pid>.json`, transcript records, `token-history.csv`) and cost no model tokens.

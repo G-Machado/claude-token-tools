@@ -6,9 +6,10 @@
   so that directory has to exist and have something in it.
 - **bash 4+ and awk.** On Windows this means Git Bash (bundled with Git for Windows).
   Linux and macOS already have both; on macOS the bundled bash is 3.2, so
-  `brew install bash gawk` if the pane misbehaves.
-- Optional: **mintty** for the styled desktop window, and `clip.exe` / `pbcopy` / `xclip`
-  for the `y` key. Both degrade quietly when missing.
+  `brew install bash gawk` if the readouts misbehave.
+- **Windows**, for the widget. It is a PowerShell/WinForms panel, so the always-on-top
+  readout is Windows-only; the bash side runs anywhere.
+- Optional: `clip.exe` / `pbcopy` / `xclip` for copying. Degrades quietly when missing.
 
 Every number comes off disk — nothing here talks to the Claude API. The one network call in
 the repo is the optional version check described under *Staying up to date* below.
@@ -74,8 +75,10 @@ model tokens; only *reading* it does, and reading is something you do, not somet
 ```sh
 bash ~/.claude/token-cycles.sh              # this session, cycle by cycle
 bash ~/.claude/token-sessions.sh            # one snapshot of every session
-bash ~/.claude/token-sessions.sh --watch    # the live pane
 ```
+
+Then open the **Claude Widget** shortcut the installer put on your Desktop. That is the live
+readout - an always-on-top panel over every session on the machine.
 
 After a few Claude Code cycles, `~/.claude/token-history.csv` should be growing. If it is not,
 the Stop hook is not firing — check `~/.claude/token-alert-errors.log`, which is where the hook
@@ -84,33 +87,48 @@ records its own failures rather than dying silently.
 The views are honest but thin until roughly **20 cycles** are on disk, and the grades and the
 retune sweep want **40+**. Give it a day of normal use before judging any number.
 
-## 4. Optional: the desktop window
+## 4. The desktop shortcut
 
-`bin/token-sessions-launch.sh` is the entry point for a shortcut, so the flags live in a text
-file rather than in shortcut properties. `config/token-sessions.minttyrc` styles the window.
+`install.sh` makes it: **Claude Widget**, on your Desktop. It starts
+`~/.claude/token-widget.vbs` through `wscript.exe`, which is the only way to run a PowerShell
+panel with no empty console sitting in the taskbar behind it.
 
-On Windows, make a shortcut to:
+If you need to remake or move it:
+
+```sh
+powershell -NoProfile -ExecutionPolicy Bypass   -File "$(cygpath -w ~/.claude/token-shortcut.ps1)" -Dest "$(cygpath -w ~/.claude)"
+```
+
+Options are passed straight through the `.vbs`, so a second copy of the shortcut can watch the
+same data differently - put them in the shortcut's Arguments after the script path:
 
 ```
-"C:\Program Files\Git\usr\bin\mintty.exe" -c "%USERPROFILE%\.claude\token-sessions.minttyrc" /bin/bash -l "%USERPROFILE%\.claude\token-sessions-launch.sh"
+wscript.exe "%USERPROFILE%\.claude	oken-widget.vbs" -Every 30 -TopLeft
 ```
 
-Edit the launch script to change the default view (`--watch`, `--browse`, `--analytics`,
-`--compact`, `--all`, or a refresh interval in seconds). No need to touch the shortcut again.
+For the widget to come back with the machine, copy the shortcut into `shell:startup`.
+
+There is no terminal pane any more. `token-sessions.sh --watch`, `--browse` and `--analytics`
+exit with a pointer to the widget: the pane needed a hand-made mintty shortcut and its own
+`.minttyrc`, and without both it came up in whatever font and geometry the terminal happened to
+have - which read as a layout bug rather than as a missing config. The data flags
+(`--json`, `--checkpoints`, `--blocks`, `--poke-due`) are unaffected, and `TOKEN_PANE=1` still
+opens the old pane if you want it.
 
 ## 5. Optional: calibrate the plan percentages
 
-The analytics tab can report spend as a percentage of your plan, but nothing on disk records
-what the plan is — `/usage` fetches it from the API. So it is calibrated once, by hand:
+The spend figures can be reported as a percentage of your plan, but nothing on disk records
+what the plan is - `/usage` fetches it from the API. So it is calibrated once, as environment
+variables your shell exports before the readouts run:
 
 ```sh
 export TOKEN_PLAN_WEEK_USD=250   # $ of API-equivalent spend per week
 export TOKEN_PLAN_5H_USD=20      # $ per 5-hour window
 ```
 
-Put those in `token-sessions-launch.sh` so they survive an update. Run `/usage` in Claude Code,
-read the percentage it reports, and set the ceilings so the two agree. Left unset, the tab
-reports spend without inventing a limit.
+Put them in `~/.bashrc` so they survive an update. Run `/usage` in Claude Code, read the
+percentage it reports, and set the ceilings so the two agree. Left unset, the spend is reported
+without inventing a limit.
 
 ## 6. Optional: adopt the policy
 

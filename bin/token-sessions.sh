@@ -21,12 +21,16 @@
 #                            session by the session= stamp /park writes into it,
 #                            and by mtime for older unstamped files
 #
+# The live readout is the WIDGET ("Claude Widget" on the Desktop, token-widget.ps1);
+# this script is the engine under it. The terminal pane it used to draw is retired
+# - see the gate below --watch.
+#
 # Usage:
 #   token-sessions.sh                 one snapshot, live sessions only
-#   token-sessions.sh --watch [secs]  live pane, redraws in place (default 60s)
-#   token-sessions.sh --browse        live pane, opened on the detail panel
-#   token-sessions.sh --analytics     history: where the spend went, and whether
-#                                     it is getting better
+#   token-sessions.sh --watch [secs]  retired pane (TOKEN_PANE=1 to open it)
+#   token-sessions.sh --browse        retired pane, on the detail panel
+#   token-sessions.sh --analytics     retired pane, history tab: where the spend
+#                                     went, and whether it is getting better
 #   token-sessions.sh --weekly        analytics in weeks rather than days
 #   token-sessions.sh --exclude-self  drop the cycles that ran in this tooling's
 #                                     own tree (~, .claude, the test rigs) from
@@ -650,9 +654,9 @@ BELL_CTX=$(( ${BELL_CTX:-0} > 0 ? BELL_CTX + 17 : 80 ))
 # file, so every consumer that addresses a row by its number (render, delete,
 # copy, open) is reading the same order you are looking at.
 SORTS=(lapse context cost active project)
-# Both take an environment default so the desktop shortcut can open on the view
-# you actually want - token-sessions-launch.sh is where that belongs - and so
-# the one-shot form can be asked the same questions the pane can.
+# Both take an environment default so a shortcut or a script can open on the
+# view it actually wants - export them in your shell - and so the one-shot form
+# can be asked the same questions the widget can.
 SORT="${TOKEN_SORT:-0}"
 SORTNAME=""
 FILTER="${TOKEN_FILTER:-}"
@@ -967,6 +971,23 @@ fi
 # A refresh faster than a collect takes is a redraw that never finishes.
 case "$EVERY" in *[!0-9]*) EVERY=60 ;; esac
 [ "$EVERY" -lt 2 ] && EVERY=2
+
+# The pane is not a way in any more (2026-09-17). The widget is the UI - the
+# always-on-top panel behind the "Claude Widget" desktop shortcut that
+# install.sh now creates - and a second, terminal-shaped copy of the same
+# readout was a second thing to style, install and explain for no gain: it
+# needed a hand-made mintty shortcut and its own .minttyrc, and without both it
+# came up in whatever font and geometry the terminal happened to have, which
+# read as a layout bug. The renderers stay in this file, because the data flags
+# share them. Only the ways in are shut. TOKEN_PANE=1 opens one anyway.
+if [ -z "${TOKEN_PANE:-}" ] && { [ "$WATCH" = 1 ] || [ "$SEL" = 1 ] || [ "$ANALYTICS" = 1 ]; }; then
+  printf 'token-sessions: the live pane is retired - the widget is the UI now.\n' >&2
+  printf '  start it from the "Claude Widget" desktop shortcut, or:\n' >&2
+  printf '    wscript "%%USERPROFILE%%\\.claude\\token-widget.vbs"\n' >&2
+  printf '  data still prints here: --json, --checkpoints, --blocks, --poke-due (--help lists them)\n' >&2
+  printf '  TOKEN_PANE=1 %s ... opens the old pane if you really want it.\n' "$(basename "$0")" >&2
+  exit 2
+fi
 
 # Glyphs are built with printf from escapes rather than pasted literally, so the
 # script stays pure ASCII on disk and cannot be mangled by an editor or a
@@ -3663,7 +3684,7 @@ render() {
           BLU, park, R, D, YEL, park, R, D
         printf "          the file resumes an older state, so /park again before you /clear (>%dm of work after)%s\n", ckstale, R
         printf "    %sSPEND%s%s  weighted input-equivalents priced at the API input rate. The %% is against\n", B, R, D
-        printf "          TOKEN_PLAN_5H_USD / TOKEN_PLAN_WEEK_USD, set in token-sessions-launch.sh%s\n", R
+        printf "          TOKEN_PLAN_5H_USD / TOKEN_PLAN_WEEK_USD, exported in your shell%s     \n", R
         printf "    %sABC%s%s   spend %s churn %s control. spend is against your own median (%.0fk/cyc);\n", \
           B, R, D, vv, vv, p_wpc
         printf "          spend is measured ABOVE the ~%.0fk floor, so cycle 1 is not punished for it%s\n", FLOOR, R
@@ -4063,8 +4084,8 @@ render() {
   # they can be compared against a plan at all.
   #
   # The bar and the percentage appear only when there is a ceiling to be a
-  # percentage OF. TOKEN_PLAN_5H_USD / TOKEN_PLAN_WEEK_USD live in
-  # token-sessions-launch.sh and need calibrating against /usage once;
+  # percentage OF. TOKEN_PLAN_5H_USD / TOKEN_PLAN_WEEK_USD are exported from
+  # your shell (~/.bashrc) and need calibrating against /usage once;
   # uncalibrated, this reports the spend and declines to invent a limit.
   function money(d) {
     return (d >= 100) ? sprintf("$%.0f", d) : (d >= 10) ? sprintf("$%.1f", d) : sprintf("$%.2f", d) }

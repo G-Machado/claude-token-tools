@@ -5,7 +5,10 @@
 # have to live there rather than being run out of the repo. This copies them,
 # backs up anything it would overwrite, and prints the settings.json wiring.
 #
-#   ./install.sh            copy scripts + slash commands, then print the wiring
+# The widget is the interface, so this also puts a "Claude Widget" shortcut on
+# the Desktop - the only way in, now that the terminal pane is retired.
+#
+#   ./install.sh            copy everything + slash commands, then print the wiring
 #   ./install.sh --link     symlink instead of copy (edit in the repo, live)
 #   ./install.sh --no-cmds  skip the /park, /tokens, /unpark slash commands
 #   ./install.sh --dry-run  say what would happen, change nothing
@@ -43,8 +46,11 @@ place() {  # place <src file> <dest file>
 echo "scripts -> $DEST"
 for f in "$SRC"/bin/*.sh; do place "$f" "$DEST/$(basename "$f")"; done
 
-echo "config  -> $DEST"
-place "$SRC/config/token-sessions.minttyrc" "$DEST/token-sessions.minttyrc"
+echo "windows -> $DEST"
+for f in "$SRC"/windows/*; do place "$f" "$DEST/$(basename "$f")"; done
+
+echo "share   -> $DEST"
+for f in "$SRC"/share/*; do place "$f" "$DEST/$(basename "$f")"; done
 
 if [ "$CMDS" = 1 ]; then
   echo "commands -> $DEST/commands"
@@ -60,6 +66,22 @@ if [ "$DRY" = 0 ]; then
 ' "$SRC" > "$DEST/token-tools-src"
   echo "source  -> $DEST/token-tools-src"
 fi
+
+# The desktop shortcut. The widget IS the interface - there is no terminal pane
+# to fall back on any more - so an install that stops before this one leaves
+# nothing to open, which is how a fresh clone used to end up looking like a
+# different program. A .lnk is a COM object rather than a file, so this is the
+# one step that has to go through PowerShell.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo "shortcut -> Desktop"
+    winpath() { cygpath -w "$1" 2>/dev/null || printf '%s' "$1"; }
+    if powershell -NoProfile -ExecutionPolicy Bypass          -File "$(winpath "$SRC/windows/token-shortcut.ps1")"          -Dest "$(winpath "$DEST")" $([ "$DRY" = 1 ] && printf %s -DryRun); then :; else
+      echo "  failed - make it by hand: a shortcut to" >&2
+      echo "  wscript.exe \"%USERPROFILE%\.claude\token-widget.vbs\"" >&2
+    fi ;;
+  *) echo "shortcut -> skipped (not Windows; the widget is a Windows program)" ;;
+esac
 
 cat <<'WIRING'
 
@@ -87,8 +109,8 @@ Then restart Claude Code. The Stop hook starts writing token-history.csv on
 the next cycle; everything else here reads that file, so the views are thin
 until you have ~20 cycles on disk.
 
-  bash ~/.claude/token-sessions.sh --watch    the live pane
-  bash ~/.claude/token-cycles.sh              this session, per cycle
-  bash ~/.claude/token-cycles.sh --stats      across sessions
+  the "Claude Widget" shortcut on your Desktop   the live readout
+  bash ~/.claude/token-cycles.sh                 this session, per cycle
+  bash ~/.claude/token-cycles.sh --stats         across sessions
 --------------------------------------------------------------------
 WIRING
