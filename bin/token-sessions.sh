@@ -147,7 +147,7 @@
 #            green output, orange cache writes, blue cache reads. More green is
 #            better - it is the share that went into doing the work rather than
 #            into paying rent on a window. Cache reads are MODELLED (context x
-#            2.3 requests per cycle), not measured; everything else is counted.
+#            ~5.9 full-window reads per cycle, measured from history); the rest is counted.
 #            Select the row for the same split with the figures beside it.
 #   growth   one glyph per cycle, up to twelve, height on a fixed scale so the
 #            column means the same thing on every row: how much NEW material
@@ -293,7 +293,13 @@ TOOLRE="${TOKEN_META_MATCH:-token|widget|park|checkpoint|cache|session}"
 # cycle. Real cycles here now routinely clear it, so every bar sat pinned at
 # full and the sparkline stopped distinguishing a big cycle from an enormous
 # one - which is the only thing a sparkline is for.
-RPC="${TOKEN_REQ_PER_CYCLE:-2.3}"        # requests per cycle, for the modelled cache reads
+# Full-window reads per cycle, for the modelled cache reads. Was a 2.3 guess
+# from one session, which understated every rent, heat and cut bar ~2.6x.
+# Measured since 2026-09-23 the same way token-cycles.sh does it: median of
+# cache-read / context over non-held history rows (col 9 exists since 09-05).
+RPC="${TOKEN_REQ_PER_CYCLE:-$(awk -F, 'NR>1 && $9!="" && $8=="" && $6+0>0 { printf "%.3f\n", $9/$6 }' \
+      "$HOME/.claude/token-history.csv" 2>/dev/null | sort -n | awk '{v[NR]=$1} END { print (NR >= 50) ? v[int(NR/2)+1] : 2.3 }')}"
+RPC="${RPC:-2.3}"
 PRICE_IN="${TOKEN_PRICE_IN:-5}"          # $/MTok input, Opus 5 list. Everything else
                                          # here is a multiple of it: output x5,
                                          # cache write x2, cache read x0.1.
@@ -432,7 +438,9 @@ measure_constants() {
       # reads); work is what it produced. Where the first overtakes the second
       # the window has stopped earning its keep - see the crossover below.
       bi = int($6 / 25000)
-      hr[bi] += $6 * rpc * 0.1; hw[bi] += $4 * 5; hn[bi]++
+      # Context summed raw, not as rent: the floor it must be measured above is
+      # only known in END. See the crossover.
+      hc[bi] += $6; hw[bi] += $4 * 5; hn[bi]++
       if ($3 + 0 == 1) {
         ses++
         # A session opening within `gap` minutes of the last recorded cycle
@@ -464,7 +472,9 @@ measure_constants() {
       heat = 0; pm2 = 0; pr2 = 0
       for (b = int(f / 25000) + 1; b <= 40; b++) {
         if (hn[b] < 5 || hw[b] <= 0) continue
-        rr = hr[b] / hw[b]; mid = (b + 0.5) * 25
+        # Rent above the floor, as in hot(): f is the measured floor in tokens.
+        rr = (hc[b] - hn[b] * f) * rpc * 0.1; if (rr < 0) rr = 0
+        rr = rr / hw[b]; mid = (b + 0.5) * 25
         if (pm2 > 0 && pr2 < 1 && rr >= 1) { heat = pm2 + (mid - pm2) * (1 - pr2) / (rr - pr2); break }
         pm2 = mid; pr2 = rr }
       for (k in sn) {
@@ -1311,7 +1321,7 @@ scan_checkpoints() {
         ln++
         if (ln <= 4 && match(line, /session=[0-9a-f]+/))
           sid = substr(line, RSTART + 8, RLENGTH - 8)
-        if (line ~ /^#+ +Task in flight/) { intask = 1; continue }
+        if (line ~ /^#+ +(Task in flight|Goal)/) { intask = 1; continue }
         if (intask && line ~ /^#+ /) break
         if (intask && line ~ /[^ \t]/) {
           gsub(/[|\r]/, " ", line)
@@ -2777,7 +2787,7 @@ emit_json() {
     if (R[i,11] + 0 < 3 || R[i,12] + 0 <= 0 || R[i,5] / 1000 < FLOOR) return 0
     work = R[i,12] / R[i,11] * 5
     if (work <= 0) return 0
-    return R[i,5] * RPC * 0.1 / work }
+    return (R[i,5] - FLOOR * 1000) * RPC * 0.1 / work }
 
   function urank(i,   c) {
     if (R[i,2] + 0 != 1) return -1
@@ -3102,7 +3112,7 @@ render() {
     -v v_wpc="$P_WPC" -v v_prod="$P_PROD" -v v_ctl="$P_CTL" -v v_n="$P_N" -v v_churn="$P_CHURN" \
     -v up="$G_UP" -v dn="$G_DN" -v helpv="${HELPV:-0}" \
     -v g_act="$G_ACT" -v g_cut="$G_CUT" -v g_ok="$G_OK" \
-    -v m_rem="$M_REM" -v m_heat="$M_HEAT" -v dtl="${DETAIL:-0}" \
+    -v m_rem="$M_REM" -v m_heat="$M_HEAT" -v m_max="$MAX_AT_K" -v dtl="${DETAIL:-0}" \
     -v tick="${TICK:-0}" \
     -v o_5h="$O_5H" -v o_7d="$O_7D" -v plan5="$PLAN_5H" -v planwk="$PLAN_WK" \
     -v ollv="$SHOW_OLL" -v ckstale="$CK_STALE" \
@@ -3390,6 +3400,9 @@ render() {
     CLEAR_NO = RESTART_NO / 2
     CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * 0.1)
     CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * 0.1)
+    # The ceiling, same rule as the --json block: ctxcol() paints it red.
+    MAX_AT = (m_max + 0 > 0) ? m_max + 0 : ctxmax * 0.85
+    if (MAX_AT >= ctxmax) MAX_AT = ctxmax - 1
     # The bands have to stay in order for the ladder to mean anything. On a thin
     # history the measured crossover can land above a cut bar, and a rung that
     # overtakes the one above it is worse than no rung - so it is clamped into
@@ -3598,20 +3611,19 @@ render() {
     # the whole ladder redrawn every frame whatever was on screen - four of them
     # describing colours no row had - and it is the widest line in the block. A
     # legend for something not present is not a legend, it is a manual.
-    split(FLOOR " " PARK_AT " " OVERHEAT " " CUT_PK " " CUT_NO, BEND, " ")
-    BCOL[1] = D GRN; BCOL[2] = GRN; BCOL[3] = YEL
-    BCOL[4] = ORG;   BCOL[5] = ORG; BCOL[6] = RED
+    split(FLOOR " " CUT_PK " " MAX_AT, BEND, " ")
+    BCOL[1] = D GRN; BCOL[2] = GRN; BCOL[3] = YEL; BCOL[4] = RED
     maxb = 1
     for (i = 1; i <= n; i++) {
       if (al[i] != 1) continue
-      c = cx[i] / 1000; b = 6
-      for (j = 1; j <= 5; j++) if (c < BEND[j]) { b = j; break }
+      c = cx[i] / 1000; b = 4
+      for (j = 1; j <= 3; j++) if (c < BEND[j]) { b = j; break }
       if (b > maxb) maxb = b }
-    topb = (maxb < 6) ? maxb + 1 : 6
+    topb = (maxb < 4) ? maxb + 1 : 4
     leg = sprintf("%sctx%s", D, R)
     for (j = 1; j <= topb; j++)
       leg = leg sprintf(" %s%s%s%s", BCOL[j], full, D, \
-        (j == 6) ? "+" : sprintf("%.0f%s", BEND[j], (j == topb) ? "k" : ""))
+        (j == 4) ? "+" : sprintf("%.0f%s", BEND[j], (j == topb) ? "k" : ""))
     leg = leg R
     if (COW && dwid(leg) < W - 26)
       leg = leg sprintf("   %scost%s %s%s%s%s%s%s%s %sout write read%s", D, R, GRN, full, ORG, full, BLU, full, R, D, R)
@@ -3670,8 +3682,8 @@ render() {
         printf "\n  %scolumns%s\n", B, R
         printf "    %s%s%s%s   %sone glyph per row, off the same ladder the advice below is written from\n", \
           ORG, g_act, R, rep(" ", 2), D
-        printf "    %s%s%s%s%s%s%s   size and nothing else: %.0fk floor %s %.0fk park first %s %.0fk cut if parked %s %.0fk cut%s\n", \
-          D GRN, full, GRN, full, YEL, full, ORG, FLOOR, vv, PARK_AT, vv, CUT_PK, vv, CUT_NO, R
+        printf "    %s%s%s%s%s%s%s   size and nothing else: %.0fk floor %s green is working range %s %.0fk cut pays %s %.0fk ceiling%s\n", \
+          D GRN, full, GRN, full, YEL, full, RED, FLOOR, vv, vv, CUT_PK, vv, MAX_AT, R
         printf "    %s%s%s%s%s%s%s   spent so far: output %s cache writes %s cache reads (modelled)%s\n", \
           GRN, full, ORG, full, BLU, full, D, vv, vv, R
         printf "    %s%s%s%s%s   growth per cycle, full block is the %.0fk budget %s %s%s%s over growth %s %s%s%s over output%s\n", \
@@ -3742,13 +3754,15 @@ render() {
         printf "    %s%s%s%sD again moves this log to deleted-sessions/%s   %sany other key cancels%s\n", GRY, pad("delete", 9), R, RED, R, D, R
     }
     c = cx[i] / 1000
-    if (c >= CUT_NO)   return RED
-    if (c >= CUT_PK)   return ORG
-    # The overheat bar earns its own rung: between it and the cut bar the window
-    # is not yet worth paying the floor again for, but it has already stopped
-    # returning more than it costs to hold.
-    if (c >= OVERHEAT) return ORG
-    if (c >= PARK_AT)  return YEL
+    # Three colours, each a thing to DO (2026-09-23). Red only past the ceiling:
+    # stop. Yellow from the cut bar: a restart now pays, cut at the next topic
+    # change. Everything below is the working range and stays green. The park
+    # bar used to turn rows yellow at ~81k, but it is gap advice ("/park before
+    # leaving an hour"), which the cache column and the tick already carry, and
+    # it painted every normal working session as a warning. The overheat rung
+    # went too: heat has its own column and now sits on the cut bar anyway.
+    if (c >= MAX_AT)   return RED
+    if (c >= CUT_PK)   return YEL
     # Below the floor the ladder has one more rung, and it is the only one that
     # is good news rather than merely quiet: a fresh session would START here,
     # so there is no version of clearing that leaves you smaller. Dim green and
@@ -3825,10 +3839,14 @@ render() {
     # yet was reading 37.8x, which is not a window that has stopped paying, it
     # is a window that has not begun. Overheating is a claim about a big window
     # returning too little, so it needs a big window to be about.
+    # Rent is charged above the floor only (2026-09-23). A fresh session pays the
+    # floor too, so it is not the price of holding THIS window; counting it had
+    # every session past ~70k reading 5x and firing false ACTION lines. Same
+    # subtraction as the restart formula in CLAUDE.md and as hotr() above.
     if (cy[i] < 3 || ot[i] <= 0 || cx[i] / 1000 < FLOOR) return 0
     work = ot[i] / cy[i] * 5
     if (work <= 0) return 0
-    return cx[i] * RPC * 0.1 / work }
+    return (cx[i] - FLOOR * 1000) * RPC * 0.1 / work }
   function hotcol(h) {
     return (h >= 1.5) ? RED : (h >= 1.0) ? ORG : (h >= 0.7) ? YEL : GRN }
   function hcell(i,   h) {
@@ -6500,9 +6518,9 @@ parked_json() {
         if (ln <= 4 && match(line, /session=[0-9a-f-]+/))
           sid = substr(line, RSTART + 8, RLENGTH - 8)
         if (line ~ /^# / && title == "") { title = substr(line, 3); continue }
-        if (line ~ /^#+ +Task in flight/)  { sect = "t"; continue }
-        if (line ~ /^#+ +Next step/)       { sect = "n"; continue }
-        if (line ~ /^#+ +Blocked/)         { sect = "b"; continue }
+        if (line ~ /^#+ +(Task in flight|Goal)/){ sect = "t"; continue }
+        if (line ~ /^#+ +Next( step)?$|^#+ +Next step/){ sect = "n"; continue }
+        if (line ~ /^#+ +(Blocked|Waiting on the user)/){ sect = "b"; continue }
         if (line ~ /^#+ /)                 { sect = "";  continue }
         if (sect == "" || line !~ /[^ \t\r]/) continue
         if (sect == "t" && length(task) < 400) task = task (task == "" ? "" : " ") line
@@ -6739,7 +6757,14 @@ term_cols() {
 # the height of the window.
 # Machine-readable, and the only branch that draws nothing: the widget and
 # the dashboard are the terminal-free views, so this must not touch the screen.
-if [ "$JSONQ" != 0 ]; then emit_json $(( JSONQ == 2 ? 1 : 0 )); exit 0; fi
+# Every --json run also leaves its snapshot on disk (2026-09-23) so a hook can
+# show a session its own widget row without re-running this ~6s collect. The
+# widget calls --json on every collect, so this stays as fresh as the widget.
+if [ "$JSONQ" != 0 ]; then
+  SNAPF="$CL/token-snapshot.json"
+  emit_json $(( JSONQ == 2 ? 1 : 0 )) | tee "$SNAPF.$$" && mv -f "$SNAPF.$$" "$SNAPF" 2>/dev/null
+  rm -f "$SNAPF.$$" 2>/dev/null; exit 0
+fi
 if [ "$ANALYTICS" = 1 ] && [ "$WATCH" = 0 ]; then term_cols; ROWS=99999; analytics; exit 0; fi
 
 # Asked and answered before anything is collected - neither question needs a

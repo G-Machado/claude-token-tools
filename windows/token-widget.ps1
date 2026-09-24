@@ -520,11 +520,13 @@ function Grade-Color([string]$g) {
   switch ($g) { 'A' { $Pal.green } 'B' { $Pal.green } 'C' { $Pal.blue }
                 'D' { $Pal.yellow } 'E' { $Pal.red } default { $Pal.faint } }
 }
+# Same three-colour ladder as ctxcol() in token-sessions.sh (2026-09-23): green is
+# the working range, yellow from the cut bar (a restart pays; cut at the next topic
+# change), red past the ceiling. The park bar stays a tick, not a colour - it is
+# gap advice, and colouring by it painted every normal session as a warning.
 function Band-Color([double]$k, $bands) {
-  if ($k -ge $bands.cut_no)   { return $Pal.red }
-  if ($k -ge $bands.cut_pk)   { return $Pal.orange }
-  if ($k -ge $bands.overheat) { return $Pal.orange }
-  if ($k -ge $bands.park_at)  { return $Pal.yellow }
+  if ($bands.max_at -gt 0 -and $k -ge $bands.max_at) { return $Pal.red }
+  if ($k -ge $bands.cut_pk) { return $Pal.yellow }
   $Pal.green
 }
 # Heat: what a cycle pays to HAVE the window against what that cycle produced.
@@ -1132,11 +1134,11 @@ function New-CtxBar {
   $bandList = @(
     @{ k = $Bands.clear_no; c = $Pal.grey; n = 'the floor'
        t = ("{0:N0}k - the floor. A fresh session starts at about this size, so below here clearing makes the window BIGGER: carrying on is cheaper even after the cache has lapsed. Parked, the same bar sits at {1:N0}k." -f $Bands.clear_no, $Bands.clear_pk) },
-    @{ k = $Bands.park_at; c = $Pal.yellow; n = 'park at'
+    @{ k = $Bands.park_at; c = $Pal.grey; n = 'park at'
        t = ("{0:N0}k - past here, /park before any gap over an hour. Parking then clearing is a FIXED ~{1} whatever the window grows to; carrying it across a lapse costs the context twice and keeps climbing." -f $Bands.park_at, (Tok ([double]$Bands.restart_park * 1000))) },
-    @{ k = $Bands.cut_pk; c = $Pal.orange; n = 'cut, parked'
+    @{ k = $Bands.cut_pk; c = $Pal.yellow; n = 'cut, parked'
        t = ("{0:N0}k - with a checkpoint on disk, a cut starts to pay here. Re-derivation is what you buy back by parking, so this bar sits apart from the unparked one." -f $Bands.cut_pk) },
-    @{ k = $Bands.cut_no; c = $Pal.red; n = 'cut, unparked'
+    @{ k = $Bands.cut_no; c = $Pal.yellow; n = 'cut, unparked'
        t = ("{0:N0}k - with no checkpoint, a cut only pays past here. Below it a restart is a straight loss: you pay the floor again at the 2x write rate and re-derive everything the window already knows." -f $Bands.cut_no) },
     # The ceiling, and the one mark here that is not a cost answer. Drawn as a
     # WALL rather than a threshold - wider, and it never dims once you are past
