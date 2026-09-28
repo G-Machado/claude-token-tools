@@ -20,6 +20,11 @@ bash "$CL/token-sessions.sh" --checkpoints --no-color
 echo
 echo "  this session = ${CLAUDE_CODE_SESSION_ID:-unknown}"
 echo "  write to     = $CL/checkpoints/$(basename "$PWD").<topic>.md"
+# Where this checkpoint resumes, stamped into its park line. Not recoverable
+# later: token-meta.tsv can stop growing, and the session's own cwd can differ
+# from the folder the checkpoint is named after once the shell has cd'd.
+# Windows form, because the widget that reads it is PowerShell.
+echo "  cwd          = $(cygpath -w "$PWD" 2>/dev/null || printf '%s' "$PWD")"
 
 # Branch and HEAD are what /unpark compares the checkpoint against, so they have
 # to be recorded accurately here. The dirty COUNT, not the list: a Unity repo

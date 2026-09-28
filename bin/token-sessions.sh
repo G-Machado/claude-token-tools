@@ -6512,11 +6512,14 @@ parked_json() {
       if (d > 0) { proj = lead substr(name, 1, d - 1); topic = substr(name, d + 1) }
       else       { proj = lead name; topic = "general" }
 
-      sid = ""; title = ""; task = ""; nxt = ""; blk = ""; sect = ""; ln = 0
+      sid = ""; title = ""; task = ""; nxt = ""; blk = ""; sect = ""; ln = 0; scwd = ""
       while ((getline line < path) > 0) {
         ln++
         if (ln <= 4 && match(line, /session=[0-9a-f-]+/))
           sid = substr(line, RSTART + 8, RLENGTH - 8)
+        # cwd= runs to the closing -->, because a path can hold spaces.
+        if (ln <= 4 && line ~ /^<!-- park:/ && (ci = index(line, " cwd=")) > 0) {
+          scwd = substr(line, ci + 5); sub(/[ \t]*-->.*$/, "", scwd) }
         if (line ~ /^# / && title == "") { title = substr(line, 3); continue }
         if (line ~ /^#+ +(Task in flight|Goal)/){ sect = "t"; continue }
         if (line ~ /^#+ +Next( step)?$|^#+ +Next step/){ sect = "n"; continue }
@@ -6529,7 +6532,11 @@ parked_json() {
         if (ln > 400) break }
       close(path)
 
-      cwd = (sid != "" && sid in CW) ? CW[sid] : ""
+      # The stamp first: it is where the checkpoint was written from, which the
+      # meta can only guess at (a shell that changed directory, or a meta that
+      # stopped being written).
+      cwd = scwd
+      if (cwd == "" && sid != "" && sid in CW) cwd = CW[sid]
       if (cwd == "" && proj in PCW) cwd = PCW[proj]
       alive = (sid != "" && index(live, " " sid " ")) ? 1 : 0
       # How far the work ran on past the checkpoint. Only meaningful with a

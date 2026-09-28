@@ -94,7 +94,8 @@ there will ever be to do it). Fires in two tiers, 60k and 130k, and logs every f
 `/park` writes a resume checkpoint — task in flight, `file:line` state, verified vs assumed,
 next step — to `~/.claude/checkpoints/<project>.<topic>.md`, then tells you whether to
 compact, clear, or leave the session open. `/unpark` picks it back up in a fresh session
-without re-deriving.
+without re-deriving. `/handoff` does both ends at once: parks, opens a new window already
+running `/unpark <topic>`, and blocks the old one so it stays read-only for consultation.
 
 The point is the arithmetic: re-derivation after a `/clear` measured **34,066 tokens without a
 checkpoint** (n=29) and **~5k with one**, which is what makes clearing cheap enough to be the

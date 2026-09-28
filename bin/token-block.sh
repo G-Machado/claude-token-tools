@@ -183,6 +183,10 @@ case "$why" in "the cache expired"*)
   case "$prompt" in /clear|/clear\ *|/exit|/exit\ *|/quit) exit 0 ;; esac ;;
 "the window is past"*)
   case "$prompt" in /clear|/clear\ *|/exit|/exit\ *|/quit|/park|/park\ *|/compact|/compact\ *) exit 0 ;; esac ;;
+# /handoff blocks the window it leaves: the work is in the new one now, and a
+# prompt here would fork the strand. Leaving is the one thing it should do.
+"handed off"*)
+  case "$prompt" in /exit|/exit\ *|/quit) exit 0 ;; esac ;;
 esac
 
 mkdir -p "$CD" 2>/dev/null
@@ -205,11 +209,17 @@ case "$why" in
 lift the block and send once - the rewrite is paid once, then it is warm again." ;;
   "the window is past"*) state="/park then /clear (new topic) or /compact (same topic) - both pass this block.
 If this cycle really must run here, lift it once; the next cycle past the bar is refused again." ;;
+  "handed off"*) state="it is read-only now; the work carries on in the window
+/handoff opened. Close this one, or lift the block to ask it something." ;;
   *) state="it has been checkpointed already, and the cheapest thing it can do now is end." ;;
+esac
+case "$why" in
+  "handed off"*) where="Paste it into the new window instead - /exit here passes." ;;
+  *) where="/clear this window and paste it into the fresh one, or unpark the checkpoint there." ;;
 esac
 msg="[token-block] $why, so this window is refusing every prompt - $state
 Your prompt has been cut to the clipboard (and saved to $CD/$sid.prompt).
-/clear this window and paste it into the fresh one, or unpark the checkpoint there.
+$where
 Nothing typed here lifts the block: press u on this row in the token widget, or run
 token-sessions.sh --unblock ${sid%%-*} from any shell."
 

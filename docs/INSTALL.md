@@ -28,7 +28,7 @@ backs up anything it would overwrite as `<name>.bak-<timestamp>`.
 | flag | effect |
 |---|---|
 | `--link` | symlink instead of copy, so edits in the repo are live |
-| `--no-cmds` | skip `/park`, `/tokens`, `/unpark` |
+| `--no-cmds` | skip `/park`, `/tokens`, `/unpark`, `/handoff`, `/arc` |
 | `--dry-run` | print what would happen, change nothing |
 
 The scripts address each other by absolute path (`$HOME/.claude/...`), which is why they have

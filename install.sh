@@ -10,7 +10,7 @@
 #
 #   ./install.sh            copy everything + slash commands, then print the wiring
 #   ./install.sh --link     symlink instead of copy (edit in the repo, live)
-#   ./install.sh --no-cmds  skip the /park, /tokens, /unpark slash commands
+#   ./install.sh --no-cmds  skip the slash commands (/park, /unpark, /handoff, ...)
 #   ./install.sh --dry-run  say what would happen, change nothing
 set -u
 SRC="$(cd "$(dirname "$0")" && pwd)"

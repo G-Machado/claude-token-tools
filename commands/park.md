@@ -28,7 +28,7 @@ in the window, write "unknown" rather than reading. Pointers (`file:line`, comma
 prose about code. **Under ~40 lines.** Omit any section that would be empty.
 
 ```markdown
-<!-- park: session=<session id above> topic=<slug> -->
+<!-- park: session=<session id above> topic=<slug> cwd=<cwd above> -->
 # <project> — <topic> — <YYYY-MM-DD HH:MM>
 
 ## Goal
@@ -53,7 +53,8 @@ prose about code. **Under ~40 lines.** Omit any section that would be empty.
 <questions or tests only the user can do; omit if none>
 ```
 
-The `<!-- park: -->` line must be exact: `token-sessions.sh` matches it to the window.
+The `<!-- park: -->` line must be exact: `token-sessions.sh` matches it to the window, and the
+parked widget resumes in its `cwd=` (copy the path verbatim, spaces and all; it runs to ` -->`).
 
 **Decided — do not reopen** is the section that pays for the checkpoint. Catching up costs only ~7k
 of tokens either way; what a cold session actually loses is *why* things are the way they are, and

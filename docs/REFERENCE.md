@@ -221,6 +221,7 @@ says which case it was. Every firing appends a row to `token-gap-warn.log`.
 | `/tokens` | per-cycle cost for the session you are in |
 | `/park` | write a resume checkpoint, then advise compact / clear / leave-open |
 | `/unpark` | resume from a checkpoint after a `/clear`, without re-deriving |
+| `/handoff` | park, open a new window on `/unpark <topic>`, and block this one (read-only) |
 
 `/park` and `/unpark` each build their context block in a **file** (`token-park-context.sh`,
 `token-unpark-context.sh`) rather than inline in the command. The permission check statically

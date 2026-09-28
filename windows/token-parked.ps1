@@ -896,6 +896,72 @@ function Log-Parked($Action, $C) {
   } catch { }
 }
 
+# A checkpoint with no known directory: parked before /park stamped cwd= into
+# its park line, by a session token-meta.tsv never recorded. A folder named
+# after the project under the home directory is looked for first, and a single
+# hit is taken as the answer; none or several, and a folder picker asks. What
+# is chosen is stamped into the checkpoint, so this runs once per checkpoint.
+function Find-ProjectDirs([string]$Name) {
+  $skip = @('AppData', 'node_modules', 'Library', 'Temp', 'obj', 'bin', 'Packages')
+  $hits = New-Object System.Collections.Generic.List[string]
+  $level = @($env:USERPROFILE)
+  for ($d = 0; $d -lt 4 -and $level.Count; $d++) {
+    $next = New-Object System.Collections.Generic.List[string]
+    foreach ($dir in $level) {
+      foreach ($k in @(Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue)) {
+        if ($k.Name -ieq $Name) { $hits.Add($k.FullName); continue }
+        if ($k.Name.StartsWith('.') -or $skip -contains $k.Name) { continue }
+        if ($k.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        $next.Add($k.FullName)
+      }
+    }
+    $level = $next.ToArray()
+  }
+  return ,$hits.ToArray()
+}
+
+function Stamp-Cwd($C, [string]$Dir) {
+  $p = [string]$C.path
+  if ($p -match '^/([a-zA-Z])/(.*)$') { $p = '{0}:\{1}' -f $Matches[1], ($Matches[2] -replace '/', '\') }
+  try {
+    $text  = [IO.File]::ReadAllText($p)
+    $first = ($text -split "`r?`n", 2)[0]
+    if ($first -match '^<!-- park:' -and $first -notmatch ' cwd=') {
+      $i = $first.LastIndexOf('-->')
+      $text = $first.Substring(0, $i).TrimEnd() + " cwd=$Dir -->" + $text.Substring($first.Length)
+    } elseif ($first -notmatch '^<!-- park:') {
+      $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+      $text = "<!-- park: cwd=$Dir -->$nl" + $text
+    } else { return }
+    [IO.File]::WriteAllText($p, $text, (New-Object Text.UTF8Encoding $false))
+    Log-Parked 'stamp-cwd' $C
+  } catch { Log-Parked 'stamp-cwd-failed' $C }
+}
+
+function Resolve-Cwd($C) {
+  $hits = @(Find-ProjectDirs ([string]$C.project))
+  if ($hits.Count -eq 1) {
+    $dir = $hits[0]; $how = 'cwd-found'
+  } else {
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = if ($hits.Count) {
+      "{0}: {1} folders are named {2} - pick the one to resume in" -f $C.topic, $hits.Count, $C.project
+    } else { "{0}: no folder named {1} under your home - where does it live?" -f $C.topic, $C.project }
+    $dlg.SelectedPath = if ($hits.Count) { $hits[0] } else { $env:USERPROFILE }
+    # Owned by the pane, or a topmost pane draws over its own dialog.
+    $owner = New-Object System.Windows.Forms.NativeWindow
+    $owner.AssignHandle((New-Object Windows.Interop.WindowInteropHelper $win).Handle)
+    try { $ok = $dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK }
+    finally { $owner.ReleaseHandle() }
+    if (-not $ok) { Flash ("{0}: no folder chosen" -f $C.topic); return $null }
+    $dir = $dlg.SelectedPath; $how = 'cwd-picked'
+  }
+  $C.cwd = $dir
+  Log-Parked $how $C
+  Stamp-Cwd $C $dir
+  return $dir
+}
+
 # A terminal in the project directory, already running it. Windows Terminal when
 # it is there, because a bare conhost window is a worse place to hold a session
 # for an hour; plain cmd otherwise, which is always there.
@@ -906,10 +972,7 @@ function Log-Parked($Action, $C) {
 function Unpark-Row {
   $c = Selected-Row
   if (-not $c) { Flash 'nothing selected'; return }
-  if (-not $c.cwd) {
-    Flash ("{0}: no directory known for this one - open it with o and cd there yourself" -f $c.topic)
-    return
-  }
+  if (-not $c.cwd -and -not (Resolve-Cwd $c)) { return }
   if (-not (Test-Path $c.cwd)) {
     Flash ("{0}: {1} is not there any more" -f $c.topic, $c.cwd)
     Log-Parked 'resume-nocwd' $c
@@ -970,7 +1033,6 @@ function Open-Checkpoint {
 function Open-Folder {
   $c = Selected-Row
   if (-not $c) { return }
-  if ($c.cwd -and (Test-Path $c.cwd)) { Start-Process explorer.exe $c.cwd; Flash ("opened {0}" -f $c.project) }
   if ($c.cwd -and (Test-Path $c.cwd)) { Start-Process explorer.exe $c.cwd; Log-Parked 'open-folder' $c; Flash ("opened {0}" -f $c.project) }
 }
 
