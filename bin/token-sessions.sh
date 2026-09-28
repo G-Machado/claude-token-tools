@@ -1516,7 +1516,7 @@ collect() {
   local now pidset psout f b k v rest cf d best ckmt age nother nmeta
   local pid sid alive name cwd proj short tf mtime idle left act probe page touched
   local ctx trend cyc otot olast rlast stop title lastp run parked ckage ckname
-  local cktopic ckothers ckdist cached pcwd nclosed nhidden srun srts runsince
+  local cktopic ckothers ckdist cached pcwd ccwd cmodel ceff nclosed nhidden srun srts runsince
   local nag naglive agcost aglist
   local -a SHOW CAND
   now=${EPOCHSECONDS:-$(date +%s)}
@@ -1637,7 +1637,8 @@ collect() {
     while IFS=$'\t' read -r k v; do [ -n "$k" ] && TI[$k]="$v"; done < "$TITLES"
   fi
 
-  # sid -> "mtime<TAB>last-activity<TAB>cwd", for CLOSED sessions only. A closed
+  # sid -> "mtime<TAB>last-activity<TAB>cwd<TAB>model<TAB>effort". Live
+  # sessions add a row when what they answer with changes. A closed
   # session has to be probed the same way a live one is (see below), and that
   # probe is the dearest read left in here - so it is done once per session and
   # remembered. Keyed by mtime so a transcript that grows is re-probed and one
@@ -1912,6 +1913,23 @@ EOF
       case "$tage" in ''|*[!0-9-]*) tage=-1 ;; esac
       [ "$page" -ge 0 ] && act=$(( now - page ))
       [ "${stop:-0}" -gt "$act" ] && act=$stop
+      # Cached here as well as below. The closed branch used to be the only
+      # writer, but closed sessions are only walked under --all, which nothing
+      # passes any more - so the file stopped growing and the parked pane lost
+      # the model and effort of every session after that. Written only when
+      # the row is missing or says something different, so a collect every few
+      # seconds adds nothing. Its mtime goes stale at once, which just makes the
+      # closed branch re-probe once after the session ends, as it would anyway.
+      if [ -n "$pcwd" ]; then
+        cached="${LA[$sid]:-}"
+        cached=${cached#*	}; cached=${cached#*	}
+        ccwd=${cached%%	*}; cached=${cached#*	}
+        cmodel=${cached%%	*}; ceff=${cached#*	}
+        if [ "$ccwd" != "$pcwd" ] || [ "$cmodel" != "$pmodel" ] || [ "$ceff" != "$peff" ]; then
+          printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$mtime" "$act" "$pcwd" "$pmodel" "$peff" >> "$META"
+          LA[$sid]="$mtime	$act	$pcwd	$pmodel	$peff"
+        fi
+      fi
     else
       cached="${LA[$sid]:-}"
       # Five fields or it cannot answer. Rows written before the model and
