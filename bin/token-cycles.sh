@@ -166,7 +166,11 @@ RESTART="${TOKEN_RESTART_THRESHOLD:-60000}"
 # restart still pays with only 3 cycles left. The old 100k/140k came from the raw
 # unweighted model on a minimum-not-median floor and were 2-3x too low - 100k was
 # firing on 31% of cycles, well outside the 5-25% band.
-CTXWARN="${TOKEN_CONTEXT_WARN:-200000}"
+CTXWARN="${TOKEN_CONTEXT_WARN:-150000}"
+# 2026-09-23: 200k -> 150k. Re-derived with 5.9 measured full-window reads per
+# cycle and 3 cycles remaining (median): the cut bar is ~150k (token-sessions.sh
+# cut_no 153k). The alert fires on the crossing only, so the rescored per-cycle
+# rate in --stats rises but the number of messages does not.
 
 # Statusline park hint. Not an alert band - it is the one signal that reaches
 # the user BEFORE they step away, which is the only moment the gap cost is
@@ -182,7 +186,13 @@ CTXHIGH="${TOKEN_CONTEXT_HIGH:-300000}"
 # catch up" from "reading something new"), so it is a stated parameter, not an
 # observation. Good notes are what make it small; it is the one term in the
 # break-even you control directly.
-REDERIVE="${TOKEN_REDERIVE_COST:-34000}"   # measured median 34,066, n=29 (2026-08-24); was an assumed 15,000
+# 2026-09-23: --stats measures a median of 6,704 over 156 resumed sessions,
+# once 12 headless probe rows (claude -p, ~29.5k starts) were pruned - they had
+# dragged it to 2,626. Cross-checked: resumed sessions sit ~6-7k above fresh
+# ones at cycles 1, 2 and 3 alike. Taken against the floor median rather than
+# the minimum (the older 34,066 was taken
+# against the minimum and double-counted the floor spread). The default follows.
+REDERIVE="${TOKEN_REDERIVE_COST:-6700}"   # was 34,000 (n=29, 2026-08-24); 15,000 before that
 
 # Price weights, relative to an uncached input token. Source: the bundled
 # claude-api skill; local copy in ~/.claude/pricing-reference.md. Raw token counts
@@ -193,10 +203,22 @@ W_OUT="${TOKEN_W_OUTPUT:-5}"
 W_WRITE="${TOKEN_W_CACHE_WRITE:-2}"
 W_READ="${TOKEN_W_CACHE_READ:-0.1}"
 
-# Requests per cycle. Scales the weighted break-even linearly. Measured at 2.3 on
-# one session (30 deduped requests / 13 cycles); the CSV does not record it, so
-# like TOKEN_REDERIVE_COST this is a stated parameter, not a measurement.
-REQS="${TOKEN_REQS_PER_CYCLE:-2.3}"
+# Full-window reads per cycle: the carry multiplier. Scales the weighted
+# break-even linearly. It was a 2.3 requests/cycle guess from one session; the
+# CSV has carried cache reads (col 9) since 2026-09-05, so it is now measured as
+# the median of cache-read / end-of-cycle context over non-held cycles. That is
+# truer than a raw request count, since early requests read a smaller window.
+# Needs 50 rows; an explicit TOKEN_REQS_PER_CYCLE always wins (what-if runs).
+read_reqs() {
+  [ -f "$HIST" ] || { echo 2.3; return; }
+  m=$(awk -F, 'NR>1 && $9!="" && $8=="" && $6+0>0 { printf "%.3f\n", $9/$6 }' "$HIST" 2>/dev/null \
+      | sort -n | awk '{v[NR]=$1} END { if (NR >= 50) print v[int(NR/2)+1] }')
+  echo "${m:-2.3}"
+}
+if [ -n "${TOKEN_REQS_PER_CYCLE:-}" ]; then REQS="$TOKEN_REQS_PER_CYCLE"; REQS_SRC="TOKEN_REQS_PER_CYCLE"
+elif [ "$MODE" = "status" ]; then REQS=2.3; REQS_SRC="unused"   # status line renders constantly; it never prints a break-even
+else REQS=$(read_reqs); REQS_SRC="measured: median cache-read / context, non-held cycles"
+  [ "$REQS" = "2.3" ] && REQS_SRC="default - under 50 measured rows"; fi
 
 # Cold floor: context occupied at cycle 1, before a session has done any work of
 # its own - system prompt, tool schemas, skill listings, CLAUDE.md, memory. It is
@@ -309,7 +331,8 @@ if [ "$MODE" = "stats" ]; then
   fi
   awk -F, -v budget="$BUDGET" -v gbudget="$GROWTH" -v restart="$RESTART" \
       -v ctxwarn="$CTXWARN" -v ctxhigh="$CTXHIGH" -v rederive="$REDERIVE" \
-      -v wwrite="$W_WRITE" -v wread="$W_READ" -v reqs="$REQS" \
+      -v wwrite="$W_WRITE" -v wread="$W_READ" -v reqs="$REQS" -v wout="$W_OUT" \
+      -v reqsrc="$REQS_SRC" \
       -v contgap="${TOKEN_CONTINUATION_GAP:-30}" '
   function commify(n,   _s,_out,_len,_i,_rem) {
     _s = sprintf("%d", n); _out = ""; _len = length(_s)
@@ -336,8 +359,34 @@ if [ "$MODE" = "stats" ]; then
     split(s, p, " "); split(p[1], a, "-"); split(p[2], b, ":")
     return ((a[1] * 12 + a[2]) * 31 + a[3]) * 1440 + b[1] * 60 + b[2]
   }
-  NR == 1 { next }                      # header
+  # Exact day number (proleptic Gregorian), for week bucketing - unlike tomin
+  # this has to be right across month boundaries.
+  function dnum(s,   a,y,m) {
+    split(substr(s, 1, 10), a, "-"); y = a[1] + 0; m = a[2] + 0
+    if (m < 3) { y--; m += 12 }
+    return 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + a[3]
+  }
+  NR == 1 { mon0 = dnum("2026-08-10"); next }   # header; mon0 is a known Monday
   NF < 7  { next }                      # partial line from a torn write
+  {
+    # --- weekly rollup, cost weights, column coverage -----------------------
+    # Weighted = output x wout + re-cache x wwrite + cache reads x wread. Reads
+    # exist only on rows with column 9, so older weeks under-count that term.
+    wk = int((dnum($1) - mon0 + 7000) / 7)
+    if (!(wk in wkn)) { nwk++; wkord[nwk] = wk; wklab[wk] = substr($1, 1, 10) }
+    wkn[wk]++; wko[wk] += $4; wkr[wk] += $5
+    if ($4 + 0 > budget) wkb[wk]++
+    if (!((wk, $2) in wks)) { wks[wk, $2] = 1; wkns[wk]++ }
+    cw = $4 * wout + $5 * wwrite + ($9 != "" ? $9 * wread : 0)
+    wkw[wk] += cw; wOut += $4 * wout; wWrite += $5 * wwrite; wRead += ($9 != "" ? $9 * wread : 0)
+    if ($9 != "") { n9++; if (first9 == "") first9 = $1 }
+    if ($8 != "") nheld++
+    # Full-window reads per cycle, measured: total cache reads / end-of-cycle
+    # context. Early requests in a cycle read a smaller window, so this is a
+    # truer carry multiplier than a raw request count. Held (poke) cycles are
+    # excluded - they are not work and read the window once.
+    if ($9 != "" && $8 == "" && $6 + 0 > 0) { nrq++; rq[nrq] = $9 / $6 }
+  }
   {
     n++
     sess[$2] = 1
@@ -402,6 +451,43 @@ if [ "$MODE" = "stats" ]; then
     printf "  cycles per session: %.1f\n", n / ns
     printf "\n"
 
+    # --- weighted spend ------------------------------------------------------
+    wT = wOut + wWrite + wRead
+    if (wT > 0) {
+      printf "  weighted spend (input-equivalents): %s\n", commify(wT)
+      printf "    output x%s %s (%.0f%%)   re-cache x%s %s (%.0f%%)   reads x%s %s (%.0f%%)\n", \
+        wout, commify(wOut), wOut * 100 / wT, wwrite, commify(wWrite), wWrite * 100 / wT, \
+        wread, commify(wRead), wRead * 100 / wT
+      printf "\n"
+    }
+
+    # --- coverage -------------------------------------------------------------
+    # Columns were added over time; a figure from a late column describes only
+    # the rows that carry it.
+    printf "  column coverage: read/reqs on %d of %d rows%s; held on %d\n", \
+      n9 + 0, n, (n9 > 0 ? " (since " substr(first9, 1, 10) ")" : ""), nheld + 0
+    printf "\n"
+
+    # --- weekly trend ---------------------------------------------------------
+    if (nwk >= 2) {
+      printf "  weekly (Mon-Sun, labelled by first active day):\n"
+      printf "    %-10s %6s %5s %11s %11s %6s %12s\n", "week", "cycles", "sess", "output", "re-cache", "breach", "weighted"
+      for (i = 1; i <= nwk; i++) {
+        k = wkord[i]
+        printf "    %-10s %6d %5d %11s %11s %5.0f%% %12s%s\n", wklab[k], wkn[k], wkns[k], \
+          commify(wko[k]), commify(wkr[k]), (wkb[k] + 0) * 100 / wkn[k], commify(wkw[k]), \
+          (i == nwk ? "  (in progress)" : "")
+      }
+      printf "\n"
+    }
+
+    # --- requests per cycle -----------------------------------------------------
+    # Measured once there is enough of it; an explicit TOKEN_REQS_PER_CYCLE
+    # still wins, so a what-if run stays possible.
+    if (reqsrc ~ /^measured/) reqsrc = reqsrc " (n=" nrq ")"
+    printf "  full-window reads per cycle: %.1f  (%s)\n", reqs, reqsrc
+    printf "\n"
+
     # --- where the re-cache actually goes ----------------------------------
     if (gn >= 2) {
       printf "  re-cache split over %d follow-on cycles:\n", gn
@@ -463,7 +549,7 @@ if [ "$MODE" = "stats" ]; then
       # carry/cycle = dC * reqs * wread ; restart = (floor + rederive) * wwrite
       printf "  restart pays off after N more cycles of work:\n"
       printf "    (weighted: savings are cache reads x%s, restart is a cache write x%s,\n", wread, wwrite
-      printf "     at an assumed %s requests per cycle)\n", reqs
+      printf "     at %.1f full-window reads per cycle)\n", reqs
       for (i = 1; i <= 4; i++) {
         c = (i == 1 ? 60000 : i == 2 ? ctxwarn : i == 3 ? 120000 : ctxhigh)
         save = (c - fmed - rdu) * reqs * wread
@@ -498,6 +584,17 @@ if [ "$MODE" = "stats" ]; then
     printf "  5-25%%; judge the union against ~45-60%% with four signals live.\n"
     printf "\n"
   }' "$HIST"
+  # Session scorecard (SessionEnd hook, token-scorecard.js): last 7 days.
+  SC="$HOME/.claude/token-scorecard.csv"
+  if [ -f "$SC" ]; then
+    awk -F, -v since="$(date -d '7 days ago' '+%Y-%m-%d %H:%M' 2>/dev/null)" '
+      NR > 1 && $1 >= since { n++; cyc += $4; if ($4 <= 2) one++; if ($5 >= 150000) big++
+        if ($5 > pk) pk = $5; usd += $8; rd += $9; told += ($13 > 0); took += $14; den += $15 }
+      END { printf "  SESSIONS 7d (token-scorecard.csv)\n"
+        if (!n) { printf "    no sessions ended in the last 7 days\n\n"; exit }
+        printf "    %d ended, %.1f cycles each, %d one/two-cycle (%.0f%%), %d peaked past 150k (max %dk)\n", n, cyc / n, one, 100 * one / n, big, pk / 1000
+        printf "    $%.2f total, read share %.0f%% mean; cut told in %d, taken in %d; full reads refused %d\n\n", usd, rd / n, told, took, den }' "$SC"
+  fi
   exit 0
 fi
 
@@ -690,6 +787,16 @@ if [ "$MODE" = "alert" ] && [ -f "$HIST" ]; then
   fi
 fi
 
+# Headless (claude -p, entrypoint sdk-cli) sessions are test probes here - "."
+# and "reply with just OK" - not work. Found 2026-09-23: 12 such rows sat at a
+# ~29.5k cold start and were the entire "half-floor" minimum in --stats, and
+# every one counted as a one-cycle session. Same reasoning as TOKEN_RENEWAL:
+# keep them out of the history everything is measured from.
+ROWHIST="$HIST"
+if [ "$MODE" = "alert" ] && head -c 20000 "$F" 2>/dev/null | grep -q '"entrypoint":"sdk-cli"'; then
+  ROWHIST=""
+fi
+
 awk -v budget="$BUDGET" -v gbudget="$GROWTH" -v restart="$RESTART" -v mode="$MODE" \
     -v floor="$FLOOR" -v rederive="$REDERIVE" -v retune="$RETUNE" \
     -v wout="$W_OUT" -v wwrite="$W_WRITE" -v wread="$W_READ" -v reqs="$REQS" \
@@ -698,7 +805,7 @@ awk -v budget="$BUDGET" -v gbudget="$GROWTH" -v restart="$RESTART" -v mode="$MOD
     -v others="$OTHERS" \
     -v state="$STATE" -v statekey="$SESSION_KEY" \
     -v poke="$POKE_TS" -v pokekind="$POKE_KIND" \
-    -v hist="$HIST" -v now="$(date '+%Y-%m-%d %H:%M')" '
+    -v hist="$ROWHIST" -v now="$(date '+%Y-%m-%d %H:%M')" '
 function commify(n,   _s, _out, _len, _i, _rem) {
   _s = sprintf("%d", n); _out = ""; _len = length(_s)
   for (_i = 1; _i <= _len; _i++) {
@@ -853,6 +960,11 @@ END {
       save = (occ - floor - rederive) * reqs * wread
       cost = (floor + rederive) * wwrite
       cm = "context window is at " commify(occ) " tokens - the reason to cut is attention dilution, compaction risk and headroom, not cost"
+      # Past the high band, say it plainly. Measured 2026-09-22: output per cycle
+      # is flat (~12-15k) from 80k to 300k+, so a bigger window is not buying more
+      # work - only a dearer read per request and a closer compaction.
+      if (band == 2)
+        cm = "CUT NOW: context passed the " commify(ctxhigh) " high band at " commify(occ) " - /park and /clear at the next clean point; output per cycle does not rise with window size, only the risk does. " cm
       if (save <= 0)
         cm = cm "; a fresh session would sit near " commify(floor + rederive) ", so it saves nothing either"
       else
@@ -902,7 +1014,7 @@ END {
   if (mode == "status") {
     gLast = (cycle > 1) ? r[cycle] - r[cycle-1] : r[cycle]
     if (gLast < 0) gLast = 0
-    mark = (occ >= ctxhigh) ? "!" : ((occ >= ctxwarn) ? "*" : "")
+    mark = (occ >= ctxhigh) ? "! CUT" : ((occ >= ctxwarn) ? "*" : "")
 
     # Cache life. Blank on the first cycle of a session (nothing to measure
     # from). Once it reads COLD the rewrite is already sunk, which is exactly
@@ -973,3 +1085,28 @@ END {
   printf "  rescore with: /tokens recon | /tokens change | /tokens feature\n"
   printf "\n"
 }' "$F"
+
+# --- breaching prompts ------------------------------------------------------
+# When this cycle's row carries the output flag, keep the first line of the
+# prompt that started it, so breaches can be reviewed for bundled
+# discovery + design + implementation. Separate file: prompt text never goes
+# into the CSV, which stays raw numbers. Fail-open, prints nothing.
+if [ "$MODE" = "alert" ] && [ -f "$HIST" ] && [ -f "$F" ]; then
+  _sid=$(basename "$F" .jsonl | cut -c1-8)
+  _row=$(tail -1 "$HIST" 2>/dev/null)
+  case "$_row" in
+    *",$_sid,"*)
+      _fl=$(printf '%s' "$_row" | cut -d, -f7)
+      _hd=$(printf '%s' "$_row" | cut -d, -f8)
+      case "$_fl" in *o*)
+        if [ -z "$_hd" ]; then
+          # Last human turn: a user record whose content is a plain string,
+          # not a tool_result array.
+          _p=$(grep '"type":"user"' "$F" 2>/dev/null | grep -v '"tool_result"' | grep -v '"isMeta":true' | tail -1 \
+               | sed -n 's/.*"content":"\(\([^"\]\|\.\)*\)".*/\1/p' | sed 's/\n.*//' | cut -c1-160)
+          printf '%s\t%s\n' "$(printf '%s' "$_row" | cut -d, -f1-4)" "${_p:-<prompt not found>}" \
+            >> "$HOME/.claude/token-breach-prompts.log" 2>/dev/null || true
+        fi ;;
+      esac ;;
+  esac
+fi

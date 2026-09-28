@@ -78,9 +78,9 @@ if [[ $payload =~ $re_sid ]]; then
   fi
 fi
 
-# One stat, and the answer for the overwhelming majority of prompts ever
-# submitted on this machine. Created lazily by --block, removed when empty.
-[ -d "$BD" ] || exit 0
+# There used to be a one-stat fast path here ([ -d "$BD" ] || exit 0). The cold
+# block below has to look at every prompt, so it went (2026-09-23): the cost is
+# one sed and one awk over token-history.csv per prompt, tens of milliseconds.
 
 [ -n "$payload" ] || exit 0
 
@@ -91,6 +91,57 @@ fi
 sid=$(printf '%s' "$payload" |
       sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
 [ -n "$sid" ] || exit 0
+
+# --- cold block (2026-09-23) --------------------------------------------------
+# A prompt into a window whose cache has lapsed rewrites the whole window at 2x
+# the moment it is sent - token-gap-warn.sh can only report that afterwards.
+# Above ~72k, /clear + resume is cheaper than that rewrite ((65k floor + ~7k
+# catch-up) x 2 vs context x 2), so refuse the prompt BEFORE it is sent, through
+# the same block the auto-park uses: prompt to clipboard, widget `u` lifts it.
+# Lifting it is a decision, remembered per cycle: token-cold/<sid> holds the
+# history row it fired on, so an unblocked window is not re-blocked until a new
+# cycle has run. TOKEN_COLD_BLOCK=0 turns this off.
+COLDK="${TOKEN_COLD_BLOCK:-72000}"
+COLDD="${TOKEN_COLD_DIR:-$HOME/.claude/token-cold}"
+if [ "$COLDK" -gt 0 ] 2>/dev/null && [ ! -f "$BD/$sid" ] && [ -f "$HOME/.claude/token-history.csv" ]; then
+  cold=$(awk -F, -v key="${sid:0:8}" -v ttl="${TOKEN_GAP_TTL_MINUTES:-60}" -v minctx="$COLDK" \
+             -v nowts="$(date '+%Y %m %d %H %M %S')" '
+    $2 == key { ts = $1; ctx = $6 + 0 }
+    END { if (ts == "") exit
+          s = ts; gsub(/[-:]/, " ", s); gap = (mktime(nowts) - mktime(s " 00")) / 60
+          if (gap >= ttl && ctx >= minctx) printf "%s|%.1f|%d\n", ts, gap / 60, ctx }' \
+         "$HOME/.claude/token-history.csv" 2>/dev/null)
+  if [ -n "$cold" ]; then
+    IFS='|' read -r cts chrs cctx <<< "$cold"
+    if [ "$(cat "$COLDD/$sid" 2>/dev/null)" != "$cts" ]; then
+      mkdir -p "$BD" "$COLDD" 2>/dev/null
+      printf '%s' "$cts" > "$COLDD/$sid" 2>/dev/null
+      printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted, where /clear + resume costs ~143k\n' \
+        "$chrs" $(( cctx / 1000 )) $(( cctx * 2 / 1000 )) > "$BD/$sid" 2>/dev/null
+    fi
+  fi
+fi
+
+# --- hard stop at 300k (2026-09-23) --------------------------------------------
+# Past ctxmax every cycle re-reads ~6 full windows of 300k+, and a cut already
+# paid for itself around 150k. Same block and the same per-cycle memory as the
+# cold block (token-cold/<sid>.max holds the row it fired on): widget `u` lifts
+# it for one cycle, and the next cycle past 300k is refused again. /park,
+# /compact, /clear and /exit pass - they are the way out. TOKEN_MAX_BLOCK=0 = off.
+MAXK="${TOKEN_MAX_BLOCK:-300000}"
+if [ "$MAXK" -gt 0 ] 2>/dev/null && [ ! -f "$BD/$sid" ] && [ -f "$HOME/.claude/token-history.csv" ]; then
+  big=$(awk -F, -v key="${sid:0:8}" -v m="$MAXK" '$2 == key { ts = $1; ctx = $6 + 0 }
+    END { if (ts != "" && ctx >= m) printf "%s|%d\n", ts, ctx }' "$HOME/.claude/token-history.csv" 2>/dev/null)
+  if [ -n "$big" ]; then
+    IFS='|' read -r bts bctx <<< "$big"
+    if [ "$(cat "$COLDD/$sid.max" 2>/dev/null)" != "$bts" ]; then
+      mkdir -p "$BD" "$COLDD" 2>/dev/null
+      printf '%s' "$bts" > "$COLDD/$sid.max" 2>/dev/null
+      printf 'the window is past %dk (%dk) - every cycle here re-reads it ~6 times\n' $(( MAXK / 1000 )) $(( bctx / 1000 )) > "$BD/$sid" 2>/dev/null
+    fi
+  fi
+fi
+
 [ -f "$BD/$sid" ] || exit 0
 
 # The reason this session was armed, written by --block. Kept short; it is
@@ -125,6 +176,15 @@ prompt=$(printf '%s' "$payload" | awk '
 # prompt is still read whole, because it is about to be saved rather than sent.
 
 # From here the prompt is refused, so cut it first.
+# A cold block exists to stop the 2x rewrite, and /clear and /exit send nothing
+# to the API - they are the advice itself, so they pass. (The marks block stays
+# total; see above.)
+case "$why" in "the cache expired"*)
+  case "$prompt" in /clear|/clear\ *|/exit|/exit\ *|/quit) exit 0 ;; esac ;;
+"the window is past"*)
+  case "$prompt" in /clear|/clear\ *|/exit|/exit\ *|/quit|/park|/park\ *|/compact|/compact\ *) exit 0 ;; esac ;;
+esac
+
 mkdir -p "$CD" 2>/dev/null
 if [ -n "$prompt" ]; then
   printf '%s' "$prompt" > "$CD/$sid.prompt" 2>/dev/null
@@ -140,8 +200,14 @@ if [ -n "$prompt" ]; then
   fi
 fi
 
-msg="[token-block] $why, so this window is refusing every prompt - it has been
-checkpointed already, and the cheapest thing it can do now is end.
+case "$why" in
+  "the cache expired"*) state="a lapsed window only gets dearer to keep; if the work matters,
+lift the block and send once - the rewrite is paid once, then it is warm again." ;;
+  "the window is past"*) state="/park then /clear (new topic) or /compact (same topic) - both pass this block.
+If this cycle really must run here, lift it once; the next cycle past the bar is refused again." ;;
+  *) state="it has been checkpointed already, and the cheapest thing it can do now is end." ;;
+esac
+msg="[token-block] $why, so this window is refusing every prompt - $state
 Your prompt has been cut to the clipboard (and saved to $CD/$sid.prompt).
 /clear this window and paste it into the fresh one, or unpark the checkpoint there.
 Nothing typed here lifts the block: press u on this row in the token widget, or run

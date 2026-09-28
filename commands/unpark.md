@@ -39,5 +39,6 @@ session, another developer, or the user's own hands.
 Where the work stands, what the next step was, and anything flagged blocked or open. Do not begin
 that step until the user says to — they cleared for a reason and may want to go elsewhere.
 
-Do not re-read the files the checkpoint summarises. Re-derivation here is ~5k against ~34k without
-one; re-reading the work to double-check the note spends exactly what parking was meant to save.
+Do not re-read the files the checkpoint summarises. Treat its **Decided — do not reopen** section as
+settled: reopening those is the rework the checkpoint exists to prevent. Re-read only to confirm
+something still exists, per the check above.

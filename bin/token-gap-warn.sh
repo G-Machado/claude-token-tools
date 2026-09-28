@@ -42,14 +42,16 @@ GAPLOG="${TOKEN_GAP_LOG_FILE:-$HOME/.claude/token-gap-warn.log}"
 GAP_MIN="${TOKEN_GAP_WARN_MINUTES:-55}"      # cache TTL is 60; warn just inside it
 TTL_MIN="${TOKEN_GAP_TTL_MINUTES:-60}"       # the actual TTL, so a near-miss can say so
 CTX_NOTE="${TOKEN_GAP_NOTE_CONTEXT:-60000}"  # prevention tier: roughly the cold floor
-CTX_MIN="${TOKEN_GAP_WARN_CONTEXT:-130000}"  # advice tier: the post-gap break-even
+CTX_MIN="${TOKEN_GAP_WARN_CONTEXT:-115000}"  # advice tier: the post-gap break-even (~112k at N=4 since 2026-09-23)
 # Two tiers, because one threshold was measured doing two jobs badly.
 #
-# 130k is derived, not chosen. Once the rewrite is sunk the choice is carry on at
-#   C * (0.56*2 + 0.23N)   vs   park+clear at 23k + 136k + 63k * (same factor),
-# where 0.56 is the observed repeat-gap rate and N the cycles left. Break-even is
-# ~160k at N=1, ~127k at the median N=4, ~106k at N=8. Firing at the median means
-# the advice is already in its own favour when it speaks. That reasoning is sound
+# 115k is derived, not chosen. Once the rewrite is sunk the choice is carry on at
+#   C * (0.56*2 + 0.59N)   vs   park+clear at 23k + 140k + 65k * (same factor),
+# where 0.56 is the observed repeat-gap rate and N the cycles left; 0.59 is 5.9
+# measured full-window reads per cycle x 0.1 (was a guessed 0.23). Break-even is
+# ~160k at N=1, ~112k at the median N=4, ~93k at N=8 (2026-09-23; was 160/127/106k).
+# Firing at the median means the advice is already in its own favour when it
+# speaks. That reasoning is sound
 # and unchanged - but it only answers "should this window be compacted NOW".
 #
 # It does not answer "did this gap cost anything", and measurement says that is
@@ -58,7 +60,7 @@ CTX_MIN="${TOKEN_GAP_WARN_CONTEXT:-130000}"  # advice tier: the post-gap break-e
 # scales with session age, because the ~63k cold floor is most of the rewrite on
 # its own. So anything at or above the floor now gets the prevention line - the
 # gap happened, it repeats, /park before the next one - while the compact/clear
-# advice still waits for 130k, where it is actually in its own favour.
+# advice still waits for 115k, where it is actually in its own favour.
 
 [ -f "$HIST" ] || exit 0
 [ -f "$GAPLOG" ] || echo "ts,session,gap_min,context,checkpoint,expired" > "$GAPLOG" 2>/dev/null
@@ -69,6 +71,11 @@ if [ -z "$sid" ]; then
   echo "$(date '+%Y-%m-%d %H:%M:%S') gap-warn: no session_id in UserPromptSubmit payload" >> "$ERRLOG" 2>/dev/null
   exit 0
 fi
+# A blocked window refuses the prompt (token-block.sh runs alongside this), so
+# nothing is rewritten - logging it anyway put 16 phantom rewrites of one
+# session into 2026-09-11. The first prompt of a cold block can race the marker
+# and still log once, which is the one real event.
+[ -f "$HOME/.claude/token-blocks/$sid" ] && exit 0
 key=$(printf '%s' "$sid" | cut -c1-8)
 
 # A checkpoint written by /park before the gap is what makes ending the session

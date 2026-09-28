@@ -77,15 +77,39 @@ for f in "$dir"*.jsonl; do
   left=$(( TTL - age ))
   [ "$left" -gt "$MARGIN" ] || continue
   [ "$ctx" -ge $(( FLOOR_K * 1000 )) ] || continue
+  # A /clear leaves the old transcript warm on disk, ended by a cost-state record,
+  # while the same process carries on under a new sessionId (2026-09-23: the hint
+  # offered this very terminal's pre-clear window back to it). So: ended, and a
+  # live process in this cwd started before it ended and now runs another session
+  # -> it was cleared, not exited; skip it. An exited window stays offerable.
+  if tail -n 1 "$f" 2>/dev/null | grep -q '"type":"cost-state"'; then
+    fsid=$(basename "${f%.jsonl}"); cleared=0
+    for sj in "$CL"/sessions/*.json; do
+      [ -e "$sj" ] || continue
+      j=$(head -c 600 "$sj")
+      # escaped (C:\\Users) in the file, single in the payload: compare without backslashes
+      [ "$(lc "$(printf '%s' "$j" | sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p')" | tr -d '\\')" = "$(lc "$cwd" | tr -d '\\')" ] || continue
+      ssid=$(printf '%s' "$j" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
+      st=$(printf '%s' "$j" | sed -n 's/.*"startedAt":\([0-9]*\).*/\1/p')
+      [ -n "$st" ] && [ "$ssid" != "$fsid" ] && [ $(( st / 1000 )) -lt "$m" ] || continue
+      p=$(basename "${sj%.json}")
+      tasklist //FI "PID eq $p" //NH 2>/dev/null | grep -q " $p " && { cleared=1; break; }
+    done
+    [ "$cleared" = 1 ] && continue
+  fi
   if [ "$ctx" -gt "$best_ctx" ]; then
     best_ctx=$ctx; best_left=$left; best_sid=$(basename "${f%.jsonl}")
-    best_name=$(sed -n 's/.*"type":"user".*"content":"\([^"]\{0,60\}\).*/\1/p' "$f" 2>/dev/null | head -1)
+    best_name=$(sed -n 's/.*"type":"user".*"content":"\([^"]\{0,60\}\).*/\1/p' "$f" 2>/dev/null | grep -v '^<' | head -1)
   fi
 done
 
 [ "$best_ctx" -gt 0 ] || exit 0
-printf 'This directory already has a warm %dk window open: %s, %dm of cache left - "%s".\n' \
-  $(( best_ctx / 1000 )) "${best_sid:0:8}" "$best_left" "${best_name:-untitled}"
-printf 'Reading it back costs 0.1x; this session pays the ~61k cold floor instead. Offer "claude -r %s" before doing small work here.\n' \
-  "${best_sid:0:8}"
+# JSON so the hint reaches both sides (2026-09-23, session-hygiene item 6):
+# systemMessage is shown to the user, additionalContext goes to the model.
+name=$(printf '%s' "${best_name:-untitled}" | sed 's/\\/\\\\/g')
+user=$(printf 'warm %dk window already open here: %s (%dm cache left) - \\"%s\\". For small work, claude -r %s is cheaper than this session.' \
+  $(( best_ctx / 1000 )) "${best_sid:0:8}" "$best_left" "$name" "${best_sid:0:8}")
+model=$(printf 'This directory already has a warm %dk window open: %s, %dm of cache left - \\"%s\\". Reading it back costs 0.1x; this session pays the ~61k cold floor instead. Offer \\"claude -r %s\\" before doing small work here.' \
+  $(( best_ctx / 1000 )) "${best_sid:0:8}" "$best_left" "$name" "${best_sid:0:8}")
+printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$user" "$model"
 exit 0
