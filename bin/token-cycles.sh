@@ -329,10 +329,25 @@ if [ "$MODE" = "stats" ]; then
     echo "it fills one row per cycle from the Stop hook; run a few cycles first" >&2
     exit 1
   fi
+  # Claude Code keeps its own miss ledger per session in session-usage/*.json
+  # (the status line rewrites it): a count per cause and the tokens those
+  # misses rewrote. It is churn seen from the other side, with a reason
+  # attached. Single-line files, so FNR == 1 is the whole payload.
+  SUMISS=$(awk 'BEGIN { q = sprintf("%c", 34) }
+    function num(k,   r) { if (!match($0, q k q ":[0-9]+")) return 0
+      r = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", r); return r + 0 }
+    FNR == 1 {
+      ns++; m = num("misses"); if (m > 0) { nm++; tm += m; tr += num("miss_recache_tokens") }
+      if (match($0, q "miss_causes" q ":[{][^}]*[}]")) {
+        s = substr($0, RSTART, RLENGTH); sub(/^[^{]*[{]/, "", s); sub(/[}]$/, "", s); gsub(q, "", s)
+        k = split(s, P, ",")
+        for (i = 1; i <= k; i++) if (split(P[i], KV, ":") == 2) C[KV[1]] += KV[2] } }
+    END { o = ""; for (c in C) o = o (o == "" ? "" : ",") c ":" C[c]
+      printf "%d|%d|%d|%d|%s", ns, nm, tm, tr, o }' "$HOME/.claude/session-usage/"*.json 2>/dev/null)
   awk -F, -v budget="$BUDGET" -v gbudget="$GROWTH" -v restart="$RESTART" \
       -v ctxwarn="$CTXWARN" -v ctxhigh="$CTXHIGH" -v rederive="$REDERIVE" \
       -v wwrite="$W_WRITE" -v wread="$W_READ" -v reqs="$REQS" -v wout="$W_OUT" \
-      -v reqsrc="$REQS_SRC" \
+      -v reqsrc="$REQS_SRC" -v sumiss="$SUMISS" \
       -v contgap="${TOKEN_CONTINUATION_GAP:-30}" '
   function commify(n,   _s,_out,_len,_i,_rem) {
     _s = sprintf("%d", n); _out = ""; _len = length(_s)
@@ -496,6 +511,20 @@ if [ "$MODE" = "stats" ]; then
         sumG9 * 100 / hW, sumC9 * 100 / hW, fl * 100 / hW
       printf "    (growth is new material, churn a window rewritten after a lapse or a\n"
       printf "     model switch, first load the cold start of each session)\n"
+      # The reason for each miss, from Claude Code rather than inferred. Only
+      # the sessions whose payload is still on disk, so a sample, not history.
+      if (split(sumiss, SM, "|") >= 4 && SM[1] + 0 > 0) {
+        printf "    Claude Code miss ledger, %d sessions on disk: %d with a miss, %d misses, %s rewritten\n", \
+          SM[1], SM[2], SM[3], commify(SM[4])
+        nc = split(SM[5], SC, ",")
+        for (ci = 1; ci <= nc; ci++) {
+          if (split(SC[ci], SP, ":") != 2) continue
+          lab = SP[1]
+          if (lab ~ /^ttl_expired_/) { sub(/^ttl_expired_/, "", lab); lab = "gap over " lab " - a /park or a poke prevents it" }
+          else if (lab == "likely_server_side") lab = "server side - no client-side reason, nothing here prevents it"
+          printf "      %3d  %s\n", SP[2], lab
+        }
+      }
       printf "\n"
     }
 

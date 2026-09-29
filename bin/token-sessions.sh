@@ -1589,7 +1589,7 @@ collect() {
     b=${f##*/}; b=${b%.json}
     SUT[$b]="$v"
   done < <(stat -c '%Y|%n' "$CL"/session-usage/*.json 2>/dev/null)
-  while IFS='|' read -r b c e tl hr nm cw; do
+  while IFS='|' read -r b c e tl hr ms mr mc nm cw; do
     [ -n "$b" ] || continue
     v="${SUT[$b]:-0}"
     [ "$v" -gt 0 ] || continue
@@ -1597,7 +1597,9 @@ collect() {
     # Claude Code's own cache verdict for the window: the lifetime it writes
     # with, and reads / (reads + writes + input) over every request so far -
     # checked against a transcript on 2026-09-29 and equal to four places.
-    SUX[$b]="$tl|$hr"
+    # Then its misses: how many, the tokens they rewrote, and the cause it
+    # gave each one, as cause:count pairs.
+    SUX[$b]="$tl|$hr|$ms|$mr|$mc"
     # Two gates before a payload conjures a row that has no transcript behind
     # it, because such a row is thin: no prompt history, no title from a first
     # prompt, no sparkline, no cost split. It knows the window size and the
@@ -1633,6 +1635,13 @@ collect() {
         q = sprintf("%c", 34)
         if (!match(s, q k q ":[0-9.]+")) return ""
         r = substr(s, RSTART, RLENGTH); sub(/^[^:]*:/, "", r); return r }
+      # miss_causes is a flat object of cause -> count. Returned as
+      # "cause:n,cause:n" so it rides a pipe-separated row untouched.
+      function jc(s,   r, q) {
+        q = sprintf("%c", 34)
+        if (!match(s, q "miss_causes" q ":[{][^}]*[}]")) return ""
+        r = substr(s, RSTART, RLENGTH); sub(/^[^{]*[{]/, "", r); sub(/[}]$/, "", r)
+        gsub(q, "", r); return r }
       # expires_at appears once in the payload, inside prompt_cache; the rate
       # limits use resets_at, so this needs no enclosing-object match.
       { b = FILENAME; sub(/.*[/]/, "", b); sub(/[.]json$/, "", b)
@@ -1640,6 +1649,7 @@ collect() {
         seen[b] = 1
         print b "|" jn($0, "total_input_tokens") "|" jn($0, "expires_at") \
               "|" js($0, "ttl") "|" jf($0, "hit_ratio") \
+              "|" jn($0, "misses") "|" jn($0, "miss_recache_tokens") "|" jc($0) \
               "|" js($0, "session_name") "|" js($0, "cwd") }' \
       "$CL"/session-usage/*.json 2>/dev/null)
 
@@ -2229,9 +2239,9 @@ EOF
         for (i = 1; i <= NF; i++) { n = split($i, a, "~"); a[6] = 0; $i = a[1]
           for (j = 2; j <= n; j++) $i = $i "~" a[j] } print }')
     fi
-    sux="${SUX[$sid]:-}"; cttl=""; chit=""
-    [ -n "$sux" ] && { cttl=${sux%%|*}; chit=${sux#*|}; }
-    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
+    cttl=""; chit=""; cmis=""; cmrc=""; cmca=""
+    [ -n "${SUX[$sid]:-}" ] && IFS='|' read -r cttl chit cmis cmrc cmca <<< "${SUX[$sid]}"
+    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
       "$short" "$alive" "$idle" "$left" "$ctx" "${name:0:34}" "$trend" \
       "$pid" "$proj" "$title" "$cyc" "$otot" "$olast" "$rlast" "$sid" "$tf" "$lastp" \
       "$run" "$parked" "$ckage" "$ckname" "$cktopic" "$ckothers" "$ckdist" \
@@ -2240,7 +2250,7 @@ EOF
       "${npoke:-0}" "${pokeage:--1}" "${spawnwhy:-}" "${gapmed:-0}" \
       "${pmodel:-}" "${peff:-}" "${runsince:-0}" \
       "${nag:-0}" "${naglive:-0}" "${agcost:-0}" "${aglist:-}" \
-      "$cttl" "$chit"
+      "$cttl" "$chit" "$cmis" "$cmrc" "$cmca"
   done
 }
 
@@ -3041,6 +3051,11 @@ emit_json() {
       # Straight from Claude Code, not derived: "" and null where the payload
       # has none, which is not the same as a zero hit rate.
       printf "\"cache_ttl\":%s,\"hit_pct\":%s,", jstr(R[i,47]), (R[i,48] != "" ? sprintf("%.1f", R[i,48] * 100) : "null")
+      printf "\"cache_misses\":%d,\"miss_recache\":%d,\"miss_causes\":{", R[i,49] + 0, R[i,50] + 0
+      msn = split(R[i,51], MSC, ","); msq = 0
+      for (msj = 1; msj <= msn; msj++)
+        if (split(MSC[msj], MSP, ":") == 2) printf "%s%s:%d", (msq++ ? "," : ""), jstr(MSP[1]), MSP[2] + 0
+      printf "},"
       printf "\"context\":%d,\"context_k\":%.1f,\"cycles\":%d,\"trend\":%d,", cxl, cxl / 1000, cy, R[i,7] + 0
       # The in-flight cycle, straight off the transcript. "live":0 means the
       # hook has caught up and every other number here is already whole.
@@ -3458,7 +3473,7 @@ render() {
     rl[n]  = $14 + 0; uuid[n] = $15; lp[n] = $17
     rn[n]  = $18 + 0; pk[n] = $19 + 0; ck[n] = $20 + 0; ckf[n] = $21
     ckt[n] = $22; cko[n] = $23
-    cttl[n] = $47; chit[n] = $48
+    cttl[n] = $47; chit[n] = $48; cmis[n] = $49 + 0; cmrc[n] = $50 + 0; cmca[n] = $51
     rt[n]  = $25 + 0; gt[n] = $26 + 0; fb[n] = $27 + 0; gp[n] = $28 + 0
     tc[n]  = $29 + 0; rs[n] = $42 + 0
     nc[n]  = NC[$1]
@@ -4461,6 +4476,14 @@ render() {
     if (chit[i] != "")
       dput(sprintf("    %s%s%s%.1f%% hit  %s(%s cache lifetime)%s", GRY, pad("cache", 9), \
         (cttl[i] != "" && cttl[i] != "1h" ? RED : R), chit[i] * 100, D, (cttl[i] != "" ? cttl[i] : "unknown"), R))
+    # The misses behind that rate, with the cause Claude Code gave each. A gap
+    # over the lifetime is the one a /park or a poke prevents; server side is
+    # a miss with no client-side reason, which nothing here can prevent.
+    if (cmis[i] > 0) {
+      t = cmca[i]; gsub(/ttl_expired_/, "gap over ", t); gsub(/likely_server_side/, "server side", t)
+      gsub(/:/, " x", t); gsub(/,/, ", ", t)
+      dput(sprintf("    %s%s%s%d miss%s, %s rewritten  %s%s%s", GRY, pad("", 9), R, \
+        cmis[i], (cmis[i] == 1 ? "" : "es"), hum(cmrc[i]), D, t, R)) }
     # The panel carried output but never growth, which is the wrong half to
     # leave out: output is a verdict on a cycle already paid for, growth is the
     # one number here you can still act on while the session is running.
