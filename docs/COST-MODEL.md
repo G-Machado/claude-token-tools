@@ -74,11 +74,29 @@ the raw re-cache number.
 
 Raw tokens are not one currency, so never add them together. Relative to an uncached input token:
 cache read **0.1×**, input **1×**, cache write **2×** (1-hour TTL), output **5×** — a 50× spread
-between the cheapest and dearest term. Measured across **354 cycles**: cache writes **49%**,
-output **34%**, cache reads **17%**. (An earlier "~7% output" here came from one churn-dominated
-session and was wrong by ~5×.) So output is the second-biggest line, not a rounding error — and
-it is concentrated: the **top 10% of cycles carry 34% of all output**. Budget breaches are not
-drift, they are single prompts that bundled three tasks; split those and the term collapses.
+between the cheapest and dearest term. Measured over the **700 cycles** that log reads
+(2026-09-05 → 09-29): cache reads **52%**, cache writes **24%**, output **24%**; a transcript scan
+of 10,370 requests agrees (53 / 24 / 23). (The earlier "writes 49%, output 34%, reads 17%" came
+from `--stats` counting reads on only the rows that had them, but writes and output on every row. Fixed 2026-09-29. An even earlier
+"~7% output" came from one churn-dominated session.) Output is concentrated: the **top 10% of
+cycles carry 34% of all output**. Budget breaches are not drift, they are single prompts that
+bundled three tasks; split those and the term collapses.
+
+**Cache hit rate** is the share of the tokens a request sends that come from the cache
+(`reads / (reads + writes)`). Measured **97.8%** (median session 97.5%, p10 93.9%). Public figures
+for Claude Code are 89–95%. At these weights, a missed token costs **20×** a hit (2 / 0.1), so
+**one point of hit rate ≈ 10% of the bill**: at 95% the same work would cost ~1.3×, and at 89%
+~1.9×. Don't treat the number as a score, though. A longer window re-read more often raises the
+hit rate *and* the bill. The misses split three ways (`--stats`): **growth 48%** (new material,
+paid once and unavoidable except by reading less), **first load 38%** (each session's cold
+start, which is why the floor matters), and **churn 14%** (the window rewritten after a lapse or a
+model switch). Churn is the part the gap rules exist to remove.
+
+**Model switch = rewrite.** The cache is per model. Measured on 5 mid-session switches: the new
+model reads only the shared ~30–35k prefix (warm from other sessions on that model) and rewrites
+the whole conversation after it; on a 127k window that was a 117k write at 2×. Main-thread
+writes are **98.1% 1-hour TTL**. The 5-minute writes all come from subagents (Haiku/Sonnet),
+so those subagent caches die after 5 idle minutes, not 60.
 
 Measure, don't estimate — self-reported guesses drift badly. `/tokens` prints per-cycle output,
 re-caching and context; a `Stop` hook warns on breaches and logs one raw row per cycle. Tooling,

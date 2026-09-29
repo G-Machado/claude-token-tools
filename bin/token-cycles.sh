@@ -379,7 +379,15 @@ if [ "$MODE" = "stats" ]; then
     if (!((wk, $2) in wks)) { wks[wk, $2] = 1; wkns[wk]++ }
     cw = $4 * wout + $5 * wwrite + ($9 != "" ? $9 * wread : 0)
     wkw[wk] += cw; wOut += $4 * wout; wWrite += $5 * wwrite; wRead += ($9 != "" ? $9 * wread : 0)
-    if ($9 != "") { n9++; if (first9 == "") first9 = $1 }
+    # The same three terms over only the rows that carry reads, so the split
+    # compares like with like. Hit rate is taken over these rows as well: the
+    # history holds reads and re-cache but not uncached input, which a scan
+    # of the transcripts put at 0.0% of the input side on 2026-09-29.
+    if ($9 != "") {
+      n9++; if (first9 == "") first9 = $1
+      wOut9 += $4 * wout; wWrite9 += $5 * wwrite
+      hR += $9; hW += $5; hsR[$2] += $9; hsW[$2] += $5; hsN[$2]++
+    }
     if ($8 != "") nheld++
     # Full-window reads per cycle, measured: total cache reads / end-of-cycle
     # context. Early requests in a cycle read a smaller window, so this is a
@@ -421,6 +429,7 @@ if [ "$MODE" = "stats" ]; then
       g = ($6 + 0) - lastctx[$2]; if (g < 0) g = 0
       ch = ($5 + 0) - g;          if (ch < 0) ch = 0
       gn++; growth[gn] = g; churn[gn] = ch; sumG += g; sumC += ch
+      if ($9 != "") { sumG9 += g; sumC9 += ch }
       if (g > gbudget) fg++
     }
     lastctx[$2] = $6 + 0
@@ -454,10 +463,39 @@ if [ "$MODE" = "stats" ]; then
     # --- weighted spend ------------------------------------------------------
     wT = wOut + wWrite + wRead
     if (wT > 0) {
-      printf "  weighted spend (input-equivalents): %s\n", commify(wT)
-      printf "    output x%s %s (%.0f%%)   re-cache x%s %s (%.0f%%)   reads x%s %s (%.0f%%)\n", \
-        wout, commify(wOut), wOut * 100 / wT, wwrite, commify(wWrite), wWrite * 100 / wT, \
-        wread, commify(wRead), wRead * 100 / wT
+      printf "  weighted spend (input-equivalents): %s", commify(wT)
+      if (n9 < n) printf "  (reads missing before %s)", substr(first9, 1, 10)
+      printf "\n"
+      # The split is taken over the rows that carry reads. It used to divide
+      # output and re-cache from every row by reads from only the late ones,
+      # which showed reads at 29 percent of spend when the transcripts say 53.
+      wT9 = wOut9 + wWrite9 + wRead
+      if (wT9 > 0)
+        printf "    output x%s %.0f%%   re-cache x%s %.0f%%   reads x%s %.0f%%   (split over %d rows with reads)\n", \
+          wout, wOut9 * 100 / wT9, wwrite, wWrite9 * 100 / wT9, wread, wRead * 100 / wT9, n9
+      printf "\n"
+    }
+
+    # --- cache hit rate --------------------------------------------------------
+    # Of the tokens each request sends, the share served from the cache (a read,
+    # x wread) rather than written into it (a miss, x wwrite). A miss costs
+    # wwrite / wread hits, so a point of hit rate is worth far more than it
+    # sounds. It is NOT a score to push up: a longer window re-read more times
+    # raises it and the bill together. The avoidable part is the churn line.
+    if (hR + hW > 0 && wT9 > 0) {
+      printf "  cache hit rate: %.1f%%  (reads / (reads + re-cache), %d rows)\n", hR * 100 / (hR + hW), n9
+      nh = 0
+      for (k in hsN) if (hsN[k] >= 3 && hsR[k] + hsW[k] > 0) { nh++; hrt[nh] = hsR[k] * 100 / (hsR[k] + hsW[k]) }
+      if (nh > 0)
+        printf "    per session (n=%d, 3+ cycles): p10 %.1f%%   median %.1f%%   p90 %.1f%%\n", \
+          nh, pct(hrt, nh, 0.10), pct(hrt, nh, 0.50), pct(hrt, nh, 0.90)
+      printf "    a missed token costs %.0fx a hit; one point of hit rate is %.1f%% of the bill\n", \
+        wwrite / wread, (wwrite - wread) * (hR + hW) * 0.01 * 100 / wT9
+      fl = hW - sumG9 - sumC9; if (fl < 0) fl = 0
+      printf "    the misses: growth %.0f%%   churn %.0f%%   first load %.0f%%\n", \
+        sumG9 * 100 / hW, sumC9 * 100 / hW, fl * 100 / hW
+      printf "    (growth is new material, churn a window rewritten after a lapse or a\n"
+      printf "     model switch, first load the cold start of each session)\n"
       printf "\n"
     }
 
