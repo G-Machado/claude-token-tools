@@ -45,6 +45,7 @@ place() {  # place <src file> <dest file>
 
 echo "scripts -> $DEST"
 for f in "$SRC"/bin/*.sh; do place "$f" "$DEST/$(basename "$f")"; done
+for f in "$SRC"/bin/*.js; do [ -e "$f" ] || continue; place "$f" "$DEST/$(basename "$f")"; done
 
 echo "windows -> $DEST"
 for f in "$SRC"/windows/*; do place "$f" "$DEST/$(basename "$f")"; done
@@ -96,12 +97,32 @@ Merge this into ~/.claude/settings.json (keep any keys you already have):
   },
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
-          "command": "bash \"$HOME/.claude/token-gap-warn.sh\"" } ] }
+      { "hooks": [
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "bash \"$HOME/.claude/token-block.sh\"" },
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "bash \"$HOME/.claude/token-gap-warn.sh\"" },
+        { "type": "command", "shell": "bash", "timeout": 5,
+          "command": "node \"$HOME/.claude/token-me.js\" --line" } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
           "command": "bash \"$HOME/.claude/token-cycles.sh\" --alert" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Read", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
+          "command": "node \"$HOME/.claude/token-readguard.js\"" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "node \"$HOME/.claude/token-scorecard.js\"" } ] }
+    ],
+    "SessionStart": [
+      { "hooks": [
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "bash \"$HOME/.claude/token-warm-hint.sh\"" },
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "node \"$HOME/.claude/token-compact-reinject.js\"" } ] }
     ]
   }
 

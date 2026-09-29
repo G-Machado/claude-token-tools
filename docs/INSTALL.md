@@ -47,12 +47,32 @@ This is the one manual step — `install.sh` prints it too. Merge into
   },
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
-          "command": "bash \"$HOME/.claude/token-gap-warn.sh\"" } ] }
+      { "hooks": [
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "bash \"$HOME/.claude/token-block.sh\"" },
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "bash \"$HOME/.claude/token-gap-warn.sh\"" },
+        { "type": "command", "shell": "bash", "timeout": 5,
+          "command": "node \"$HOME/.claude/token-me.js\" --line" } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
           "command": "bash \"$HOME/.claude/token-cycles.sh\" --alert" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Read", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
+          "command": "node \"$HOME/.claude/token-readguard.js\"" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "node \"$HOME/.claude/token-scorecard.js\"" } ] }
+    ],
+    "SessionStart": [
+      { "hooks": [
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "bash \"$HOME/.claude/token-warm-hint.sh\"" },
+        { "type": "command", "shell": "bash", "timeout": 10,
+          "command": "node \"$HOME/.claude/token-compact-reinject.js\"" } ] }
     ]
   }
 }
