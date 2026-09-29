@@ -1553,7 +1553,7 @@ collect() {
   [ "${#pidset}" -gt 2 ] || pidset=" $(printf '%s\n' "$psout" |
     awk 'NR > 1 { print $1; print $4 }' | tr '\n' ' ') "
 
-  local -A TF TI HS MT SM SA LA SU SUT SR
+  local -A TF TI HS MT SM SA LA SU SUT SR SUX
 
   # sid -> transcript path AND mtime, from one stat over the whole glob. This
   # used to be a shell loop here plus a stat per session further down; batching
@@ -1589,11 +1589,15 @@ collect() {
     b=${f##*/}; b=${b%.json}
     SUT[$b]="$v"
   done < <(stat -c '%Y|%n' "$CL"/session-usage/*.json 2>/dev/null)
-  while IFS='|' read -r b c e nm cw; do
+  while IFS='|' read -r b c e tl hr nm cw; do
     [ -n "$b" ] || continue
     v="${SUT[$b]:-0}"
     [ "$v" -gt 0 ] || continue
     SU[$b]="$v|$c|$e|$nm|$cw"
+    # Claude Code's own cache verdict for the window: the lifetime it writes
+    # with, and reads / (reads + writes + input) over every request so far -
+    # checked against a transcript on 2026-09-29 and equal to four places.
+    SUX[$b]="$tl|$hr"
     # Two gates before a payload conjures a row that has no transcript behind
     # it, because such a row is thin: no prompt history, no title from a first
     # prompt, no sparkline, no cost split. It knows the window size and the
@@ -1623,12 +1627,19 @@ collect() {
         if (!match(s, q k q ":" q "[^" q "]*" q)) return ""
         r = substr(s, RSTART, RLENGTH)
         sub("^" q k q ":" q, "", r); sub(q "$", "", r); return r }
+      # A fraction, kept as text: empty when the payload has none yet, which
+      # must not read as a zero hit rate.
+      function jf(s, k,   r, q) {
+        q = sprintf("%c", 34)
+        if (!match(s, q k q ":[0-9.]+")) return ""
+        r = substr(s, RSTART, RLENGTH); sub(/^[^:]*:/, "", r); return r }
       # expires_at appears once in the payload, inside prompt_cache; the rate
       # limits use resets_at, so this needs no enclosing-object match.
       { b = FILENAME; sub(/.*[/]/, "", b); sub(/[.]json$/, "", b)
         if (b in seen) next
         seen[b] = 1
         print b "|" jn($0, "total_input_tokens") "|" jn($0, "expires_at") \
+              "|" js($0, "ttl") "|" jf($0, "hit_ratio") \
               "|" js($0, "session_name") "|" js($0, "cwd") }' \
       "$CL"/session-usage/*.json 2>/dev/null)
 
@@ -2218,7 +2229,9 @@ EOF
         for (i = 1; i <= NF; i++) { n = split($i, a, "~"); a[6] = 0; $i = a[1]
           for (j = 2; j <= n; j++) $i = $i "~" a[j] } print }')
     fi
-    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
+    sux="${SUX[$sid]:-}"; cttl=""; chit=""
+    [ -n "$sux" ] && { cttl=${sux%%|*}; chit=${sux#*|}; }
+    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
       "$short" "$alive" "$idle" "$left" "$ctx" "${name:0:34}" "$trend" \
       "$pid" "$proj" "$title" "$cyc" "$otot" "$olast" "$rlast" "$sid" "$tf" "$lastp" \
       "$run" "$parked" "$ckage" "$ckname" "$cktopic" "$ckothers" "$ckdist" \
@@ -2226,7 +2239,8 @@ EOF
       "${lvreq:-0}" "${lvout:-0}" "${lvwr:-0}" "${lvrd:-0}" "${lvctx:-0}" \
       "${npoke:-0}" "${pokeage:--1}" "${spawnwhy:-}" "${gapmed:-0}" \
       "${pmodel:-}" "${peff:-}" "${runsince:-0}" \
-      "${nag:-0}" "${naglive:-0}" "${agcost:-0}" "${aglist:-}"
+      "${nag:-0}" "${naglive:-0}" "${agcost:-0}" "${aglist:-}" \
+      "$cttl" "$chit"
   done
 }
 
@@ -2836,6 +2850,9 @@ emit_json() {
     be = int(RESTART_NO / carry + 0.5)
     if (R[i,2] + 0 != 1)
       return (slot == 1) ? "the process is gone - nothing here is being paid for any more." : ""
+    # Same guard as the table tip: every other line here assumes an hour.
+    if (slot == 1 && R[i,47] != "" && R[i,47] != "1h")
+      return sprintf("cache lifetime is %s, not 1h - the countdown is real, but pokes, parking and the gap rules all assume an hour.", R[i,47])
     if (lf > 0) {
       if (slot == 1) {
         # Out of tickets, with the hour running out. Every other line here can
@@ -3021,6 +3038,9 @@ emit_json() {
       printf "\"cwd\":%s,\"title\":%s,\"last_prompt\":%s,", jstr(junesc(R[i,30])), jstr(R[i,10]), jstr(R[i,17])
       printf "\"transcript\":%s,", jstr(R[i,16])
       printf "\"idle_min\":%d,\"cache_left_min\":%d,\"touched_min\":%d,", R[i,3] + 0, R[i,4] + 0, R[i,29] + 0
+      # Straight from Claude Code, not derived: "" and null where the payload
+      # has none, which is not the same as a zero hit rate.
+      printf "\"cache_ttl\":%s,\"hit_pct\":%s,", jstr(R[i,47]), (R[i,48] != "" ? sprintf("%.1f", R[i,48] * 100) : "null")
       printf "\"context\":%d,\"context_k\":%.1f,\"cycles\":%d,\"trend\":%d,", cxl, cxl / 1000, cy, R[i,7] + 0
       # The in-flight cycle, straight off the transcript. "live":0 means the
       # hook has caught up and every other number here is already whole.
@@ -3438,6 +3458,7 @@ render() {
     rl[n]  = $14 + 0; uuid[n] = $15; lp[n] = $17
     rn[n]  = $18 + 0; pk[n] = $19 + 0; ck[n] = $20 + 0; ckf[n] = $21
     ckt[n] = $22; cko[n] = $23
+    cttl[n] = $47; chit[n] = $48
     rt[n]  = $25 + 0; gt[n] = $26 + 0; fb[n] = $27 + 0; gp[n] = $28 + 0
     tc[n]  = $29 + 0; rs[n] = $42 + 0
     nc[n]  = NC[$1]
@@ -3961,6 +3982,9 @@ render() {
     else if (lf[i] <= 10) { kc = ORG; klab = sprintf("%dm", lf[i]) }
     else if (lf[i] <= 25) { kc = YEL; klab = sprintf("%dm", lf[i]) }
     else                  { kc = GRN; klab = sprintf("%dm", lf[i]) }
+    # Every rule in this tool assumes the hour-long cache. A window writing
+    # with any other lifetime gets a mark it cannot miss.
+    if (al[i] != 0 && cttl[i] != "" && cttl[i] != "1h") { kc = RED; klab = klab "!" }
 
     # A moving bar means a turn is in flight; a hollow arrow only means this is
     # the session touched most recently. They coincide most of the time, which
@@ -4168,6 +4192,9 @@ render() {
     be = int(RESTART_NO / carry + 0.5)
     if (al[i] != 1)
       return (slot == 1) ? "the process is gone - nothing here is being paid for any more." : ""
+    # Ahead of every other advice: all of it is priced on an hour of cache.
+    if (slot == 1 && cttl[i] != "" && cttl[i] != "1h")
+      return sprintf("cache lifetime is %s, not 1h - the countdown is real, but pokes, parking and the gap rules all assume an hour.", cttl[i])
     if (lf[i] > 0) {
       if (slot == 1) {
         # "Already parked, so clearing is free" is only true against a CURRENT
@@ -4429,6 +4456,11 @@ render() {
         GRN, R, padl(hum(cp[1]), 5), D, cp[1] * 100 / cp[0], R, \
         ORG, R, padl(hum(cp[2]), 5), D, cp[2] * 100 / cp[0], R, \
         BLU, R, padl(hum(cp[3]), 5), D, cp[3] * 100 / cp[0], R)) }
+    # Hit rate as Claude Code counts it. Read it beside the churn line, not as a
+    # score: a longer window re-read more often raises it and the bill together.
+    if (chit[i] != "")
+      dput(sprintf("    %s%s%s%.1f%% hit  %s(%s cache lifetime)%s", GRY, pad("cache", 9), \
+        (cttl[i] != "" && cttl[i] != "1h" ? RED : R), chit[i] * 100, D, (cttl[i] != "" ? cttl[i] : "unknown"), R))
     # The panel carried output but never growth, which is the wrong half to
     # leave out: output is a verdict on a cycle already paid for, growth is the
     # one number here you can still act on while the session is running.
