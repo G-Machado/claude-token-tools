@@ -234,16 +234,19 @@ const R7 = within(7), R14 = within(14);
     if (note) c.append(el("p", "note", note));
     box.append(c);
   };
-  add("Spend · weighted per cycle", O.grades.spend, P ? D.overall.prev_grades.spend : "",
-      O.wpc.toFixed(0), "k/cycle",
-      "Graded against this machine's own median of " + D.overall.median.wpc.toFixed(0) +
-      "k. Lower is better — it is what the cycle cost, not what it was worth.");
-  add("Production · output share", O.grades.production, D.overall.prev_grades.production,
-      O.prod.toFixed(0), "%",
-      "Share of every token spent that went into output rather than into re-caching a window.");
+  add("Held · spend past the cut bar", O.grades.held, P ? D.overall.prev_grades.held : "",
+      O.held.toFixed(0), "%",
+      "Share of the week's spend in windows already past the ~" + O.cut_k.toFixed(0) +
+      "k cut bar. Target is zero — hand off or /clear sooner.");
+  add("Short · sessions of 2 cycles or fewer", O.grades.short, P ? D.overall.prev_grades.short : "",
+      O.short.toFixed(0), "%",
+      "Share of the week's spend on sessions that paid the cold floor for a prompt or two. Target is zero.");
+  add("Churn · window rewrites", O.grades.churn, P ? D.overall.prev_grades.churn : "",
+      O.churn.toFixed(1), "%",
+      "Share of spend that rewrote a window after its cache lapsed. Target is zero.");
   add("Control · bad cycles", O.grades.control, D.overall.prev_grades.control,
       O.ctl.toFixed(2), "/cycle",
-      "Budget breaches plus gap rewrites, the rewrite counted double. Target is zero.");
+      "Over-budget prompts per cycle. Target is zero.");
 })();
 
 // --- 7d split ----------------------------------------------------------------
@@ -438,7 +441,7 @@ const R7 = within(7), R14 = within(14);
            c.style.color = css(s.cache_left_min <= 10 ? "orange" : s.cache_left_min <= 20 ? "yellow" : "dim"); }
     rt.append(c);
     const g = el("div", "delta",
-      [s.grades.spend, s.grades.production, s.grades.control].filter(Boolean).join(" ") || "—");
+      [s.grades.spend, s.grades.churn, s.grades.control].filter(Boolean).join(" ") || "—");
     rt.append(g);
     rt.append(el("div", "delta", usd(s.cost.total)));
     row.append(rt);

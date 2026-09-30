@@ -234,7 +234,8 @@ colour without changing length; what the window costs *right now* is the cache c
 advice line, because that is the pair that depends on the clock. The `cost` column is what the
 session has spent so far in input-equivalents, split green output / orange cache writes / blue
 cache reads — mostly-green is work, mostly-blue is rent. `OVERALL 7d` under the summary grades
-spend / production / control across the last week against your own median, which is the line to
+held (spend past the cut bar) / short (spend on sessions of 2 cycles or fewer) / churn / control
+across the last week, each against a target of zero, which is the line to
 watch across weeks; `t` expands it into the whole history — where the spend went, median and p90
 per cycle, a 14-day sparkline, breach and gap-rewrite rates, and 7d-versus-before with arrows.
 Plan percentages need one calibration: run `/usage`, then set `TOKEN_PLAN_WEEK_USD` to match.

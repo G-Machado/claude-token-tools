@@ -153,7 +153,7 @@
 #            column means the same thing on every row: how much NEW material
 #            that cycle pulled in. Red over the growth budget, amber over the
 #            output budget. Select the row for med / last / peak.
-#   grade    spend / production / control for that session, against what this
+#   grade    spend / churn / control for that session, against what this
 #            machine actually does. Spend is measured ABOVE the ~63k cold floor,
 #            because that write is not a choice - undiscounted it ran 254k per
 #            cycle at cycle 1 and decayed to 168k by cycle 8 on identical work,
@@ -479,7 +479,7 @@ measure_constants() {
         pm2 = mid; pr2 = rr }
       for (k in sn) {
         if (sn[k] < 2) continue
-        w = so[k] * 5 + sr[k] * 2 + sc[k] * 2.3 * 0.1 * sn[k]
+        w = so[k] * 5 + sr[k] * 2 + sc[k] * rpc * 0.1 * sn[k]
         if (w <= 0) continue
         # Above the floor, not from zero. Every session pays ~f of cache write
         # before it has done anything, and dividing that one-off by a small
@@ -525,6 +525,17 @@ else
   measure_constants
 fi
 
+# The unparked cut bar in k - the same CUT_NO, with the same fallbacks, that the
+# JSON hands the widget as cut_no. The held grade counts spend past it, so the
+# two can never draw the bar in different places.
+cut_bar_k() {
+  awk -v f="$M_FLOOR" -v rd="$M_RD" -v rem="$M_REM" -v rpc="$RPC" 'BEGIN {
+    F = (f > 0 ? f : 63); D = (rd > 0 ? rd : 34); M = (rem + 0 > 0.5 ? rem : 4)
+    P = (rpc + 0 > 0 ? rpc : 2.3)
+    printf "%.1f\n", F + D + (F + D) * 2 / (M * P * 0.1) }'
+}
+CUT_K=$(cut_bar_k)
+
 # The same three axes the per-session grade uses, aggregated over a recent
 # window and the one before it, so the sessions tab can carry an OVERALL line
 # that moves week to week. Graded in render against the SAME corpus medians a
@@ -536,10 +547,11 @@ fi
 # estimate charges cycle 1 for the window cycle 40 ended up with.
 measure_overall() {
   O_WPC=0; O_PROD=0; O_CTL=0; O_N=0; P_WPC=0; P_PROD=0; P_CTL=0; P_N=0
-  O_5H=0; O_7D=0
+  O_5H=0; O_7D=0; O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
   [ -r "$HIST" ] || return 0
-  read -r O_WPC O_PROD O_CTL O_N P_WPC P_PROD P_CTL P_N O_5H O_7D O_CHURN P_CHURN <<< "$(awk -F, \
-    -v now="${EPOCHSECONDS:-$(date +%s)}" -v rpc="$RPC" -v floor="$M_FLOOR" '
+  read -r O_WPC O_PROD O_CTL O_N P_WPC P_PROD P_CTL P_N O_5H O_7D O_CHURN P_CHURN \
+          O_HELD P_HELD O_SHORT P_SHORT <<< "$(awk -F, \
+    -v now="${EPOCHSECONDS:-$(date +%s)}" -v rpc="$RPC" -v floor="$M_FLOOR" -v cut="$CUT_K" '
     function ep(t,   s) { s = t; gsub(/[-:]/, " ", s); return mktime(s " 00") }
     NR > 1 && $2 != "" {
       e = ep($1); if (e <= 0) next
@@ -560,29 +572,44 @@ measure_overall() {
       # Cycle 1 contributes no churn for the same reason it contributes no
       # growth - the cold load is the floor, not the window being rewritten.
       chw = ($3 + 0 > 1) ? ch * 2 : 0
-      if      (age <= 604800)  { rw += wg; ru += w; ro += $4 * 5; rn++; rc += bad; rh += chw }
-      else if (age <= 1209600) { qw += wg; qu += w; qo += $4 * 5; qn++; qc += bad; qh += chw }
-      else                     { xw += wg; xu += w; xo += $4 * 5; xn++; xc += bad; xh += chw }
+      # Held: spend in a cycle whose window was already past the cut bar - the
+      # rent a handoff or /clear would have stopped paying.
+      # Held and short count real cycles only - renewal pokes and parks are
+      # out of both the share and its base, the same rows the analytics tab
+      # counts, so the two views agree.
+      hl = ($8 == "renew" || $8 == "park") ? 1 : 0
+      pw = hl ? 0 : w
+      hb = ($6 + 0 > cut * 1000) ? pw : 0
+      if      (age <= 604800)  { rw += wg; ru += w; ro += $4 * 5; rn++; rc += bad; rh += chw; rhd += hb; rp += pw; sr7[$2] += pw }
+      else if (age <= 1209600) { qw += wg; qu += w; qo += $4 * 5; qn++; qc += bad; qh += chw; qhd += hb; qp += pw; srq[$2] += pw }
+      else                     { xw += wg; xu += w; xo += $4 * 5; xn++; xc += bad; xh += chw; xhd += hb; xp += pw; srx[$2] += pw }
+      # Short: a session that stopped at two real cycles or fewer. Only once its
+      # cache has lapsed, or every session would read short for its first two
+      # prompts.
+      if (!hl) scy[$2]++
+      slast[$2] = e
       if (age <= 604800) s7 += w
       if (age <= 18000)  s5 += w }
     END {
+      for (k in slast) if (scy[k] <= 2 && now - slast[k] > 3600) { rs += sr7[k]; qs += srq[k]; xs += srx[k] }
       # A quiet fortnight leaves the prior week too thin to compare against, so
       # it widens to everything older rather than reporting a swing measured
       # off two cycles.
-      if (qn < 5) { qw += xw; qu += xu; qo += xo; qn += xn; qc += xc; qh += xh }
+      if (qn < 5) { qw += xw; qu += xu; qo += xo; qn += xn; qc += xc; qh += xh; qhd += xhd; qs += xs; qp += xp }
       # Spend off the discounted weight, production off the real one. They are
       # two different questions: how hard the window was driven above a floor it
       # had no say in, versus what share of every token actually spent went into
       # work. Rebasing the second measured flat across cycle index (35% at cycle
       # 1, 35% at cycle 8), so there was nothing there to correct and correcting
       # it anyway would just have inflated the number.
-      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f %.1f %.1f\n", \
+      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f %.1f %.1f %.1f %.1f %.1f %.1f\n", \
         (rn ? rw / rn / 1000 : 0), (ru ? ro * 100 / ru : 0), (rn ? rc / rn : 0), rn, \
         (qn ? qw / qn / 1000 : 0), (qu ? qo * 100 / qu : 0), (qn ? qc / qn : 0), qn, \
-        s5 / 1000, s7 / 1000, (ru ? rh * 100 / ru : 0), (qu ? qh * 100 / qu : 0) }' <(hist_rows) 2>/dev/null)"
+        s5 / 1000, s7 / 1000, (ru ? rh * 100 / ru : 0), (qu ? qh * 100 / qu : 0), \
+        (rp ? rhd * 100 / rp : 0), (qp ? qhd * 100 / qp : 0), (rp ? rs * 100 / rp : 0), (qp ? qs * 100 / qp : 0) }' <(hist_rows) 2>/dev/null)"
   : "${O_WPC:=0}" "${O_PROD:=0}" "${O_CTL:=0}" "${O_N:=0}"
   : "${P_WPC:=0}" "${P_PROD:=0}" "${P_CTL:=0}" "${P_N:=0}" "${O_5H:=0}" "${O_7D:=0}"
-  : "${O_CHURN:=0}" "${P_CHURN:=0}"
+  : "${O_CHURN:=0}" "${P_CHURN:=0}" "${O_HELD:=0}" "${P_HELD:=0}" "${O_SHORT:=0}" "${P_SHORT:=0}"
 }
 # This one used to run whatever the mode was, so --extend and --block paid for a
 # 7d aggregate they then exited without printing. The zeros are the same ones
@@ -591,6 +618,7 @@ measure_overall() {
 zero_overall() {
   O_WPC=0; O_PROD=0; O_CTL=0; O_N=0
   P_WPC=0; P_PROD=0; P_CTL=0; P_N=0; O_5H=0; O_7D=0; O_CHURN=0; P_CHURN=0
+  O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
 }
 if [ "${TS_NOSTATS:-0}" = 1 ]; then zero_overall; else measure_overall; fi
 
@@ -2643,6 +2671,7 @@ emit_json() {
       -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v p_churn="$M_CHURN" \
       -v o_wpc="$O_WPC" -v o_prod="$O_PROD" -v o_ctl="$O_CTL" -v o_n="$O_N" -v o_churn="$O_CHURN" \
       -v q_wpc="$P_WPC" -v q_prod="$P_PROD" -v q_ctl="$P_CTL" -v q_n="$P_N" -v q_churn="$P_CHURN" \
+      -v o_held="$O_HELD" -v q_held="$P_HELD" -v o_short="$O_SHORT" -v q_short="$P_SHORT" -v cutk="$CUT_K" \
       -v o5h="$O_5H" -v o7d="$O_7D" -v ttl="$TTL" -v ctxmax="$CTXMAX" \
       -v s7o="$S7O" -v s7w="$S7W" -v s7r="$S7R" \
       -v hf="$HF" \
@@ -2705,10 +2734,19 @@ emit_json() {
   # the target is zero. It is what a cycle paid to have its window rewritten
   # rather than to put new material into it or to produce anything, so it is
   # graded against the doctrine, not against how much of it you usually do.
-  # The ladder is fitted to the measured distribution over 103 sessions -
-  # median 6.4 percent, p90 26.2 - rather than to round numbers.
+  # Refitted 2026-09-30 for the measured read factor (5.8, was 2.3): the old
+  # 2/7/15/30 cuts kept at the same percentiles of 139 sessions. Zero-inflated -
+  # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
-    return (v <= 2) ? "A" : (v <= 7) ? "B" : (v <= 15) ? "C" : (v <= 30) ? "D" : "E" }
+    return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
+  # Held and short grade the aggregates only (7d, per day), never one session:
+  # the share of spend past the cut bar, and the share spent in sessions that
+  # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
+  # on C (held 45 percent, short 12.5).
+  function heldgrade(v) {
+    return (v <= 10) ? "A" : (v <= 25) ? "B" : (v <= 45) ? "C" : (v <= 65) ? "D" : "E" }
+  function shortgrade(v) {
+    return (v <= 5) ? "A" : (v <= 10) ? "B" : (v <= 20) ? "C" : (v <= 35) ? "D" : "E" }
 
   function ago(m) {
     if (m < 60)   return sprintf("%dm", m)
@@ -2926,12 +2964,17 @@ emit_json() {
     printf "},\n"
 
     printf "  \"overall\": {"
-    printf "\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f,\"ctl\":%.3f,\"n\":%d,", o_wpc, o_prod, o_churn, o_ctl, o_n
-    printf "\"prev\":{\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f,\"ctl\":%.3f,\"n\":%d},", q_wpc, q_prod, q_churn, q_ctl, q_n
-    printf "\"grades\":{\"spend\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
-      grade(o_wpc, p_wpc, 1), churngrade(o_churn), ctlgrade(o_ctl)
-    printf "\"prev_grades\":{\"spend\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
-      grade(q_wpc, p_wpc, 1), churngrade(q_churn), ctlgrade(q_ctl)
+    printf "\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f,\"ctl\":%.3f,\"held\":%.1f,\"short\":%.1f,\"cut_k\":%.1f,\"n\":%d,", \
+      o_wpc, o_prod, o_churn, o_ctl, o_held, o_short, cutk, o_n
+    printf "\"prev\":{\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f,\"ctl\":%.3f,\"held\":%.1f,\"short\":%.1f,\"n\":%d},", \
+      q_wpc, q_prod, q_churn, q_ctl, q_held, q_short, q_n
+    # The aggregate grades spend past the cut bar, not spend per cycle: one day of
+    # pooled spend against a per-session median read D on an ordinary day, and
+    # per cycle the per-session letter already says it.
+    printf "\"grades\":{\"held\":\"%s\",\"short\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
+      heldgrade(o_held), shortgrade(o_short), churngrade(o_churn), ctlgrade(o_ctl)
+    printf "\"prev_grades\":{\"held\":\"%s\",\"short\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
+      heldgrade(q_held), shortgrade(q_short), churngrade(q_churn), ctlgrade(q_ctl)
     printf "\"median\":{\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f},", p_wpc, p_prod, p_churn
     printf "\"split_7d\":{\"output\":%.0f,\"cache_write\":%.0f,\"cache_read\":%.0f},", s7o, s7w, s7r
     printf "\"spend_5h\":%.0f,\"spend_7d\":%.0f", o5h, o7d
@@ -3163,6 +3206,7 @@ render() {
     -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v p_churn="$M_CHURN" -v rpc="$RPC" -v price="$PRICE_IN" \
     -v o_wpc="$O_WPC" -v o_prod="$O_PROD" -v o_ctl="$O_CTL" -v o_n="$O_N" -v o_churn="$O_CHURN" \
     -v v_wpc="$P_WPC" -v v_prod="$P_PROD" -v v_ctl="$P_CTL" -v v_n="$P_N" -v v_churn="$P_CHURN" \
+    -v o_held="$O_HELD" -v v_held="$P_HELD" -v o_short="$O_SHORT" -v v_short="$P_SHORT" \
     -v up="$G_UP" -v dn="$G_DN" -v helpv="${HELPV:-0}" \
     -v g_act="$G_ACT" -v g_cut="$G_CUT" -v g_ok="$G_OK" \
     -v m_rem="$M_REM" -v m_heat="$M_HEAT" -v m_max="$MAX_AT_K" -v dtl="${DETAIL:-0}" \
@@ -3684,7 +3728,7 @@ render() {
     if (anytrend && dwid(leg) < W - 22)
       leg = leg sprintf("   %sgrowth%s %s%s%s%s%s %svs %.0fk%s", D, R, BLU, SP[2], SP[5], SP[8], R, D, gbud / 1000, R)
     if (GW && anytrend && dwid(leg) < W - 20)
-      leg = leg sprintf("   %sABC%s %sspend prod ctl%s", B, R, D, R)
+      leg = leg sprintf("   %sABC%s %sspend churn ctl%s", B, R, D, R)
     pl(leg)
     # Two lines, where there were four. The heat sentence and the under-the-floor
     # sentence were both prose explaining a column, printed on every frame - and
@@ -4126,13 +4170,14 @@ render() {
   # overall line and the cell on a row can never mean different things. The arrow is
   # the half worth watching: a C that used to be a D is a week that went right,
   # and one session on its own is far too noisy to read that off.
-  function overall(   g1, g2, g3, h1, h2, h3, s) {
+  function overall(   g1, g2, g3, g4, h1, h2, h3, h4, s) {
     if (o_n + 0 < 5) return ""
-    g1 = grade(o_wpc, p_wpc, 1);   h1 = grade(v_wpc, p_wpc, 1)
+    g1 = heldgrade(o_held);        h1 = heldgrade(v_held)
+    g4 = shortgrade(o_short);      h4 = shortgrade(v_short)
     g2 = churngrade(o_churn);      h2 = churngrade(v_churn)
     g3 = ctlgrade(o_ctl);          h3 = ctlgrade(v_ctl)
     s = sprintf("%sOVERALL%s %s7d%s   ", B, R, D, R)
-    s = s gpair(g1, h1, "spend") "   " gpair(g2, h2, "churn") "   " gpair(g3, h3, "control")
+    s = s gpair(g1, h1, "held") "   " gpair(g4, h4, "short") "   " gpair(g2, h2, "churn") "   " gpair(g3, h3, "control")
     return s sprintf("   %s%d cycles%s", D, o_n, R) }
 
   # The Claude-vs-Ollama split, sat directly under OVERALL because it is the same
@@ -4283,10 +4328,19 @@ render() {
   # the target is zero. It is what a cycle paid to have its window rewritten
   # rather than to put new material into it or to produce anything, so it is
   # graded against the doctrine, not against how much of it you usually do.
-  # The ladder is fitted to the measured distribution over 103 sessions -
-  # median 6.4 percent, p90 26.2 - rather than to round numbers.
+  # Refitted 2026-09-30 for the measured read factor (5.8, was 2.3): the old
+  # 2/7/15/30 cuts kept at the same percentiles of 139 sessions. Zero-inflated -
+  # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
-    return (v <= 2) ? "A" : (v <= 7) ? "B" : (v <= 15) ? "C" : (v <= 30) ? "D" : "E" }
+    return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
+  # Held and short grade the aggregates only (7d, per day), never one session:
+  # the share of spend past the cut bar, and the share spent in sessions that
+  # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
+  # on C (held 45 percent, short 12.5).
+  function heldgrade(v) {
+    return (v <= 10) ? "A" : (v <= 25) ? "B" : (v <= 45) ? "C" : (v <= 65) ? "D" : "E" }
+  function shortgrade(v) {
+    return (v <= 5) ? "A" : (v <= 10) ? "B" : (v <= 20) ? "C" : (v <= 35) ? "D" : "E" }
 
   function gcol(g) {
     return (g == "A") ? GRN : (g == "B") ? GRN : (g == "C") ? BLU : (g == "D") ? YEL : RED }
@@ -4323,7 +4377,7 @@ render() {
     g[3] = ctlgrade(ctl)
     return 1 }
 
-  # The table cell: three letters, spend / production / control, in that order.
+  # The table cell: three letters, spend / churn / control, in that order.
   function gcell(i,   g) {
     if (GW == 0) return ""
     if (!gvals(i, g)) return rep(" ", GW)
@@ -4757,7 +4811,7 @@ analytics() {
       -v plan5="$PLAN_5H" -v planwk="$PLAN_WK" -v titles="$TITLES" \
       -v projmap="$PROJMAP" \
       -v p_wpc="$M_WPC" -v p_prod="$M_PROD" -v p_churn="$M_CHURN" -v wk="$BUCKET" -v hud="$HUD" \
-      -v floor="$M_FLOOR" -v heatbar="$M_HEAT" -v m_rem="$M_REM" \
+      -v floor="$M_FLOOR" -v heatbar="$M_HEAT" -v m_rem="$M_REM" -v cut="$CUT_K" \
       -v full="$G_FULL" -v empt="$G_EMPT" -v sparks="$SPARKS" -v arrow="$G_ARROW" \
       -v gtl="$G_TL" -v gtr="$G_TR" -v gbl="$G_BL" -v gbr="$G_BR" -v ghh="$G_H" \
       -v vv="$G_V" -v vf="$G_VF" -v up="$G_UP" -v dn="$G_DN" -v clock="$CLOCK" \
@@ -4841,10 +4895,19 @@ analytics() {
   # the target is zero. It is what a cycle paid to have its window rewritten
   # rather than to put new material into it or to produce anything, so it is
   # graded against the doctrine, not against how much of it you usually do.
-  # The ladder is fitted to the measured distribution over 103 sessions -
-  # median 6.4 percent, p90 26.2 - rather than to round numbers.
+  # Refitted 2026-09-30 for the measured read factor (5.8, was 2.3): the old
+  # 2/7/15/30 cuts kept at the same percentiles of 139 sessions. Zero-inflated -
+  # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
-    return (v <= 2) ? "A" : (v <= 7) ? "B" : (v <= 15) ? "C" : (v <= 30) ? "D" : "E" }
+    return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
+  # Held and short grade the aggregates only (7d, per day), never one session:
+  # the share of spend past the cut bar, and the share spent in sessions that
+  # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
+  # on C (held 45 percent, short 12.5).
+  function heldgrade(v) {
+    return (v <= 10) ? "A" : (v <= 25) ? "B" : (v <= 45) ? "C" : (v <= 65) ? "D" : "E" }
+  function shortgrade(v) {
+    return (v <= 5) ? "A" : (v <= 10) ? "B" : (v <= 20) ? "C" : (v <= 35) ? "D" : "E" }
   function gcol(g) {
     return (g == "A") ? GRN : (g == "B") ? GRN : (g == "C") ? BLU : (g == "D") ? YEL : RED }
   # One graded series across the buckets: a sparkline of the magnitude, and the
@@ -4859,6 +4922,8 @@ analytics() {
       if (bkn[i] < 1) continue
       if      (kind == 1) v = dg[i] / bkn[i] / 1000            # weighted per cycle, above the floor
       else if (kind == 2) v = (dwp[i] > 0) ? bkh[i] * 100 / dwp[i] : 0
+      else if (kind == 4) v = (dwp[i] > 0) ? bkd[i] * 100 / dwp[i] : 0   # share past the cut bar
+      else if (kind == 5) v = (dwp[i] > 0) ? bks[i] * 100 / dwp[i] : 0   # share in short sessions
       else                v = bkc[i] / bkn[i]                   # prompt breaches per cycle
       GB[i] = v
       if (v > mx) mx = v }
@@ -4868,7 +4933,8 @@ analytics() {
       if (v < 0) { sp = sp GRY SP[1] R " "; ls = ls D "." R " "; continue }
       g = (bkn[i] < 2) ? "-" \
         : (kind == 1) ? grade(v, p_wpc, 1) \
-        : (kind == 2) ? churngrade(v) : ctlgrade(v)
+        : (kind == 2) ? churngrade(v) : (kind == 4) ? heldgrade(v) \
+        : (kind == 5) ? shortgrade(v) : ctlgrade(v)
       ix = (mx > 0) ? int(v / mx * 7) + 1 : 1
       if (ix > 8) ix = 8
       if (ix < 1) ix = 1
@@ -4986,12 +5052,15 @@ analytics() {
     if (di < NB) {
       dw[di] += w
       if (!hld) { dwp[di] += w; dg[di] += wg; bko[di] += $4 * 5; bkn[di]++; bkc[di] += bch
-                 bkh[di] += ($3 + 0 > 1) ? ch * 2 : 0 } }
+                 bkh[di] += ($3 + 0 > 1) ? ch * 2 : 0
+                 bkd[di] += ($6 + 0 > cut * 1000) ? w : 0; SBW[$2 SUBSEP di] += w } }
     if (!hld) {
       chw = ($3 + 0 > 1) ? ch * 2 : 0
-      if      (age <= 604800)  { A7 += w; A7G += wg; A7O += $4 * 5; A7N++; A7C += bch; A7H += chw }
-      else if (age <= 1209600) { B7 += w; B7G += wg; B7O += $4 * 5; B7N++; B7C += bch; B7H += chw }
-      else                     { C7 += w; C7G += wg; C7O += $4 * 5; C7N++; C7C += bch; C7H += chw } }
+      hdw = ($6 + 0 > cut * 1000) ? w : 0
+      SCY[$2]++; SLAST[$2] = e
+      if      (age <= 604800)  { A7 += w; A7G += wg; A7O += $4 * 5; A7N++; A7C += bch; A7H += chw; A7D += hdw; SH7[$2] += w }
+      else if (age <= 1209600) { B7 += w; B7G += wg; B7O += $4 * 5; B7N++; B7C += bch; B7H += chw; B7D += hdw; SH14[$2] += w }
+      else                     { C7 += w; C7G += wg; C7O += $4 * 5; C7N++; C7C += bch; C7H += chw; C7D += hdw; SHX[$2] += w } }
     # The workshop, per cycle rather than per project - see METACAP and TOOLRE.
     # Counted in the same !hld branch A7 uses, so the percentage it is quoted as
     # has the same denominator it is divided by.
@@ -5095,7 +5164,13 @@ analytics() {
     # worse than no letter.
     printf "%s%sheight is the amount, the letter under it is the grade%s\n", \
       lab("grades"), D, R
-    gser("spend", 1); gser("churn", 2); gser("control", 3)
+    # Short needs the final cycle count of every session, so it is placed here,
+    # after every row is in, rather than row by row. A session still inside
+    # its cache hour is not short yet - it may be about to take a third prompt.
+    for (k in SBW) { split(k, sk, SUBSEP)
+      if (SCY[sk[1]] <= 2 && now - SLAST[sk[1]] > 3600) bks[sk[2]] += SBW[k] }
+    for (k in SLAST) if (SCY[k] <= 2 && now - SLAST[k] > 3600) { A7S += SH7[k]; B7S += SH14[k]; C7S += SHX[k] }
+    gser("held", 4); gser("short", 5); gser("churn", 2); gser("control", 3)
     leg = sprintf("%sA%s %sB%s %sC%s %sD%s %sE%s  %s- under 2 cycles  . none%s", \
       GRN, R, GRN, R, BLU, R, YEL, R, RED, R, D, R)
     hint = watch ? "w  " (wk ? "days" : "weeks") : "--" (wk ? "daily" : "weekly")
@@ -5108,7 +5183,7 @@ analytics() {
     # A quiet fortnight leaves the prior week too thin to compare against, so it
     # widens to everything older rather than reporting a swing measured off two
     # cycles.
-    if (B7N < 5) { B7 += C7; B7G += C7G; B7O += C7O; B7N += C7N; B7C += C7C; B7H += C7H }
+    if (B7N < 5) { B7 += C7; B7G += C7G; B7O += C7O; B7N += C7N; B7C += C7C; B7H += C7H; B7D += C7D; B7S += C7S }
     if (A7N >= 5 && B7N >= 5) {
       aw = A7G / A7N / 1000; bw = B7G / B7N / 1000
       ao = A7O * 100 / A7;  bo = B7O * 100 / B7
@@ -5118,14 +5193,17 @@ analytics() {
       printf "%s%sspend/cycle%s    %.0fk %s %s%.0fk%s   %s   %sabove the ~%.0fk floor%s\n", lab(""), D, R, bw, arrow, B, aw, R, delta(bw, aw, 1), D, floor, R
       printf "%s%soutput share%s   %.0f%% %s %s%.0f%%%s   %s\n", lab(""), D, R, bo, arrow, B, ao, R, delta(bo, ao, 0)
       printf "%s%sper cycle%s      %.2f %s %s%.2f%s %sprompt breaches%s   %s\n", lab(""), D, R, bc, arrow, B, ac, R, D, R, delta(bc, ac, 1)
-      # Graded against the corpus medians, NOT against the previous window -
-      # the arrows above already carry the movement. If this graded against
-      # last week instead, a C here and a C on the sessions tab would be two
-      # different claims, and the whole point of a letter is that it means one
-      # thing wherever it appears.
-      g1 = grade(aw, p_wpc, 1); g2 = churngrade(ah); g3 = ctlgrade(ac)
-      printf "%s%sgraded%s         %s%s%s spend   %s%s%s churn   %s%s%s control   %sspend vs median, churn and control vs zero%s\n\n", \
-        lab(""), D, R, gcol(g1), g1, R, gcol(g2), g2, R, gcol(g3), g3, R, D, R }
+      ad = A7D * 100 / A7;  bd = B7D * 100 / B7
+      a_s = A7S * 100 / A7; b_s = B7S * 100 / B7
+      printf "%s%spast the cut%s   %.0f%% %s %s%.0f%%%s   %s   %sof spend in windows over ~%.0fk%s\n", lab(""), D, R, bd, arrow, B, ad, R, delta(bd, ad, 1), D, cut, R
+      printf "%s%sshort%s          %.0f%% %s %s%.0f%%%s   %s   %sof spend in sessions of 2 cycles or fewer%s\n", lab(""), D, R, b_s, arrow, B, a_s, R, delta(b_s, a_s, 1), D, R
+      # Graded against fixed targets, NOT against the previous window - the
+      # arrows above already carry the movement. Spend per cycle stays an
+      # ungraded figure here: the per-session letter grades it, and a pooled
+      # week against a per-session median read D on an ordinary week.
+      g1 = heldgrade(ad); g4 = shortgrade(a_s); g2 = churngrade(ah); g3 = ctlgrade(ac)
+      printf "%s%sgraded%s         %s%s%s held   %s%s%s short   %s%s%s churn   %s%s%s control   %sall four against zero%s\n\n", \
+        lab(""), D, R, gcol(g1), g1, R, gcol(g4), g4, R, gcol(g2), g2, R, gcol(g3), g3, R, D, R }
 
     if (planwk + 0 > 0 || plan5 + 0 > 0) {
       printf "%s", lab("plan")

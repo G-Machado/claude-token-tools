@@ -192,8 +192,8 @@ Open the history view in the widget.
 Where the spend went, median and p90 per cycle, a 14-day sparkline, breach and gap-rewrite
 rates, and 7d-versus-before with arrows. `w` switches to weekly buckets, `[` and `]` page.
 
-The line to watch across weeks is **OVERALL 7d** under the summary box: spend / production /
-control, graded against your own median rather than against mine.
+The line to watch across weeks is **OVERALL 7d** under the summary box: held / short / churn /
+control, each graded against a target of zero. Spend per cycle is graded per session only.
 
 **Then change the numbers.** Every threshold shipped here was measured on one machine, one plan,
 one kind of work. Override any of them from the environment:

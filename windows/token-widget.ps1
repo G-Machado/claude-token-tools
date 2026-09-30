@@ -1543,6 +1543,21 @@ function New-Row {
             -From 1.0 -To 0.55 -Seconds 1.5 -Forever -AutoReverse
   }
   $names.Children.Add($nick) | Out-Null
+  # Which project the window is working in, straight after its title: two
+  # windows on different repos can carry near-identical nicknames.
+  $pj = [string]$S.project
+  if ($pj) {
+    $prj = New-Object Windows.Controls.Border
+    $prj.CornerRadius = New-Object Windows.CornerRadius (4)
+    $prj.Background = (Br '#FF1B1C22')
+    $prj.Padding = '6,1,6,2'
+    $prj.Margin = '7,0,0,0'
+    $prj.VerticalAlignment = 'Center'
+    $pt = $(if ($pj.Length -gt 20) { $pj.Substring(0, 19) + [char]0x2026 } else { $pj })
+    $prj.Child = Text-Block $pt 9.5 $Pal.faint
+    Tip $prj $(if ($S.cwd) { "project $pj`n$($S.cwd)" } else { "project $pj" })
+    $names.Children.Add($prj) | Out-Null
+  }
   # What is answering in there, where the short session id used to sit. The id
   # was only ever a lookup key for the commands below - r copies it, e spends a
   # mark with it - and never something read at a glance; it moved to the detail
@@ -1606,17 +1621,10 @@ function New-Row {
     $ap.Orientation = 'Horizontal'; $ap.VerticalAlignment = 'Center'
     $acc.Child = $ap
     # The number is what the limits panel calls it, so the two can be read
-    # against each other; the name is there because a bare digit is not
-    # recognisable at a glance and the panel is 40 rows down.
+    # against each other. Number only on the card; the address stays on the hover.
     $an = Text-Block ([string][int]$S.account) 9.5 $Pal.blue
     $ap.Children.Add($an) | Out-Null
     $who = [string]$S.account_email
-    if ($who) {
-      $short = $who -replace '@.*$', ''
-      if ($short.Length -gt 14) { $short = $short.Substring(0, 13) + [char]0x2026 }
-      $ab = Text-Block "  $short" 9.5 $Pal.faint
-      $ap.Children.Add($ab) | Out-Null
-    }
     Tip $acc $("this window is spending account {0}{1} - derived from its own usage payload, not from the global config, so a session that outlived a cswap switch still reports the credentials it opened with" -f `
       [int]$S.account, $(if ($who) { " ($who)" } else { '' }))
     $names.Children.Add($acc) | Out-Null
@@ -3039,11 +3047,20 @@ function Update-View {
   $el.Title.Text = if ($bits.Count) { "TOKEN  $($bits -join '  ')" } else { 'TOKEN SESSIONS' }
 
   $el.Grades.Children.Clear()
-  foreach ($g in @(@('spend', $d.overall.grades.spend, $d.overall.prev_grades.spend),
-                   @('churn', $d.overall.grades.churn, $d.overall.prev_grades.churn),
-                   @('ctl',   $d.overall.grades.control, $d.overall.prev_grades.control))) {
+  # The week, not a session: spend past the cut bar replaced spend per cycle
+  # here (each card still grades that), and short sessions joined it.
+  $ov = $d.overall
+  foreach ($g in @(@('held',  $ov.grades.held,    $ov.prev_grades.held,
+                     ("{0:N0}% of the week's spend was in windows past the {1:N0}k cut bar - hand off or /clear sooner" -f [double]$ov.held, [double]$ov.cut_k)),
+                   @('short', $ov.grades.short,   $ov.prev_grades.short,
+                     ("{0:N0}% of the week's spend went on sessions that stopped at 2 cycles or fewer - ask small things in a warm window" -f [double]$ov.short)),
+                   @('churn', $ov.grades.churn,   $ov.prev_grades.churn,
+                     ("{0:N1}% of the week's spend rewrote a window that had lapsed" -f [double]$ov.churn)),
+                   @('ctl',   $ov.grades.control, $ov.prev_grades.control,
+                     ("{0:N2} over-budget prompts per cycle this week" -f [double]$ov.ctl)))) {
     $sp = New-Object Windows.Controls.StackPanel
     $sp.Orientation = 'Horizontal'; $sp.Margin = '0,0,12,0'
+    Tip $sp $g[3]
     $lab = Text-Block $g[0] 10 $Pal.faint; $lab.Margin = '0,2,4,0'
     $sp.Children.Add($lab) | Out-Null
     $gr = Text-Block $(if ($g[1]) { $g[1] } else { '-' }) 11 (Grade-Color $g[1])
