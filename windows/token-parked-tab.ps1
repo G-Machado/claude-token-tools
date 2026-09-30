@@ -10,7 +10,6 @@
 
 # checkpoints change slowly, and the answer is a directory listing, not a collect
 $PkEvery = 300
-if ($null -eq $script:View.pkDetail) { $script:View.pkDetail = $false }
 
 # A checkpoint whose window is still open. Not a warning - there is nothing
 # wrong with it - but unparking it starts a SECOND window on one strand, and the
@@ -23,8 +22,8 @@ $OpenBrush  = (Br '#1A7C9CBF')
 $BehindBrush = (Br '#18FB923C')
 
 $PK_KEYMAP = @(
-  @('j k', 'move the selection'),     @('1-9', 'select that row'),
-  @('g G', 'first / last row'),       @('d',   'the rest of the checkpoint'),
+  @('j k', 'move - the selected row opens'), @('1-9', 'select that row'),
+  @('g G', 'first / last row'),
   @('enter', 'resume it in a terminal'), @('y', 'copy the resume command'),
   @('o',   'open the checkpoint file'), @('e', 'open the project folder'),
   @('x x', 'delete it - twice, and it is gone'),
@@ -137,8 +136,49 @@ function Pk-State-Of($C, [double]$StaleAfter) {
 }
 
 # --- the row -----------------------------------------------------------------
+# One labelled block of the expanded row. -Bullets takes the body as one item
+# per line (token-sessions.sh keeps a section's bullets on separate lines) and
+# hangs each off a dot, so a wrapped item still reads as one. -Brief is for a
+# list you want the gist of: each item is cut at its first em-dash aside (the
+# reason, which is what makes a decision long) and held to one line, the whole
+# item on hover; -Max stops the list and says how many were left out. Only the
+# em dash: a spaced hyphen turns up inside decisions too, "(+ - 0)". Written as
+# [char]0x2014 because PowerShell 5.1 reads a BOM-less script as ANSI.
+function Pk-Detail-Section {
+  param($Parent, [string]$Label, [string]$Body, $Colour, [string]$Why = '',
+        [switch]$Bullets, [switch]$Brief, [int]$Max = 0)
+  $lb = Text-Block $Label 8.5 $Pal.faint
+  $lb.Margin = '18,7,0,2'
+  if ($Why) { Tip $lb $Why }
+  $Parent.Children.Add($lb) | Out-Null
+  $items = if ($Bullets) { @($Body -split "`n" | Where-Object { $_ -match '\S' }) } else { @($Body) }
+  $shown = if ($Max -gt 0 -and $items.Count -gt $Max) { $items[0..($Max - 1)] } else { $items }
+  foreach ($it in $shown) {
+    $txt = if ($Brief) { ($it -split (' {0} ' -f [char]0x2014), 2)[0] } else { $it }
+    $tx = Text-Block $txt 9.5 $Colour 'Segoe UI'
+    if ($Brief) {
+      $tx.TextWrapping = 'NoWrap'; $tx.TextTrimming = 'CharacterEllipsis'
+      if ($txt -ne $it) { Tip $tx $it }
+    } else { $tx.TextWrapping = 'Wrap' }
+    if (-not $Bullets) { $tx.Margin = '18,0,4,0'; $Parent.Children.Add($tx) | Out-Null; continue }
+    $dp = New-Object Windows.Controls.DockPanel
+    $dp.Margin = '18,1,4,0'
+    $bd = Text-Block ([string][char]0x2022) 9.5 $Colour
+    $bd.Width = 10
+    [Windows.Controls.DockPanel]::SetDock($bd, 'Left')
+    $dp.Children.Add($bd) | Out-Null
+    $dp.Children.Add($tx) | Out-Null
+    $Parent.Children.Add($dp) | Out-Null
+  }
+  if ($shown.Count -lt $items.Count) {
+    $mo = Text-Block ('+{0} more - o opens the checkpoint' -f ($items.Count - $shown.Count)) 9 $Pal.faint
+    $mo.Margin = '28,1,4,0'
+    $Parent.Children.Add($mo) | Out-Null
+  }
+}
+
 function Pk-New-Row {
-  param($C, [double]$StaleAfter, [bool]$Selected, [bool]$Detail, [bool]$Dim)
+  param($C, [double]$StaleAfter, [bool]$Selected, [bool]$Dim)
   $st = Pk-State-Of $C $StaleAfter
 
   # Two borders, as next door: the outer owns selection - a ring round the whole
@@ -221,7 +261,7 @@ function Pk-New-Row {
   # The single most useful line on the row, and the reason this panel is worth
   # having at all: it is the one thing that tells you whether picking this up
   # now is five minutes of work or an afternoon. Trimmed to one line - the whole
-  # section is on hover, and in full under d.
+  # section is on hover, and in full once the row is selected.
   if ($C.next) {
     $nx = Text-Block ([string]$C.next) 10 $Pal.dim 'Segoe UI'
     $nx.Margin = '18,4,0,0'
@@ -251,24 +291,26 @@ function Pk-New-Row {
   $outer.Children.Add($l3) | Out-Null
 
   # --- detail ----------------------------------------------------------------
-  # What the row has no room for and you only want on one checkpoint at a time.
-  # Task in flight first, because that is the paragraph that says what the work
-  # IS - the row says what to do next, which is only meaningful once you have
-  # remembered what you were doing.
-  if ($Detail -and $Selected) {
+  # What the row has no room for, on the selected row only: selecting IS asking
+  # what this one was, so there is no second key to find. What is waiting on
+  # you comes first and in full - it is the thing to settle before resuming -
+  # and saying there is none is as useful as listing them. Decisions are
+  # already settled, so they get a line each: enough to recognise, not re-read.
+  if ($Selected) {
     $rule = New-Object Windows.Controls.Border
-    $rule.Height = 1; $rule.Background = (Br $Pal.line); $rule.Margin = '18,8,4,7'
+    $rule.Height = 1; $rule.Background = (Br $Pal.line); $rule.Margin = '18,8,4,1'
     $outer.Children.Add($rule) | Out-Null
-    if ($C.task) {
-      $d1 = Text-Block ([string]$C.task) 9.5 $Pal.dim 'Segoe UI'
-      $d1.TextWrapping = 'Wrap'; $d1.Margin = '18,0,4,0'
-      $outer.Children.Add($d1) | Out-Null
+    if ($C.blocked) { Pk-Detail-Section $outer 'waiting on you' ([string]$C.blocked) $Pal.yellow -Bullets }
+    else {
+      $no = Text-Block 'nothing left open' 9 $Pal.faint
+      $no.Margin = '18,7,0,0'
+      $outer.Children.Add($no) | Out-Null
     }
-    if ($C.blocked) {
-      $d2 = Text-Block ('open: ' + [string]$C.blocked) 9.5 $Pal.yellow 'Segoe UI'
-      $d2.TextWrapping = 'Wrap'; $d2.Margin = '18,6,4,0'
-      $outer.Children.Add($d2) | Out-Null
-    }
+    if ($C.task)    { Pk-Detail-Section $outer 'goal' ([string]$C.task) $Pal.dim }
+    if ($C.next)    { Pk-Detail-Section $outer 'next' ([string]$C.next) $Pal.dim }
+    if ($C.decided) { Pk-Detail-Section $outer 'decided' ([string]$C.decided) $Pal.faint `
+                        'settled in that session - /unpark treats these as closed. Hover a line for the reason.' `
+                        -Bullets -Brief -Max 4 }
     $d3 = Text-Block ("{0}   {1}" -f $C.file, $(if ($C.short) { "session $($C.short)" } else { 'unstamped' })) 9 $Pal.faint
     $d3.Margin = '18,7,0,0'
     Tip $d3 ([string]$C.path)
@@ -611,7 +653,7 @@ function Pk-Draw-Rows {
   for ($i = 0; $i -lt $n; $i++) {
     $c = $script:PkVisible[$i]
     $isSel = ($script:PkSel -eq $i + 1)
-    $row = Pk-New-Row $c $stale $isSel $script:View.pkDetail ($anySel -and -not $isSel)
+    $row = Pk-New-Row $c $stale $isSel ($anySel -and -not $isSel)
     $row.Tag.idx = $i + 1
     $row.Tag.dim = ($anySel -and -not $isSel)
     # One handler for both clicks. A Border is not a Control, so it has no
@@ -694,9 +736,6 @@ function Pk-Handle-Key {
     'Escape' { if ($script:PkSel) { $script:PkSel = 0; Pk-Update-View; return }; break }
     'Return' { if (-not $script:PkSel -and $n) { $script:PkSel = 1; Pk-Update-View }
                Pk-Unpark-Row; return }
-    'D'      { $script:View.pkDetail = -not $script:View.pkDetail
-               if (-not $script:PkSel -and $n) { $script:PkSel = 1 }
-               Pk-Update-View; Save-State; return }
     'Y'      { if (-not $script:PkSel -and $n) { $script:PkSel = 1; Pk-Update-View }
                Pk-Copy-Resume; return }
     'O'      { if (-not $script:PkSel -and $n) { $script:PkSel = 1; Pk-Update-View }

@@ -6687,6 +6687,19 @@ parked_json() {
     function flat(s) {
       gsub(/\r/, " ", s); gsub(/`/, "", s); gsub(/\*\*/, "", s)
       gsub(/[ \t]+/, " ", s); return trim(s) }
+    # A bulleted section for the expanded row, where there IS room for a list:
+    # one bullet per line, the marker dropped, a wrapped continuation line
+    # joined back onto its bullet. The newlines survive into the JSON as \n,
+    # which jesc alone would have flattened to spaces.
+    function bul(acc, line,   t) {
+      t = flat(line)
+      if (line ~ /^[ \t]*[-*+] /) { sub(/^[-*+] +/, "", t); return acc (acc == "" ? "" : "\n") t }
+      if (line ~ /^[ \t]*[0-9]+[.)] /) return acc (acc == "" ? "" : "\n") t
+      return acc (acc == "" ? "" : " ") t }
+    function jlines(s,   k, a, i, o) {
+      k = split(s, a, "\n"); o = ""
+      for (i = 1; i <= k; i++) o = o (i > 1 ? "\\n" : "") jesc(a[i])
+      return "\"" o "\"" }
     BEGIN {
       # sid -> cwd, and project basename -> newest cwd. The first is exact and
       # is what a stamped checkpoint gets; the second is the fallback for one
@@ -6714,7 +6727,8 @@ parked_json() {
       if (d > 0) { proj = lead substr(name, 1, d - 1); topic = substr(name, d + 1) }
       else       { proj = lead name; topic = "general" }
 
-      sid = ""; title = ""; task = ""; nxt = ""; blk = ""; sect = ""; ln = 0; scwd = ""
+      sid = ""; title = ""; task = ""; nxt = ""; blk = ""; dcd = ""
+      sect = ""; ln = 0; scwd = ""
       while ((getline line < path) > 0) {
         ln++
         if (ln <= 4 && match(line, /session=[0-9a-f-]+/))
@@ -6726,11 +6740,15 @@ parked_json() {
         if (line ~ /^#+ +(Task in flight|Goal)/){ sect = "t"; continue }
         if (line ~ /^#+ +Next( step)?$|^#+ +Next step/){ sect = "n"; continue }
         if (line ~ /^#+ +(Blocked|Waiting on the user)/){ sect = "b"; continue }
+        if (line ~ /^#+ +Decided/)         { sect = "d"; continue }
         if (line ~ /^#+ /)                 { sect = "";  continue }
         if (sect == "" || line !~ /[^ \t\r]/) continue
-        if (sect == "t" && length(task) < 400) task = task (task == "" ? "" : " ") line
-        if (sect == "n" && length(nxt)  < 300) nxt  = nxt  (nxt  == "" ? "" : " ") line
-        if (sect == "b" && length(blk)  < 300) blk  = blk  (blk  == "" ? "" : " ") line
+        # Sized for the expanded row, which shows each in full; the row itself
+        # trims to one line whatever arrives.
+        if (sect == "t" && length(task) < 800)  task = task (task == "" ? "" : " ") line
+        if (sect == "n" && length(nxt)  < 900)  nxt  = nxt  (nxt  == "" ? "" : " ") line
+        if (sect == "b" && length(blk)  < 600)  blk  = bul(blk, line)
+        if (sect == "d" && length(dcd)  < 1500) dcd  = bul(dcd, line)
         if (ln > 400) break }
       close(path)
 
@@ -6760,8 +6778,9 @@ parked_json() {
       printf "\"model\":%s,\"effort\":%s,", \
         jstr((sid != "" && sid in MDL) ? MDL[sid] : ""), \
         jstr((sid != "" && sid in EFF) ? EFF[sid] : "")
-      printf "\"title\":%s,\"task\":%s,\"next\":%s,\"blocked\":%s}", \
-        jstr(flat(title)), jstr(flat(task)), jstr(flat(nxt)), jstr(flat(blk))
+      printf "\"title\":%s,\"task\":%s,\"next\":%s,\"blocked\":%s,", \
+        jstr(flat(title)), jstr(flat(task)), jstr(flat(nxt)), jlines(blk)
+      printf "\"decided\":%s}", jlines(dcd)
     }
     END { printf "],\"n\":%d,\"now\":%d,\"stale_after\":%d}\n", n + 0, now, stale }'
 }

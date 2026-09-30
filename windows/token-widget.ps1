@@ -4212,6 +4212,24 @@ if ($SelfTest) {
   Set-Tab 'parked'
   Write-Output ("tabs      : on parked, live body {0}, parked body {1}, legend {2} lines" -f `
     $el.LiveBody.Visibility, $el.PkBody.Visibility, $el.PkLegend.Children.Count)
+  # Selecting a row is what opens it, so the same row measured before and after
+  # selection has to grow, and only that row.
+  if ($el.PkRows.Children.Count -ge 2) {
+    $pkH = { param($i) $r = $el.PkRows.Children[$i]
+             $r.Measure((New-Object Windows.Size (360, [double]::PositiveInfinity)))
+             [math]::Round($r.DesiredSize.Height) }
+    $script:PkSel = 0; Pk-Update-View; $c0 = & $pkH 0
+    $script:PkSel = 1; Pk-Update-View; $c1 = & $pkH 0; $o2 = & $pkH 1
+    Write-Output ("  select  : row 1 {0}px -> {1}px, {2} blocks; row 2 stays {3}px" -f `
+      $c0, $c1, $el.PkRows.Children[0].Child.Child.Children.Count, $o2)
+    # The decided lines are cut at their em dash, which only works if the dash
+    # survived the trip out of bash - mis-decoded, it arrives as three letters.
+    $dc = @($script:PkData.checkpoints | ForEach-Object { [string]$_.decided })
+    Write-Output ("  decided : {0} with a section, {1} with an em dash, {2} mis-decoded" -f `
+      @($dc | Where-Object { $_ }).Count, @($dc | Where-Object { $_.Contains([string][char]0x2014) }).Count,
+      @($dc | Where-Object { $_.Contains([string][char]0x00E2 + [char]0x20AC) }).Count)
+    $script:PkSel = 0; Pk-Update-View
+  }
   Set-Tab 'live'
   $script:View.width = 500; $script:View.zoom = 1.2; Apply-Size
   Write-Output ("resize    : width=" + $script:View.width + " zoom=" + $script:View.zoom +
