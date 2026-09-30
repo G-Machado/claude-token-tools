@@ -1308,17 +1308,35 @@ prompt_of() {
       t = dec(substr($0, RSTART + RLENGTH))
       gsub(/[^ -~]/, "", t); gsub(/\|/, "/", t)
       gsub(/[ \t]+/, " ", t); sub(/^ +/, "", t); sub(/ +$/, "", t)
+      # A window opened on /unpark <topic> - by hand or by a handoff - says
+      # what it is for in that command, and its first real prompt is then the
+      # reply to the resume report: "yes", "go". The topic is the better name.
+      if (mode == "first" && utopic == "" && t ~ /<command-name>\/unpark<\/command-name>/ \
+          && match(t, /<command-args>[^<]*<\/command-args>/)) {
+        utopic = substr(t, RSTART + 14, RLENGTH - 29)
+        sub(/^ +/, "", utopic); sub(/ +$/, "", utopic) }
       if (t == "" || t ~ /^</ || t ~ /^\[Request interrupted/) next
-      if (mode == "first") { print t; exit }
+      if (mode == "first") { ft = t; exit }
       l = t }
+    # The names the CLI keeps for the window: customTitle from /rename, and
+    # aiTitle, the few words it writes after the opening turn. The CLI
+    # re-appends both every so often - measured 2026-09-30 on the twelve
+    # largest transcripts, the newest copy sat 0-30KB from the end - so the
+    # 400KB tail sees them without a read of its own. Last one seen wins.
+    mode == "probe" && /"type":"(custom|ai)-title"/ {
+      if (match($0, /"customTitle":"[^"]*"/)) { ctit = substr($0, RSTART + 15, RLENGTH - 16); gsub(/\|/, "/", ctit) }
+      if (match($0, /"aiTitle":"[^"]*"/))     { atit = substr($0, RSTART + 11, RLENGTH - 12); gsub(/\|/, "/", atit) } }
     END {
       # The live tuple sits BEFORE the prompt, not after it: the prompt is the
       # only field that can contain arbitrary text, so it has to stay last.
-      if (mode == "probe") { printf "%d|%d|%s|%d,%d,%d,%d,%d,%d,%d|%s|%s|%s\n", \
+      if (mode == "probe") { printf "%d|%d|%s|%d,%d,%d,%d,%d,%d,%d|%s|%s|%s|%s|%s\n", \
         (lastts > 0 ? NOWU - lastts : -1), (turnts > 0 ? NOWU - turnts : -1), \
         cwd, lreq + 0, lout + 0, lwr + 0, lrd + 0, lctx + 0, \
-        lext + 0, (lextts > 0 ? lextts : lastx) + 0, mdl, eff, l; exit }
-      if (mode != "first" && l != "") print l }' "$1"
+        lext + 0, (lextts > 0 ? lextts : lastx) + 0, mdl, eff, ctit, atit, l; exit }
+      # First prompt, then the /unpark topic if one came before it. Either can
+      # be empty; the caller caches only once there is a prompt.
+      if (mode == "first") { printf "%s\t%s\n", ft, utopic; exit }
+      if (l != "") print l }' "$1"
 }
 
 # Every /park checkpoint on disk, newest first: mtime, the session= stamp that
@@ -1581,7 +1599,7 @@ collect() {
   [ "${#pidset}" -gt 2 ] || pidset=" $(printf '%s\n' "$psout" |
     awk 'NR > 1 { print $1; print $4 }' | tr '\n' ' ') "
 
-  local -A TF TI HS MT SM SA LA SU SUT SR SUX
+  local -A TF TI TU HS MT SM SA LA SU SUT SR SUX
 
   # sid -> transcript path AND mtime, from one stat over the whole glob. This
   # used to be a shell loop here plus a stat per session further down; batching
@@ -1683,7 +1701,7 @@ collect() {
 
   # sid -> cached title, read whole rather than grepped once per session.
   if [ -f "$TITLES" ]; then
-    while IFS=$'\t' read -r k v; do [ -n "$k" ] && TI[$k]="$v"; done < "$TITLES"
+    while IFS=$'\t' read -r k v u; do [ -n "$k" ] && { TI[$k]="$v"; TU[$k]="$u"; }; done < "$TITLES"
   fi
 
   # sid -> "mtime<TAB>last-activity<TAB>cwd<TAB>model<TAB>effort". Live
@@ -1940,7 +1958,7 @@ EOF
     # it. They get the same probe, once, cached by mtime; and where the Stop
     # hook has seen the session at all, its last row settles the question for
     # free and no probe is needed.
-    act=$mtime; lastp=""; pcwd=""; page=-1; plive="0,0,0,0,0,0,0"
+    act=$mtime; lastp=""; pcwd=""; page=-1; plive="0,0,0,0,0,0,0"; pctit=""; patit=""
     pmodel=""; peff=""; tage=-1
     if [ "$alive" = 1 ]; then
       # Everything the hook has already accounted for is older than its last
@@ -1956,7 +1974,9 @@ EOF
       pcwd=${probe%%|*}; probe=${probe#*|}
       plive=${probe%%|*}; probe=${probe#*|}
       pmodel=${probe%%|*}; probe=${probe#*|}
-      peff=${probe%%|*}; lastp=${probe#*|}
+      peff=${probe%%|*}; probe=${probe#*|}
+      pctit=${probe%%|*}; probe=${probe#*|}
+      patit=${probe%%|*}; lastp=${probe#*|}
       case "$plive" in ''|*[!0-9,]*) plive="0,0,0,0,0,0,0" ;; esac
       case "$page" in ''|*[!0-9-]*) page=-1 ;; esac
       case "$tage" in ''|*[!0-9-]*) tage=-1 ;; esac
@@ -2204,16 +2224,27 @@ EOF
       esac
     fi
 
-    title="${TI[$sid]:-}"
-    if [ -z "$title" ]; then
-      if [ -n "$tf" ]; then title=$(prompt_of "$tf" first); fi
+    # The third column is the /unpark topic, "-" for none. Rows cached before
+    # it existed have nothing there, so an open window is read once more for
+    # it and the answer appended - the reader keeps the last row per session.
+    title="${TI[$sid]:-}"; utopic="${TU[$sid]:-}"
+    if [ -z "$title" ] || { [ -z "$utopic" ] && [ "$alive" = 1 ]; }; then
+      ctitle=$title
+      # Split by hand, not by read: a tab is IFS whitespace, so read would
+      # collapse an empty prompt and hand the topic over as the title.
+      if [ -n "$tf" ]; then
+        ft=$(prompt_of "$tf" first)
+        case "$ft" in *$'\t'*) title=${ft%%$'\t'*}; utopic=${ft#*$'\t'} ;; *) title=$ft ;; esac
+      fi
+      [ -n "$ctitle" ] && title=$ctitle
       # No transcript to read a first prompt out of. The payload carries the
       # name the CLI derived for this session, which is the same thing one step
       # further along, and it caches like any other title.
       [ -n "$title" ] || title="$suname"
-      if [ -n "$title" ]; then printf '%s\t%s\n' "$sid" "$title" >> "$TITLES"
+      if [ -n "$title" ]; then printf '%s\t%s\t%s\n' "$sid" "$title" "${utopic:--}" >> "$TITLES"
       else title="(no prompt yet)"; fi
     fi
+    [ "$utopic" = "-" ] && utopic=""
 
     # Fields 31-35: the live half, everything this window has spent since the
     # hook last wrote a row. Appended rather than woven in, because the pane
@@ -2267,9 +2298,14 @@ EOF
         for (i = 1; i <= NF; i++) { n = split($i, a, "~"); a[6] = 0; $i = a[1]
           for (j = 2; j <= n; j++) $i = $i "~" a[j] } print }')
     fi
+    # The topic this window is working on: the checkpoint it parked under,
+    # claimed by its session stamp, else the one it was opened on. A match by
+    # mtime alone is a guess about ownership and names nothing.
+    ntopic=$utopic
+    [ "$parked" = 1 ] && [ "$ckdist" -lt 0 ] && [ -n "$cktopic" ] && ntopic=$cktopic
     cttl=""; chit=""; cmis=""; cmrc=""; cmca=""
     [ -n "${SUX[$sid]:-}" ] && IFS='|' read -r cttl chit cmis cmrc cmca <<< "${SUX[$sid]}"
-    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
+    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
       "$short" "$alive" "$idle" "$left" "$ctx" "${name:0:34}" "$trend" \
       "$pid" "$proj" "$title" "$cyc" "$otot" "$olast" "$rlast" "$sid" "$tf" "$lastp" \
       "$run" "$parked" "$ckage" "$ckname" "$cktopic" "$ckothers" "$ckdist" \
@@ -2278,7 +2314,8 @@ EOF
       "${npoke:-0}" "${pokeage:--1}" "${spawnwhy:-}" "${gapmed:-0}" \
       "${pmodel:-}" "${peff:-}" "${runsince:-0}" \
       "${nag:-0}" "${naglive:-0}" "${agcost:-0}" "${aglist:-}" \
-      "$cttl" "$chit" "$cmis" "$cmrc" "$cmca"
+      "$cttl" "$chit" "$cmis" "$cmrc" "$cmca" \
+      "$pctit" "$ntopic" "$patit"
   done
 }
 
@@ -3070,7 +3107,17 @@ emit_json() {
       # Keyed by the SHORT id, which is what the pane writes into the file.
       # This read the full sid until 2026-09-02, so a name typed in the pane
       # was invisible to --json and the widget kept showing the derived one.
-      nk = (R[i,1] in NICK) ? NICK[R[i,1]] : nick(R[i,10], 20)
+      # Best source first, the same order the pane uses: typed in the pane,
+      # /rename, the checkpoint topic, the CLI title, the first prompt. The
+      # first prompt came last because a window opened on /unpark answers
+      # its resume report first, and was being called "yes".
+      nkf = (R[i,1] in NICK) ? "typed" : (R[i,52] != "") ? "renamed" : \
+            (R[i,53] != "") ? "topic" : (R[i,54] != "") ? "cli" : "prompt"
+      # The CLI title goes out as written - the card has room for its few
+      # words and reads them faster than a slug. The pane keeps a slug, since
+      # its name column has to stay one token wide.
+      nk = (nkf == "typed") ? NICK[R[i,1]] : (nkf == "renamed") ? R[i,52] : \
+           (nkf == "topic") ? R[i,53] : (nkf == "cli") ? R[i,54] : nick(R[i,10], 20)
       printf "    {"
       printf "\"sid\":%s,\"short\":%s,\"pid\":%d,", jstr(R[i,15]), jstr(R[i,1]), R[i,8]
       # Which account this window is spending, and what it is called. 0 and ""
@@ -3086,8 +3133,8 @@ emit_json() {
       # above 1 rather than folded into it. run_since is when that state began,
       # as an epoch second, or 0 where it is not known.
       printf "\"alive\":%d,\"running\":%d,\"run_since\":%d,", R[i,2] + 0, R[i,18] + 0, R[i,42] + 0
-      printf "\"name\":%s,\"nick\":%s,\"named\":%d,\"project\":%s,", \
-        jstr(R[i,6]), jstr(nk), (R[i,1] in NICK) ? 1 : 0, jstr(R[i,9])
+      printf "\"name\":%s,\"nick\":%s,\"named\":%d,\"nick_from\":%s,\"cli_title\":%s,\"topic\":%s,\"project\":%s,", \
+        jstr(R[i,6]), jstr(nk), (R[i,1] in NICK) ? 1 : 0, jstr(nkf), jstr(R[i,54]), jstr(R[i,53]), jstr(R[i,9])
       printf "\"cwd\":%s,\"title\":%s,\"last_prompt\":%s,", jstr(junesc(R[i,30])), jstr(R[i,10]), jstr(R[i,17])
       printf "\"transcript\":%s,", jstr(R[i,16])
       printf "\"idle_min\":%d,\"cache_left_min\":%d,\"touched_min\":%d,", R[i,3] + 0, R[i,4] + 0, R[i,29] + 0
@@ -3521,7 +3568,9 @@ render() {
     rt[n]  = $25 + 0; gt[n] = $26 + 0; fb[n] = $27 + 0; gp[n] = $28 + 0
     tc[n]  = $29 + 0; rs[n] = $42 + 0
     nc[n]  = NC[$1]
-    nk[n]  = (nc[n] != "") ? substr(nc[n], 1, NICKW) : nick(ti[n], NICKW)
+    # Same order as --json: typed, /rename, checkpoint topic, CLI title, prompt.
+    nk[n]  = (nc[n] != "") ? substr(nc[n], 1, NICKW) : ($52 != "") ? substr($52, 1, NICKW) : \
+             ($53 != "") ? substr($53, 1, NICKW) : nick(($54 != "") ? $54 : ti[n], NICKW)
     sfx[n] = (length(nm[n]) > 1) ? substr(nm[n], length(nm[n]) - 1) : "  "
     if (al[n] == 1 && id[n] < fresh_idle) { fresh_idle = id[n]; freshest = n }
     push(n) }
@@ -4969,7 +5018,9 @@ analytics() {
     TXW = W - LB - 4
     while ((getline tline < titles) > 0) {
       tp = index(tline, "\t"); if (!tp) continue
-      TT[substr(tline, 1, 8)] = substr(tline, tp + 1) }
+      # A third column, the /unpark topic, rides on newer rows.
+      tv = substr(tline, tp + 1); if ((tp = index(tv, "\t"))) tv = substr(tv, 1, tp - 1)
+      TT[substr(tline, 1, 8)] = tv }
     close(titles)
     while ((getline pline < projmap) > 0) {
       tp = index(pline, "\t"); if (!tp) continue

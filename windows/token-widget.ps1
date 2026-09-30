@@ -1529,8 +1529,16 @@ function New-Row {
   # anyway - and only when you are about to rename it.
   $nick = Text-Block $S.nick 11.5 $(
     if ($S.alive -ne 1) { $Pal.faint } else { $Pal.text })
-  $nickTip = $(if ($S.named -eq 1) { "named by hand - n renames it, empty clears it" }
-               else { "from its first prompt - n names it" })
+  # nick_from is the source token-sessions.sh settled on, best first: typed,
+  # renamed, topic, cli, prompt. An older script sends none; named still says.
+  $nickTip = switch ([string]$S.nick_from) {
+    'renamed' { "from /rename - n names it here instead" }
+    'topic'   { "the checkpoint topic it was opened on or parked under - n names it" }
+    'cli'     { "the title Claude Code gave it - n names it" }
+    'prompt'  { "from its first prompt - n names it" }
+    default   { $(if ($S.named -eq 1) { "named by hand - n renames it, empty clears it" }
+                  else { "from its first prompt - n names it" }) }
+  }
   if ([int]$S.spawned -eq 1) {
     $nickTip += "`nopened by the tooling{0}, not by you - greyed for that reason" -f `
                   $(if ($S.spawn_reason) { ": $($S.spawn_reason)" } else { '' })

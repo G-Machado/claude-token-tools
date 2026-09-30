@@ -132,6 +132,20 @@ Rules:
 Stored as a third field in `token-nicks.tsv` (`sid <TAB> variant <TAB> typed-name`). The field
 is optional, so older two-field rows keep working.
 
+Without a typed name, a row is named from the first source that has one (`nick_from` in `--json`):
+
+1. `renamed` — the session's `/rename` title (`customTitle` in the transcript).
+2. `topic` — the checkpoint the session parked under (by its session stamp), else the
+   `/unpark <topic>` it was opened on. Such a window's first prompt is the reply to the resume
+   report, usually "yes" or "go".
+3. `cli` — the title Claude Code wrote for it (`aiTitle`): as written on the widget card, cut to a
+   slug in the pane's name column.
+4. `prompt` — the opening words of the first prompt.
+
+`renamed` and `cli` come off the 400KB transcript tail the probe already reads; the CLI re-appends
+both near the end, so live sessions only. The `/unpark` topic is the optional third column of
+`token-titles.tsv` (`-` for none).
+
 ### Columns
 
 | column | means |
@@ -274,7 +288,7 @@ and gitignored.
 | file | written by | holds |
 |---|---|---|
 | `token-history.csv` | Stop hook | one raw row per cycle. **The dataset.** |
-| `token-titles.tsv` | the pane | sid → title cache; a first turn never changes, so it is extracted once |
+| `token-titles.tsv` | the pane | sid → title cache, plus the `/unpark` topic (`-` for none); a first turn never changes, so it is extracted once |
 | `token-meta.tsv` | the pane | sid → mtime, last activity, cwd |
 | `token-nicks.tsv` | the pane | sid → re-roll variant, and any name typed with `/n` |
 | `token-version.state` | the pane | last update check: epoch, and the version seen |
