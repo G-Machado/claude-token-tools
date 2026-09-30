@@ -224,94 +224,135 @@ $XAML = @'
     <Border.Effect><DropShadowEffect BlurRadius="18" ShadowDepth="3" Opacity="0.55" Color="#FF000000"/></Border.Effect>
     <StackPanel>
 
-      <Grid x:Name="Header" Margin="14,11,10,8" Background="Transparent">
+      <!-- Two tabs, the way a browser has them: the live sessions and the parked
+           checkpoints (token-parked-tab.ps1). They sit on the rule below, and
+           the one showing takes a ground a step up from the card; Style-Tabs
+           paints them. Clicking one switches, and so does v. -->
+      <Grid x:Name="Header" Margin="8,7,10,0" Background="Transparent">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
-        <StackPanel Orientation="Horizontal">
-          <TextBlock x:Name="Dot" Text="&#9679;" FontSize="10" Margin="0,3,7,0" Foreground="#FF4ADE80"/>
-          <TextBlock x:Name="Title" Text="TOKEN SESSIONS" FontFamily="Segoe UI" FontSize="11"
-                     FontWeight="SemiBold" Foreground="#FFE6E7EA"/>
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+          <Border x:Name="TabLive" Cursor="Hand" CornerRadius="6,6,0,0" BorderThickness="1,1,1,0"
+                  Padding="6,4,9,5" Margin="0,0,3,0" ToolTip="v - the live sessions">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock x:Name="Dot" Text="&#9679;" FontSize="10" Margin="0,3,7,0" Foreground="#FF4ADE80"/>
+              <TextBlock x:Name="Title" Text="TOKEN SESSIONS" FontFamily="Segoe UI" FontSize="11"
+                         FontWeight="SemiBold" Foreground="#FFE6E7EA"/>
+            </StackPanel>
+          </Border>
+          <Border x:Name="TabParked" Cursor="Hand" CornerRadius="6,6,0,0" BorderThickness="1,1,1,0"
+                  Padding="6,4,9,5" ToolTip="v - the parked checkpoints">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock x:Name="PkDot" Text="&#9670;" FontSize="10" Margin="0,3,7,0" Foreground="#FF5A5D66"/>
+              <TextBlock x:Name="PkTitle" Text="PARKED" FontFamily="Segoe UI" FontSize="11"
+                         FontWeight="SemiBold" Foreground="#FF8A8D97"/>
+              <TextBlock x:Name="PkCount" FontFamily="Consolas" FontSize="10"
+                         Foreground="#FF8A8D97" Margin="7,1,0,0"/>
+            </StackPanel>
+          </Border>
         </StackPanel>
         <TextBlock x:Name="Clock" Grid.Column="1" FontFamily="Consolas" FontSize="11"
-                   Foreground="#FF8A8D97" Margin="0,1,10,0"/>
+                   Foreground="#FF8A8D97" Margin="0,6,10,0"/>
         <TextBlock x:Name="Pin" Grid.Column="2" Text="&#9679;" FontSize="9"
-                   Foreground="#FF60A5FA" Cursor="Hand" Margin="0,2,9,0" ToolTip="p - unpin from the top"/>
+                   Foreground="#FF60A5FA" Cursor="Hand" Margin="0,7,9,0" ToolTip="p - unpin from the top"/>
         <TextBlock x:Name="Min" Grid.Column="3" Text="&#8211;" FontSize="12"
-                   Foreground="#FF5A5D66" Cursor="Hand" Margin="0,0,9,0" ToolTip="c - minimise to the live session"/>
+                   Foreground="#FF5A5D66" Cursor="Hand" Margin="0,5,9,0" ToolTip="c - minimise to the live session"/>
         <TextBlock x:Name="Close" Grid.Column="4" Text="&#10005;" FontSize="11"
-                   Foreground="#FF5A5D66" Cursor="Hand" Margin="0,1,4,0" ToolTip="esc - hide to the tray"/>
+                   Foreground="#FF5A5D66" Cursor="Hand" Margin="0,6,4,0" ToolTip="esc - hide to the tray"/>
       </Grid>
 
       <Border Height="1" Background="#FF2E3038"/>
 
-      <!-- Running out. Above everything, including the scorecard, because it is
-           the only thing here that is about the next ten minutes rather than
-           the last seven days. Collapsed entirely while there is room. -->
-      <Border x:Name="AlertBox" Padding="14,8,14,8" Visibility="Collapsed">
-        <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-          <TextBlock x:Name="AlertGlyph" FontFamily="Segoe UI Symbol" FontSize="11"
-                     Margin="0,1,8,0" VerticalAlignment="Top"/>
-          <TextBlock x:Name="AlertText" Grid.Column="1" FontFamily="Segoe UI" FontSize="10.5"
-                     TextWrapping="Wrap" LineHeight="15"/>
-        </Grid>
-      </Border>
+      <!-- The Sessions tab's body. Set-Tab collapses it whole, so nothing in
+           here has to know which tab is showing. -->
+      <StackPanel x:Name="LiveBody">
+        <!-- Running out. Above everything, including the scorecard, because it is
+             the only thing here that is about the next ten minutes rather than
+             the last seven days. Collapsed entirely while there is room. -->
+        <Border x:Name="AlertBox" Padding="14,8,14,8" Visibility="Collapsed">
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="AlertGlyph" FontFamily="Segoe UI Symbol" FontSize="11"
+                       Margin="0,1,8,0" VerticalAlignment="Top"/>
+            <TextBlock x:Name="AlertText" Grid.Column="1" FontFamily="Segoe UI" FontSize="10.5"
+                       TextWrapping="Wrap" LineHeight="15"/>
+          </Grid>
+        </Border>
 
-      <!-- the 7d scorecard: what the week cost, and whether it is getting better -->
-      <StackPanel x:Name="Score" Margin="14,10,14,10">
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <TextBlock Text="7d" FontFamily="Consolas" FontSize="10" Foreground="#FF5A5D66" Margin="0,2,9,0"/>
-          <StackPanel x:Name="Grades" Grid.Column="1" Orientation="Horizontal"/>
-          <TextBlock x:Name="Spend" Grid.Column="2" FontFamily="Consolas" FontSize="11" Foreground="#FFE6E7EA"/>
-        </Grid>
-        <Grid x:Name="SplitBar" Height="6" Margin="0,8,0,4"/>
-        <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-          <TextBlock x:Name="SplitKey" FontFamily="Consolas" FontSize="9" Foreground="#FF5A5D66"/>
-          <TextBlock x:Name="Wpc" Grid.Column="1" FontFamily="Consolas" FontSize="9" Foreground="#FF5A5D66"/>
-        </Grid>
-        <!-- What is left to spend, which is a different question from what a
-             window costs and so gets its own line under the split rather than a
-             column in it. Built in code: it is absent entirely until a status
-             line has run at least once. -->
-        <StackPanel x:Name="Limits" Margin="0,9,0,0"/>
+        <!-- the 7d scorecard: what the week cost, and whether it is getting better -->
+        <StackPanel x:Name="Score" Margin="14,10,14,10">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="7d" FontFamily="Consolas" FontSize="10" Foreground="#FF5A5D66" Margin="0,2,9,0"/>
+            <StackPanel x:Name="Grades" Grid.Column="1" Orientation="Horizontal"/>
+            <TextBlock x:Name="Spend" Grid.Column="2" FontFamily="Consolas" FontSize="11" Foreground="#FFE6E7EA"/>
+          </Grid>
+          <Grid x:Name="SplitBar" Height="6" Margin="0,8,0,4"/>
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="SplitKey" FontFamily="Consolas" FontSize="9" Foreground="#FF5A5D66"/>
+            <TextBlock x:Name="Wpc" Grid.Column="1" FontFamily="Consolas" FontSize="9" Foreground="#FF5A5D66"/>
+          </Grid>
+          <!-- What is left to spend, which is a different question from what a
+               window costs and so gets its own line under the split rather than a
+               column in it. Built in code: it is absent entirely until a status
+               line has run at least once. -->
+          <StackPanel x:Name="Limits" Margin="0,9,0,0"/>
+        </StackPanel>
+
+        <Border x:Name="ScoreRule" Height="1" Background="#FF2E3038"/>
+        <!-- The rows scroll rather than push the window taller. Without the cap a
+             busy machine grows the panel past the screen and there is no way back
+             short of minimising it; MaxHeight is set from view state in Apply-Size
+             and the bottom corner drags it. Below the cap the panel still hugs its
+             content, so one session is still one session tall. -->
+        <ScrollViewer x:Name="RowScroll" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled" MaxHeight="360"
+                      PanningMode="VerticalOnly" Focusable="False">
+          <StackPanel x:Name="Rows" Margin="0,3,0,3"/>
+        </ScrollViewer>
+        <Border Height="1" Background="#FF2E3038"/>
+
+        <!-- naming a session: one line, opened on whatever it is called now -->
+        <Border x:Name="NameBox" Background="#FF1B1C22" Padding="14,6,14,6" Visibility="Collapsed">
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <TextBlock Text="name" FontFamily="Consolas" FontSize="11" Foreground="#FF60A5FA" Margin="0,1,8,0"/>
+            <TextBox x:Name="NameInput" Grid.Column="1" FontFamily="Consolas" FontSize="11"
+                     Background="Transparent" Foreground="#FFE6E7EA" BorderThickness="0"
+                     CaretBrush="#FF60A5FA"/>
+          </Grid>
+        </Border>
       </StackPanel>
 
-      <Border x:Name="ScoreRule" Height="1" Background="#FF2E3038"/>
-      <!-- The rows scroll rather than push the window taller. Without the cap a
-           busy machine grows the panel past the screen and there is no way back
-           short of minimising it; MaxHeight is set from view state in Apply-Size
-           and the bottom corner drags it. Below the cap the panel still hugs its
-           content, so one session is still one session tall. -->
-      <ScrollViewer x:Name="RowScroll" VerticalScrollBarVisibility="Auto"
-                    HorizontalScrollBarVisibility="Disabled" MaxHeight="360"
-                    PanningMode="VerticalOnly" Focusable="False">
-        <StackPanel x:Name="Rows" Margin="0,3,0,3"/>
-      </ScrollViewer>
-      <Border Height="1" Background="#FF2E3038"/>
-
-      <!-- naming a session: one line, opened on whatever it is called now -->
-      <Border x:Name="NameBox" Background="#FF1B1C22" Padding="14,6,14,6" Visibility="Collapsed">
-        <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-          <TextBlock Text="name" FontFamily="Consolas" FontSize="11" Foreground="#FF60A5FA" Margin="0,1,8,0"/>
-          <TextBox x:Name="NameInput" Grid.Column="1" FontFamily="Consolas" FontSize="11"
-                   Background="Transparent" Foreground="#FFE6E7EA" BorderThickness="0"
-                   CaretBrush="#FF60A5FA"/>
-        </Grid>
-      </Border>
+      <!-- The Parked tab's body, drawn by token-parked-tab.ps1. Its own list
+           rather than the Rows above, because Live-Tick animates those in place
+           and would be animating rows that were no longer there. -->
+      <StackPanel x:Name="PkBody" Visibility="Collapsed">
+        <ScrollViewer x:Name="PkRowScroll" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled" MaxHeight="360"
+                      PanningMode="VerticalOnly" Focusable="False">
+          <StackPanel x:Name="PkRows" Margin="0,3,0,3"/>
+        </ScrollViewer>
+        <Border Height="1" Background="#FF2E3038"/>
+      </StackPanel>
 
       <!-- the footer, foldable as one block: legend or keys, then the strip -->
       <Border x:Name="FootRule" Height="1" Background="#FF2E3038"/>
       <StackPanel x:Name="FootBody" Margin="14,8,14,2">
-        <StackPanel x:Name="Legend"/>
-        <StackPanel x:Name="Keys" Visibility="Collapsed"/>
+        <StackPanel x:Name="LiveFoot">
+          <StackPanel x:Name="Legend"/>
+          <StackPanel x:Name="Keys" Visibility="Collapsed"/>
+        </StackPanel>
+        <StackPanel x:Name="PkFoot" Visibility="Collapsed">
+          <StackPanel x:Name="PkLegend"/>
+          <StackPanel x:Name="PkKeys" Visibility="Collapsed"/>
+        </StackPanel>
       </StackPanel>
 
       <Border Height="1" Background="#FF2E3038" Margin="0,7,0,0"/>
@@ -369,6 +410,8 @@ $el = @{}
 foreach ($n in 'Card','Header','Dot','Title','Clock','Pin','Min','Close','AlertBox','AlertGlyph','AlertText','Score','ScoreRule',
                 'Grades','Spend','SplitBar','SplitKey','Wpc','Limits','Rows','RowScroll','NameBox','NameInput',
                 'AdviceBox','AdviceArrow','Advice','FootRule','FootBody','Legend','Keys',
+                'TabLive','TabParked','PkDot','PkTitle','PkCount','LiveBody','PkBody','PkRowScroll','PkRows',
+                'LiveFoot','PkFoot','PkLegend','PkKeys',
                 'Fold','Countdown','KeysToggle','LegendToggle','DashLink','Refresh','Grip') {
   $el[$n] = $win.FindName($n)
 }
@@ -504,6 +547,7 @@ function Apply-Size {
   else { $el.Card.LayoutTransform = New-Object Windows.Media.ScaleTransform ($z, $z) }
   $win.Width = $w * $z
   $el.RowScroll.MaxHeight = $h
+  $el.PkRowScroll.MaxHeight = $h
 }
 
 # --- formatting --------------------------------------------------------------
@@ -2416,7 +2460,7 @@ $KEYMAP = @(
   @('c',   'minimise to the live one'),
   @('y',   'copy a resume command'),
   @('o',   'open the working directory'),
-  @('w',   'switch account (twice)'), @('v', 'the parked panel'),
+  @('w',   'switch account (twice)'), @('v', 'the parked tab'),
   @('f',   'fold the footer'),          @('r',   'collect now'),
   @('p',   'pin / unpin on top'),      @('l',   'the legend'),
   @('+ -', 'zoom, or wheel the corner'),
@@ -3015,6 +3059,8 @@ function Apply-Chrome {
   $el.FootRule.Visibility = if ($open) { 'Visible' } else { 'Collapsed' }
   $el.Legend.Visibility = if ($script:View.keys) { 'Collapsed' } else { 'Visible' }
   $el.Keys.Visibility   = if ($script:View.keys) { 'Visible' } else { 'Collapsed' }
+  $el.PkLegend.Visibility = $el.Legend.Visibility
+  $el.PkKeys.Visibility   = $el.Keys.Visibility
   $el.Fold.Text = if ($open) { [string][char]0x25BE } else { [string][char]0x25B8 }
   $el.Fold.ToolTip = if ($open) { 'f - fold the footer away' } else { 'f - unfold the footer' }
   $el.Min.Text = if ($full) { [string][char]0x2013 } else { [string][char]0x25A1 }
@@ -3369,28 +3415,6 @@ public static class WGlass {
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll", CharSet = CharSet.Auto)]
   public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
-  public delegate bool EnumProc(IntPtr h, IntPtr l);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-  public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-  // FindWindow looks like the obvious call here and does not work: measured
-  // 2026-09-03, it returns 0 for the widget's own "Token Sessions" window while
-  // EnumWindows finds it visible in the same process. Enumerating is a few
-  // hundred windows once per keypress, which is nothing, and it is reliable.
-  public static IntPtr ByTitle(string title) {
-    IntPtr hit = IntPtr.Zero;
-    EnumWindows(delegate(IntPtr h, IntPtr l) {
-      if (!IsWindowVisible(h)) return true;
-      StringBuilder sb = new StringBuilder(256);
-      GetWindowTextW(h, sb, 256);
-      if (sb.ToString() == title) { hit = h; return false; }
-      return true;
-    }, IntPtr.Zero);
-    return hit;
-  }
 }
 '@
 
@@ -3458,27 +3482,45 @@ function Open-Dashboard {
   if (Test-Path $Dash) { Start-Process $Dash }
 }
 
-# The parked panel is a separate process with its own window, and - unlike this
-# one - no mutex, so a second launch would just stack a duplicate on top of the
-# first. Ask the desktop instead: if a window called "Parked" already exists,
-# raise that one and stop. The match is on the title WPF sets from XAML
-# (token-parked.ps1:112), so nothing has to be written to disk to coordinate.
-#
-# Launched through the .vbs rather than powershell.exe directly for the same
-# reason the widget itself is: -WindowStyle Hidden still leaves an empty console
-# in the taskbar for the life of the panel.
-function Open-Parked {
-  $h = [WGlass]::ByTitle('Parked')
-  if ($h -ne [IntPtr]::Zero) {
-    if ([WGlass]::IsIconic($h)) { [WGlass]::ShowWindow($h, 9) | Out-Null }  # SW_RESTORE
-    [WGlass]::SetForegroundWindow($h) | Out-Null
-    Flash 'parked panel is already open'
-    return
+# The parked checkpoints are a tab of this window, not a window of their own:
+# one process, one position, one pin, and no second copy to stack up. The tab's
+# rows and actions live in token-parked-tab.ps1, dot-sourced here so they draw
+# into $el and share Br/Tip/Flash/Apply-Chrome with everything else.
+. (Join-Path $Root 'token-parked-tab.ps1')
+
+# A browser's tabs: the one showing takes a ground a step up from the card and
+# a hairline edge that runs into the rule below, the other is just its title,
+# dimmed. Only the grounds and the title colours change - the dots keep saying
+# what they say on either tab.
+$script:Tab = 'live'
+function Style-Tabs {
+  foreach ($t in @(@('live', $el.TabLive, $el.Title), @('parked', $el.TabParked, $el.PkTitle))) {
+    $on = ($script:Tab -eq $t[0])
+    $t[1].Background  = $(if ($on) { (Br '#FF2A2C34') } else { $GhostBrush })
+    $t[1].BorderBrush = $(if ($on) { (Br '#FF34363F') } else { $GhostBrush })
+    $t[2].Foreground  = (Br $(if ($on) { $Pal.text } else { $Pal.dim }))
   }
-  $vbs = Join-Path $Root 'token-parked.vbs'
-  if (-not (Test-Path $vbs)) { Flash 'token-parked.vbs is missing'; return }
-  Start-Process wscript.exe -ArgumentList "`"$vbs`"" -WindowStyle Hidden
-  Flash 'opening the parked panel'
+}
+
+# Swaps the body and the footer's legend/keys; the header, the chrome and the
+# window stay put. Opening the parked tab re-reads the directory - it is a
+# listing, not a collect, so there is no reason to show one up to five minutes
+# old. A half-typed name is dropped on the way out: the name line owns the
+# keyboard while it is open, and it would go on owning it from a hidden tab.
+function Set-Tab([string]$t) {
+  $pk = ($t -eq 'parked')
+  $script:Tab = $(if ($pk) { 'parked' } else { 'live' })
+  if ($pk -and $el.NameBox.Visibility -eq 'Visible') {
+    $script:Naming = ''
+    $el.NameBox.Visibility = 'Collapsed'
+  }
+  $el.LiveBody.Visibility = $(if ($pk) { 'Collapsed' } else { 'Visible' })
+  $el.LiveFoot.Visibility = $(if ($pk) { 'Collapsed' } else { 'Visible' })
+  $el.PkBody.Visibility   = $(if ($pk) { 'Visible' } else { 'Collapsed' })
+  $el.PkFoot.Visibility   = $(if ($pk) { 'Visible' } else { 'Collapsed' })
+  Style-Tabs
+  if ($pk) { $script:PkLeft = $PkEvery; Pk-Start-Collect }
+  $win.Focus() | Out-Null
 }
 
 $tray = $null
@@ -3492,14 +3534,14 @@ if (-not $NoTray) {
   $menu = New-Object System.Windows.Forms.ContextMenuStrip
   $miShow = $menu.Items.Add('Show / hide')
   $miMin  = $menu.Items.Add('Minimise / expand')
-  $miPark = $menu.Items.Add('Open parked panel')
+  $miPark = $menu.Items.Add('Parked checkpoints')
   $miDash = $menu.Items.Add('Open dashboard (under development)')
   $menu.Items.Add('-') | Out-Null
   $miQuit = $menu.Items.Add('Quit')
   $tray.ContextMenuStrip = $menu
   $miShow.add_Click({ Toggle-Panel })
   $miMin.add_Click({ $script:View.compact = -not $script:View.compact; Update-View -Redraw; Save-State })
-  $miPark.add_Click({ Open-Parked })
+  $miPark.add_Click({ Set-Tab 'parked'; if (-not $win.IsVisible) { Toggle-Panel } })
   $miDash.add_Click({ Open-Dashboard })
   $miQuit.add_Click({ $tray.Visible = $false; $win.Close() })
   $tray.add_MouseDoubleClick({ Toggle-Panel })
@@ -3682,6 +3724,16 @@ function Handle-Key {
                 -Encoding utf8 -ErrorAction SilentlyContinue
   } catch { }
 
+  # On the parked tab its own keys go first. What it leaves is let through only
+  # if it is about the window - fold, pin, legend, keys, zoom, compact, the tab,
+  # hide, quit. Every other key here acts on a session row, and the session
+  # rows are not what is on screen.
+  if ($script:Tab -eq 'parked') {
+    Pk-Handle-Key $e
+    if ($e.Handled) { return }
+    if ($k -notmatch '^(F|P|L|C|V|Q|Escape|OemQuestion|Oem2|Divide|OemPlus|Add|OemMinus|Subtract|D0|NumPad0)$') { return }
+  }
+
   $n = $script:Visible.Count
 
   # Digits pick a row outright, the way they do in the pane - and the same digit
@@ -3763,7 +3815,7 @@ function Handle-Key {
                return }
     'R'      { $script:Left = $Every; Start-Collect
                Flash 'collecting'; return }
-    'V'      { Open-Parked; return }
+    'V'      { Set-Tab $(if ($script:Tab -eq 'parked') { 'live' } else { 'parked' }); return }
     # g/G, t and b were here until 2026-09-10. g/G (first / last row) duplicated
     # 1-9 and j/k on a list that is never long enough to need a jump; t opened a
     # dashboard the overlay itself labelled under development; b muted the lapse
@@ -3819,6 +3871,11 @@ function Handle-Key {
 # Drag from the header only. On the whole window it would swallow clicks meant
 # for the filter box and for row selection.
 $el.Header.add_MouseLeftButtonDown({ $win.DragMove() })
+# Handled, or the click on a tab would also start dragging the window.
+$el.TabLive.add_MouseLeftButtonDown({ $_.Handled = $true; Set-Tab 'live' })
+$el.TabParked.add_MouseLeftButtonDown({ $_.Handled = $true; Set-Tab 'parked' })
+Style-Tabs
+Pk-Update-View
 $win.add_MouseEnter({ $script:MouseIn = $true;  Set-Glass })
 $win.add_MouseLeave({ $script:MouseIn = $false; Set-Glass })
 $win.Opacity = 1.0
@@ -4022,7 +4079,9 @@ $win.add_PreviewMouseLeftButtonUp({
 $win.add_SizeChanged({ if ($script:EdgeMode) { Clamp-Window } })
 
 $el.Refresh.add_MouseLeftButtonDown({
-  $_.Handled = $true; $script:Left = $Every; Start-Collect })
+  $_.Handled = $true
+  if ($script:Tab -eq 'parked') { $script:PkLeft = $PkEvery; Pk-Start-Collect }
+  else { $script:Left = $Every; Start-Collect } })
 $el.DashLink.add_MouseLeftButtonDown({ $_.Handled = $true; Open-Dashboard })
 $el.LegendToggle.add_MouseLeftButtonDown({
   $_.Handled = $true; $script:View.keys = $false; $script:View.foot = $true
@@ -4043,6 +4102,7 @@ $timer.add_Tick({
   Reap-Bg
   try { Live-Tick } catch { }
   try { Run-Tick } catch { }
+  try { Pk-Tick } catch { }
   $script:Left--
   if ($script:Left -le 0) {
     $script:Left = $Every
@@ -4119,7 +4179,7 @@ function Ensure-PokeDue {
 
 # The first collect is started, not awaited: the panel is on screen in
 # milliseconds saying it is collecting, rather than five seconds after launch.
-if (-not $SelfTest) { Start-Collect }
+if (-not $SelfTest) { Start-Collect; Pk-Start-Collect }
 
 try { if ($SelfTest) { $d = Get-Data; if ($d) { $script:Data = $d } }; Update-View } catch {
   # Swallowed in normal use - a widget that vanishes on one bad refresh is
@@ -4140,6 +4200,19 @@ if ($SelfTest) {
   Write-Output ("rows      : " + $el.Rows.Children.Count)
   Write-Output ("keys      : " + $el.Keys.Children.Count + " lines, " + $KEYMAP.Count + " bindings")
   Write-Output ("legend    : " + $el.Legend.Children.Count + " lines")
+  # The parked tab, read synchronously: there is no timer here to poll it.
+  try {
+    $raw = & $Bash -lc (Pk-Collect-Cmd)
+    if ($raw) { $script:PkData = ($raw -join "`n") | ConvertFrom-Json }
+  } catch { }
+  Pk-Update-View
+  Write-Output ("parked    : " + $(if ($script:PkData) {
+    "{0} checkpoints, {1} rows, tab reads '{2}'" -f @($script:PkData.checkpoints).Count, $el.PkRows.Children.Count, $el.PkCount.Text
+  } else { 'NO DATA' }))
+  Set-Tab 'parked'
+  Write-Output ("tabs      : on parked, live body {0}, parked body {1}, legend {2} lines" -f `
+    $el.LiveBody.Visibility, $el.PkBody.Visibility, $el.PkLegend.Children.Count)
+  Set-Tab 'live'
   $script:View.width = 500; $script:View.zoom = 1.2; Apply-Size
   Write-Output ("resize    : width=" + $script:View.width + " zoom=" + $script:View.zoom +
                 " -> window " + $win.Width)

@@ -1,6 +1,6 @@
 # Fresh-session handoff (session-hygiene item 0, 2026-09-23): after Claude has written
 # the checkpoint, open a NEW terminal running claude "/unpark <topic>" - the same launch
-# token-parked.ps1 does on Enter (shim, Windows Terminal, cmd /k). Nothing is typed into
+# the widget's Parked tab does on Enter (shim, Windows Terminal, cmd /k). Nothing is typed into
 # the old session; the user closes that window. The old session is set to --extend 0 so
 # the renewal sweep leaves it to lapse instead of paying to keep it warm.
 param(

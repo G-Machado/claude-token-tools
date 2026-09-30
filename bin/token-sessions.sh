@@ -48,7 +48,7 @@
 #   token-sessions.sh --parked --json  every checkpoint on disk as JSON, with
 #                                     the cwd to resume it in and whether its
 #                                     window is still open. No collect - see
-#                                     parked_json. Drives token-parked.ps1.
+#                                     parked_json. Drives token-parked-tab.ps1.
 #   token-sessions.sh --checkpoints [proj]
 #                                     what is parked, newest first (default: the
 #                                     project in the cwd; "all" for every one)
@@ -6754,7 +6754,7 @@ parked_json() {
       printf "\"alive\":%d,\"behind_min\":%d,\"cwd\":%s,", alive, behind, jstr(cwd)
       # What that session was last answering with, cached in token-meta.tsv by
       # collect() in the sessions widget - empty for a session never yet
-      # measured. Read by token-parked.ps1 so resuming a checkpoint reopens on
+      # measured. Read by token-parked-tab.ps1 so resuming a checkpoint reopens on
       # the same model and effort rather than snapping back to the account
       # defaults, which is what a bare claude /unpark would do.
       printf "\"model\":%s,\"effort\":%s,", \
