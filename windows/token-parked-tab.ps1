@@ -248,6 +248,21 @@ function Pk-New-Row {
   $sw.VerticalAlignment = 'Bottom'; $sw.Margin = '0,0,0,1'
   Tip $sw $st.why
   $names.Children.Add($sw) | Out-Null
+  # What happened to the file after it was written, in words beside the state
+  # rather than as a state of its own: neither changes whether the row is
+  # ready, but both change what resuming it means.
+  if ([int]$C.unparked_min -ge 0) {
+    $un = Text-Block ('  unparked {0} ago' -f (Pk-Age ([double]$C.unparked_min))) 9.5 $Pal.orange
+    $un.VerticalAlignment = 'Bottom'; $un.Margin = '0,0,0,1'
+    Tip $un 'resumed with /unpark after this was written, and not re-parked since - that window may have moved the work on, so this file can be behind it, and resuming it again starts a second copy of the strand.'
+    $names.Children.Add($un) | Out-Null
+  }
+  if ([int]$C.overwritten -eq 1) {
+    $ow = Text-Block '  overwritten' 9.5 $Pal.dim
+    $ow.VerticalAlignment = 'Bottom'; $ow.Margin = '0,0,0,1'
+    Tip $ow 'the session that wrote this had resumed this topic with /unpark, so this file replaced the version it started from. /park keeps no history - the earlier version is gone.'
+    $names.Children.Add($ow) | Out-Null
+  }
   [Windows.Controls.Grid]::SetColumn($names, 1); $l1.Children.Add($names) | Out-Null
 
   $ag = Text-Block (Pk-Age ([double]$C.age_min)) 11 (Pk-Age-Color ([double]$C.age_min))

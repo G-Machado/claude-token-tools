@@ -6659,7 +6659,8 @@ parked_json() {
   # ".claude.<topic>.md".
   stat -c '%Y|%n' "$CL"/checkpoints/*.md "$CL"/checkpoints/.*.md 2>/dev/null |
     sort -t'|' -k1,1nr |
-    awk -F'|' -v now="$now" -v live="$live" -v meta="$META" -v stale="$CK_STALE" '
+    awk -F'|' -v now="$now" -v live="$live" -v meta="$META" -v stale="$CK_STALE" \
+        -v hist="$CL/history.jsonl" '
     function jesc(s,   i, c, o) {
       o = ""
       for (i = 1; i <= length(s); i++) {
@@ -6714,6 +6715,24 @@ parked_json() {
         if (nf >= 6) { MDL[f[1]] = f[5]; EFF[f[1]] = f[6] }
         b = base(cw); if (b != "") PCW[b] = cw }
       close(meta)
+      # Every /unpark ever typed, from history.jsonl - one line per prompt,
+      # stamped with its sessionId, so one read covers every checkpoint and a
+      # handoff counts too (it opens its window on /unpark <topic>, which lands
+      # here like a typed one). Kept: when, which session, which project by
+      # basename (as the checkpoint file names it), and the argument, which
+      # /unpark matches against topics as a case-insensitive substring.
+      while ((getline ln < hist) > 0) {
+        if (index(ln, "\"display\":\"/unpark ") == 0) continue
+        if (!match(ln, /"display":"\/unpark [^"]*"/)) continue
+        a = tolower(trim(substr(ln, RSTART + 19, RLENGTH - 20)))
+        if (a == "" || !match(ln, /"timestamp":[0-9]+/)) continue
+        ts = int(substr(ln, RSTART + 12, RLENGTH - 12) / 1000)
+        if (!match(ln, /"sessionId":"[^"]*"/)) continue
+        us = substr(ln, RSTART + 13, RLENGTH - 14)
+        up = ""
+        if (match(ln, /"project":"[^"]*"/)) up = tolower(base(junesc(substr(ln, RSTART + 11, RLENGTH - 12))))
+        NU++; UA[NU] = a; UT[NU] = ts; US[NU] = us; UP[NU] = up }
+      close(hist)
       print "{\"checkpoints\":[" }
     {
       mt = $1 + 0; path = $2
@@ -6764,12 +6783,26 @@ parked_json() {
       # here means "not known to be behind", never "known to be current".
       behind = 0
       if (sid != "" && sid in ACT && ACT[sid] > mt) behind = int((ACT[sid] - mt) / 60)
+      # Unparked: an /unpark naming this topic, in this project, after the file
+      # was written - someone picked it up and has not re-parked since, so the
+      # file is behind whatever that window did. Overwritten: the session that
+      # wrote the file had itself begun on /unpark of this topic, so it replaced
+      # the version it resumed from; /park keeps no history of the old one.
+      # An argument that matches several topics marks them all, which is the
+      # most /unpark itself knows before it asks which.
+      unp = -1; ovr = 0; lt = tolower(topic); lp = tolower(proj)
+      for (u = 1; u <= NU; u++) {
+        if (!index(lt, UA[u])) continue
+        if (sid != "" && US[u] == sid && UT[u] < mt) ovr = 1
+        if (UT[u] > mt && UP[u] == lp && (unp < 0 || now - UT[u] < unp * 60))
+          unp = int((now - UT[u]) / 60) }
 
       printf "%s{\"file\":%s,\"path\":%s,\"project\":%s,\"topic\":%s,", \
         (n++ ? "," : ""), jstr(file), jstr(path), jstr(proj), jstr(topic)
       printf "\"written\":%d,\"age_min\":%d,\"sid\":%s,\"short\":%s,", \
         mt, int((now - mt) / 60), jstr(sid), jstr(substr(sid, 1, 8))
       printf "\"alive\":%d,\"behind_min\":%d,\"cwd\":%s,", alive, behind, jstr(cwd)
+      printf "\"unparked_min\":%d,\"overwritten\":%d,", unp, ovr
       # What that session was last answering with, cached in token-meta.tsv by
       # collect() in the sessions widget - empty for a session never yet
       # measured. Read by token-parked-tab.ps1 so resuming a checkpoint reopens on

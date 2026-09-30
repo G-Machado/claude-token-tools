@@ -4228,6 +4228,9 @@ if ($SelfTest) {
     Write-Output ("  decided : {0} with a section, {1} with an em dash, {2} mis-decoded" -f `
       @($dc | Where-Object { $_ }).Count, @($dc | Where-Object { $_.Contains([string][char]0x2014) }).Count,
       @($dc | Where-Object { $_.Contains([string][char]0x00E2 + [char]0x20AC) }).Count)
+    $pc = @($script:PkData.checkpoints)
+    Write-Output ("  flags   : {0} unparked, {1} overwritten" -f `
+      @($pc | Where-Object { [int]$_.unparked_min -ge 0 }).Count, @($pc | Where-Object { [int]$_.overwritten -eq 1 }).Count)
     $script:PkSel = 0; Pk-Update-View
   }
   Set-Tab 'live'
