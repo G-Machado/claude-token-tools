@@ -3491,7 +3491,15 @@ function Open-Dashboard {
 # Enter on a session: focus the TokenChat tab or the terminal holding it, or
 # resume it in TokenChat. The same route token-sessions.sh --watch runs.
 $OpenPs1 = Join-Path $Root 'token-open.ps1'
-if (Test-Path $OpenPs1) { . $OpenPs1 }
+if (Test-Path $OpenPs1) {
+  . $OpenPs1
+  # Its Win32 compile (~0.8 s) off the UI thread, rather than on the first Enter.
+  try {
+    $warm = [PowerShell]::Create()
+    [void]$warm.AddScript('param($p) . $p; Add-TokenOpenWin').AddArgument($OpenPs1)
+    [void]$warm.BeginInvoke()
+  } catch { }
+}
 
 # A browser's tabs: the one showing takes a ground a step up from the card and
 # a hairline edge that runs into the rule below, the other is just its title,
