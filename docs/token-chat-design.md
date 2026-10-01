@@ -8,7 +8,7 @@ headless `claude.exe` over stream-json. The protocol facts are in `token-chat-sp
 - **Wrapper, not a direct API client.** The subscription (Claude Pro) covers it, and hooks,
   skills, tools and compaction come with the CLI. The direct API would bill every token.
 - **C# WPF on .NET 10, fully native.** No WebView, no HTML. It lives in `windows/token-chat/`.
-- **Default profile: full.** Lite (`--tools Read,Edit,Write,Bash,Grep,Glob --strict-mcp-config`)
+- **Default profile: full.** Lite (`--tools Read,Edit,Write,Bash,Grep,Glob,AskUserQuestion --strict-mcp-config`, 16.9k)
   is a per-tab option. Slim is not offered.
 - **A session belongs to one front end.** Headless mode warms its own prefix, so the app only
   resumes sessions it started.

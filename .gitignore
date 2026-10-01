@@ -15,3 +15,7 @@ checkpoints/
 
 # token-chat spike recordings: carry account email and local paths until scrubbed
 *.raw.jsonl
+
+# token-chat build output
+windows/token-chat/**/bin/
+windows/token-chat/**/obj/

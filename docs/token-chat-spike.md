@@ -22,7 +22,8 @@ Then send `{"type":"control_request","request_id":"init1","request":{"subtype":"
 - every permission prompt is auto-denied (`system:permission_denied`), even inside `--add-dir`
 - AskUserQuestion is missing from the tool list, even when named in `--tools`
 - turn 2 rewrote the message tier (~15k full, ~9k lite). It did not happen with the handshake.
-  Likely cause: commands load late (`system:commands_changed`). One sample each.
+  Likely cause: commands load late (`system:commands_changed`). One sample each. The live smoke
+  (`spike/smoke.cs`) confirmed it with the handshake: turn 2 wrote only 566 tokens.
 
 The `initialize` response returns `commands`, `agents`, `models` (with `supportedEffortLevels`),
 output styles, `account.subscriptionType`, `pid` and `current_permission_mode`.
@@ -45,6 +46,10 @@ output styles, `account.subscriptionType`, `pid` and `current_permission_mode`.
   subscription headroom.
 - Also seen: `system:{hook_started,hook_response,status,thinking_tokens,informational}`,
   `stream_event` (Anthropic SSE events), `assistant` (repeated per content block, same usage), `result`.
+- Usage: `assistant` repeats the `message_start` usage, so its `output_tokens` is stale (7 vs a
+  final 196). The final count is only in `stream_event` `message_delta`. `result.usage` is the sum
+  over the turn's requests (the M1 ledger reproduces it exactly) and is all zeros after an interrupt,
+  although the interrupted request was billed.
 
 ## Fixed context (first request, in + cache write + cache read)
 
@@ -53,6 +58,7 @@ output styles, `account.subscriptionType`, `pid` and `current_permission_mode`.
 | interactive terminal | — | 46.2k here, ~60k Unity (first request in each transcript) |
 | headless full | defaults | 30.3k–31.5k |
 | lite | `--tools Read,Edit,Write,Bash,Grep,Glob --strict-mcp-config` | 15.7k |
+| lite + AskUserQuestion (token-chat `Profile.Lite`) | same, tool added | 16.9k (live smoke) |
 | lite, no skills | + `--disable-slash-commands` | 15.3k |
 | slim | + `--system-prompt <one line>` | 12.9k |
 
