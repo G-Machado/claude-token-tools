@@ -60,6 +60,44 @@ function Start-TokenChat([string]$Sid, [string]$Cwd) {
   $null
 }
 
+$TokenOpenPs1 = $PSCommandPath
+
+function Add-TokenOpenWin {
+  if ('TokenOpen.Win' -as [type]) { return }
+  Add-Type -Namespace TokenOpen -Name Win -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern bool FreeConsole();
+[DllImport("kernel32.dll")] public static extern bool AttachConsole(int pid);
+[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern System.IntPtr GetAncestor(System.IntPtr h, int flags);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr h);
+[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int cmd);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
+'@
+}
+
+# The window a console session is drawn in. Windows Terminal runs every window
+# from ONE process, so focusing by pid lands on whichever window it likes; the
+# session's own console does know. Its pseudo-console window is owned by the WT
+# window holding the tab (a classic conhost window is simply itself), so the
+# root owner of GetConsoleWindow() is the answer. Which TAB is not reachable.
+#
+# AttachConsole means letting go of your own console first, and the widget must
+# keep its hidden one - every bash it starts would otherwise pop a visible
+# window. So the attach runs in a throwaway copy of this script.
+function Get-ConsoleRoot([int]$ProcessId) {
+  $o = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $TokenOpenPs1 --console-root $ProcessId 2>$null
+  $h = [long]0
+  [void][long]::TryParse(([string]($o | Select-Object -Last 1)).Trim(), [ref]$h)
+  [IntPtr]$h
+}
+
+function Focus-Window([IntPtr]$Handle) {
+  Add-TokenOpenWin
+  if ([TokenOpen.Win]::IsIconic($Handle)) { [void][TokenOpen.Win]::ShowWindow($Handle, 9) }  # SW_RESTORE
+  [TokenOpen.Win]::SetForegroundWindow($Handle)
+}
+
 # Returns the line to flash. Never throws: the widget calls it from a key handler.
 function Open-Session([string]$Sid, [string]$Cwd, [int]$ProcessId, [int]$Alive) {
   $s8 = if ($Sid.Length -gt 8) { $Sid.Substring(0, 8) } else { $Sid }
@@ -67,17 +105,39 @@ function Open-Session([string]$Sid, [string]$Cwd, [int]$ProcessId, [int]$Alive) 
     if (-not $Sid) { return 'nothing selected' }
     if ($Alive -eq 1 -and $ProcessId -gt 0) {
       $h = Find-SessionHost $ProcessId
-      switch ($h.kind) {
-        'chat'   { $e = Start-TokenChat $Sid $Cwd; if ($e) { return $e }; return "TokenChat: $s8" }
-        'window' { if ((New-Object -ComObject WScript.Shell).AppActivate($h.pid)) { return "focused $($h.name): $s8" }
-                   return "$s8 is open in $($h.name) (pid $($h.pid)) but it would not come forward" }
-        default  { return "$s8 is alive (pid $ProcessId) with no window to focus - not opening a second copy" }
+      if ($h.kind -eq 'chat') { $e = Start-TokenChat $Sid $Cwd; if ($e) { return $e }; return "TokenChat: $s8" }
+      # Its own console window first; the ancestor's main window only where the
+      # console has none of its own (an IDE terminal), as that one is a guess.
+      $w = Get-ConsoleRoot $ProcessId
+      if ($w -ne [IntPtr]::Zero) {
+        if (Focus-Window $w) { return "focused the terminal holding $s8" }
+        return "$s8 is in a terminal window that would not come forward"
       }
+      if ($h.kind -eq 'window') {
+        if ((New-Object -ComObject WScript.Shell).AppActivate($h.pid)) { return "focused $($h.name): $s8" }
+        return "$s8 is open in $($h.name) (pid $($h.pid)) but it would not come forward"
+      }
+      return "$s8 is alive (pid $ProcessId) with no window to focus - not opening a second copy"
     }
     if (-not $Cwd -or -not (Test-Path $Cwd)) { return "$s8 cannot resume: folder '$Cwd' is not there" }
     $e = Start-TokenChat $Sid $Cwd; if ($e) { return $e }
     "resuming $s8 in TokenChat"
   } catch { "could not open ${s8}: $($_.Exception.Message)" }
+}
+
+# The throwaway half of Get-ConsoleRoot: prints the window handle, 0 for none.
+if ($MyInvocation.InvocationName -ne '.' -and $args.Count -eq 2 -and $args[0] -eq '--console-root') {
+  Add-TokenOpenWin
+  $r = [IntPtr]::Zero
+  [void][TokenOpen.Win]::FreeConsole()
+  if ([TokenOpen.Win]::AttachConsole([int]$args[1])) {
+    $c = [TokenOpen.Win]::GetConsoleWindow()
+    if ($c -ne [IntPtr]::Zero) { $r = [TokenOpen.Win]::GetAncestor($c, 3) }  # GA_ROOTOWNER
+    if ($r -ne [IntPtr]::Zero -and -not [TokenOpen.Win]::IsWindowVisible($r)) { $r = [IntPtr]::Zero }
+    [void][TokenOpen.Win]::FreeConsole()
+  }
+  [Console]::Out.WriteLine($r.ToInt64())
+  exit 0
 }
 
 if ($MyInvocation.InvocationName -ne '.' -and $args.Count -ge 2) {
