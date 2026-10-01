@@ -85,8 +85,14 @@ public sealed class ClaudeSession : IAsyncDisposable
         PermissionMode = mode;
     }
 
-    public Task AllowAsync(PermissionRequest p, JsonObject? updatedInput = null, CancellationToken ct = default) =>
-        ReplyAsync(p.RequestId, Outbound.Allow(p.RequestId, updatedInput ?? p.Input), ct);
+    /// <summary>updatedPermissions as from <see cref="PermissionRules.ForSession"/>; a setMode among them moves <see cref="PermissionMode"/>.</summary>
+    public async Task AllowAsync(PermissionRequest p, JsonObject? updatedInput = null, JsonArray? updatedPermissions = null,
+        CancellationToken ct = default)
+    {
+        await ReplyAsync(p.RequestId, Outbound.Allow(p.RequestId, updatedInput ?? p.Input, updatedPermissions), ct);
+        if (updatedPermissions?.OfType<JsonObject>().LastOrDefault(u => Json.Str(u["type"]) == "setMode") is { } m)
+            PermissionMode = Json.Str(m["mode"]) ?? PermissionMode;
+    }
 
     public Task DenyAsync(string requestId, string message, CancellationToken ct = default) =>
         ReplyAsync(requestId, Outbound.Deny(requestId, message), ct);

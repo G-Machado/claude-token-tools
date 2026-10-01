@@ -99,14 +99,63 @@
                     </TextBlock>
                     <TextBox Style="{StaticResource Selectable}" Text="{Binding Summary, Mode=OneWay}"
                              FontFamily="{StaticResource Mono}" FontSize="12" Margin="0,5,0,8"/>
-                    <StackPanel x:Name="Buttons" Orientation="Horizontal">
-                        <Button Content="Allow" Style="{StaticResource Primary}" Click="OnAllow"/>
-                        <Button Content="Deny" Margin="8,0,0,0" Click="OnDeny"/>
-                    </StackPanel>
+                    <TextBlock x:Name="DiffNote" Text="{Binding DiffNote, Mode=OneTime}" Style="{StaticResource Meta}" Margin="0,-4,0,4"/>
+                    <!-- Edit / Write preview: + rows tinted green, - rows red, folded runs as faint gap rows -->
+                    <Border x:Name="DiffBox" Background="{StaticResource Card}" CornerRadius="4" Padding="0,4" Margin="0,0,0,8">
+                        <ItemsControl ItemsSource="{Binding Diff, Mode=OneTime}" Focusable="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type t:DiffLine}">
+                                    <Border x:Name="Row" Padding="8,0">
+                                        <TextBlock x:Name="DiffText" FontFamily="{StaticResource Mono}" FontSize="12" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource Dim}"><Run x:Name="Sign" Text="  "/><Run Text="{Binding Text, Mode=OneTime}"/></TextBlock>
+                                    </Border>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Added">
+                                            <Setter TargetName="Row" Property="Background" Value="{StaticResource DiffAdd}"/>
+                                            <Setter TargetName="Sign" Property="Text" Value="+ "/>
+                                            <Setter TargetName="Sign" Property="Foreground" Value="{StaticResource Green}"/>
+                                            <Setter TargetName="DiffText" Property="Foreground" Value="{StaticResource Text}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Removed">
+                                            <Setter TargetName="Row" Property="Background" Value="{StaticResource DiffDel}"/>
+                                            <Setter TargetName="Sign" Property="Text" Value="- "/>
+                                            <Setter TargetName="Sign" Property="Foreground" Value="{StaticResource Red}"/>
+                                            <Setter TargetName="DiffText" Property="Foreground" Value="{StaticResource Text}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Gap">
+                                            <Setter TargetName="DiffText" Property="Foreground" Value="{StaticResource Faint}"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                    <WrapPanel x:Name="Buttons">
+                        <Button Content="Allow" Style="{StaticResource Primary}" Margin="0,0,8,0" Click="OnAllow"/>
+                        <Button x:Name="Session" Content="{Binding SessionLabel, Mode=OneTime}" Margin="0,0,8,0" Click="OnAllowSession"/>
+                        <Button Content="Deny" Click="OnDeny"/>
+                    </WrapPanel>
                     <TextBlock x:Name="Decided" Text="{Binding State}" Style="{StaticResource Meta}" Visibility="Collapsed"/>
                 </StackPanel>
             </Border>
             <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Diff}" Value="{x:Null}">
+                    <Setter TargetName="DiffBox" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding DiffNote}" Value="{x:Null}">
+                    <Setter TargetName="DiffNote" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding SessionLabel}" Value="{x:Null}">
+                    <Setter TargetName="Session" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="AllowedForSession">
+                    <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Decided" Property="Text" Value="Allowed for session"/>
+                    <Setter TargetName="Decided" Property="Foreground" Value="{StaticResource Green}"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
+                    <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Faint}"/>
+                </DataTrigger>
                 <DataTrigger Binding="{Binding State}" Value="Allowed">
                     <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
@@ -230,11 +279,14 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Status}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                <TextBlock Grid.Column="1" Style="{StaticResource Meta}" FontSize="9.5" Margin="14,1,0,0" TextWrapping="NoWrap"
-                           Text="enter send · shift+enter newline · esc stop"/>
+                <TextBlock Grid.Column="1" Text="{Binding Mode}" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
+                           Margin="14,0,0,0" TextWrapping="NoWrap"/>
+                <TextBlock Grid.Column="2" Style="{StaticResource Meta}" FontSize="9.5" Margin="14,1,0,0" TextWrapping="NoWrap"
+                           Text="enter send · shift+enter newline · shift+tab mode · esc stop"/>
             </Grid>
         </Border>
     </Grid>

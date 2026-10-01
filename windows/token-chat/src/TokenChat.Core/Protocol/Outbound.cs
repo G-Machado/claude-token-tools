@@ -34,8 +34,13 @@ public static class Outbound
         ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = mediaType, ["data"] = Convert.ToBase64String(data) },
     };
 
-    public static string Allow(string requestId, JsonObject updatedInput) =>
-        ControlSuccess(requestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = updatedInput.DeepClone() });
+    /// <summary>updatedPermissions: permission updates applied with the allow, e.g. <see cref="PermissionRules.ForSession"/>.</summary>
+    public static string Allow(string requestId, JsonObject updatedInput, JsonArray? updatedPermissions = null)
+    {
+        var r = new JsonObject { ["behavior"] = "allow", ["updatedInput"] = updatedInput.DeepClone() };
+        if (updatedPermissions is { Count: > 0 }) r["updatedPermissions"] = updatedPermissions.DeepClone();
+        return ControlSuccess(requestId, r);
+    }
 
     public static string Deny(string requestId, string message) =>
         ControlSuccess(requestId, new JsonObject { ["behavior"] = "deny", ["message"] = message });

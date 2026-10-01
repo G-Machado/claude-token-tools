@@ -66,7 +66,7 @@ public sealed class ToolUseItem(string toolName, string? toolUseId) : Transcript
     public bool IsError { get => _isError; internal set => Set(ref _isError, value); }
 }
 
-public enum PermissionState { Pending, Allowed, Denied }
+public enum PermissionState { Pending, Allowed, AllowedForSession, Denied }
 
 public sealed class PermissionItem(PermissionRequest request, string summary) : TranscriptItem
 {
@@ -76,6 +76,13 @@ public sealed class PermissionItem(PermissionRequest request, string summary) : 
     public string ToolName => Request.ToolName;
     public string Summary { get; } = summary;
     public PermissionState State { get => _state; set => Set(ref _state, value); }
+    /// <summary>What an Edit, MultiEdit or Write would change; null for other tools.</summary>
+    public IReadOnlyList<DiffLine>? Diff { get; init; }
+    /// <summary>What the diff is against or how it applies: new file, overwrites the file, every occurrence.</summary>
+    public string? DiffNote { get; init; }
+    /// <summary>Sent with an allow-for-session; null hides the button.</summary>
+    public System.Text.Json.Nodes.JsonArray? SessionRules { get; init; }
+    public string? SessionLabel { get; init; }
 }
 
 public enum NoteKind { Info, Warning, Error, Command, Compact }

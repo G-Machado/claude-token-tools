@@ -51,6 +51,11 @@ public partial class SessionView : UserControl
             e.Handled = true;
             _ = Tab?.InterruptAsync();
         }
+        else if (e.Key == Key.Tab && Keyboard.Modifiers == ModifierKeys.Shift)
+        {
+            e.Handled = true;
+            _ = Tab?.CycleModeAsync();
+        }
     }
 
     void OnSend(object sender, RoutedEventArgs e) => Send();
@@ -64,12 +69,14 @@ public partial class SessionView : UserControl
         _ = tab.SendAsync(text);
     }
 
-    void OnAllow(object sender, RoutedEventArgs e) => Decide(sender, allow: true);
+    void OnAllow(object sender, RoutedEventArgs e) => Decide(sender, PermissionState.Allowed);
 
-    void OnDeny(object sender, RoutedEventArgs e) => Decide(sender, allow: false);
+    void OnAllowSession(object sender, RoutedEventArgs e) => Decide(sender, PermissionState.AllowedForSession);
 
-    void Decide(object sender, bool allow)
+    void OnDeny(object sender, RoutedEventArgs e) => Decide(sender, PermissionState.Denied);
+
+    void Decide(object sender, PermissionState decision)
     {
-        if ((sender as FrameworkElement)?.DataContext is PermissionItem p) _ = Tab?.DecideAsync(p, allow);
+        if ((sender as FrameworkElement)?.DataContext is PermissionItem p) _ = Tab?.DecideAsync(p, decision);
     }
 }

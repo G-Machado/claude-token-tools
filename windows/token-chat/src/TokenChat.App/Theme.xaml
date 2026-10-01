@@ -18,6 +18,9 @@
     <SolidColorBrush x:Key="Yellow" Color="#FFFACC15"/>
     <SolidColorBrush x:Key="Orange" Color="#FFFB923C"/>
     <SolidColorBrush x:Key="Red" Color="#FFF87171"/>
+    <!-- diff rows: Green and Red at ~14% over the card -->
+    <SolidColorBrush x:Key="DiffAdd" Color="#244ADE80"/>
+    <SolidColorBrush x:Key="DiffDel" Color="#24F87171"/>
     <SolidColorBrush x:Key="Blue" Color="#FF60A5FA"/>
 
     <FontFamily x:Key="Ui">Segoe UI</FontFamily>

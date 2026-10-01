@@ -18,6 +18,9 @@ public sealed class TranscriptProjector
 
     public ObservableCollection<TranscriptItem> Items { get; } = [];
 
+    /// <summary>A file's text, or null if there is none; Write previews diff against it. Unset: every Write is a new file.</summary>
+    public Func<string, string?>? ReadFile { get; init; }
+
     public void AddUser(string text) => Items.Add(new UserItem(text));
 
     public void AddNote(NoteKind kind, string text, string? detail = null) => Items.Add(new NoteItem(kind, text, detail));
@@ -32,7 +35,7 @@ public sealed class TranscriptProjector
             case BlockStopEvent { ParentToolUseId: null } s when _blocks.TryGetValue(s.Index, out var row): StopBlock(row); break;
             case UserEvent { ParentToolUseId: null } u: ApplyUser(u.Content); break;
             case ResultEvent r: EndTurn(r); break;
-            case PermissionRequest p: Items.Add(new PermissionItem(p, Summarize(p.Input))); break;
+            case PermissionRequest p: Items.Add(NewPermission(p)); break;
             case PermissionDeniedEvent d: AddNote(NoteKind.Warning, $"{d.ToolName} denied", d.Message); break;
             case CompactBoundaryEvent c: AddNote(NoteKind.Compact, $"Compacted ({c.Trigger}): {Tokens.K(c.PreTokens)} → {Tokens.K(c.PostTokens)}"); break;
             case InformationalEvent { Content: { Length: > 0 } text } i: AddNote(i.Level == "error" ? NoteKind.Error : NoteKind.Info, text); break;
@@ -139,6 +142,34 @@ public sealed class TranscriptProjector
         _dirty.Clear();
         _blocks.Clear();
         Items.Add(new TurnItem(r));
+    }
+
+    PermissionItem NewPermission(PermissionRequest p)
+    {
+        var session = PermissionRules.ForSession(p.Suggestions);
+        var (diff, note) = Preview(p.ToolName, p.Input);
+        return new(p, Summarize(p.Input)) { Diff = diff, DiffNote = note, SessionRules = session?.Rules, SessionLabel = session?.Label };
+    }
+
+    (List<DiffLine>?, string?) Preview(string tool, JsonObject input)
+    {
+        switch (tool)
+        {
+            case "Edit" when Json.Str(input["old_string"]) is { } before && Json.Str(input["new_string"]) is { } after:
+                return (LineDiff.Compute(before, after), Json.Bool(input["replace_all"]) ? "every occurrence" : null);
+            case "MultiEdit" when input["edits"] is JsonArray edits:
+                var rows = new List<DiffLine>();
+                foreach (var e in edits.OfType<JsonObject>())
+                {
+                    if (rows.Count > 0) rows.Add(new(DiffKind.Gap, "⋯"));
+                    rows.AddRange(LineDiff.Compute(Json.Str(e["old_string"]) ?? "", Json.Str(e["new_string"]) ?? ""));
+                }
+                return (rows, $"{edits.Count} edits");
+            case "Write" when Json.Str(input["content"]) is { } content:
+                var old = Json.Str(input["file_path"]) is { } path ? ReadFile?.Invoke(path) : null;
+                return (LineDiff.Compute(old ?? "", content), old is null ? "new file" : "overwrites the file");
+        }
+        return (null, null);
     }
 
     static string ResultText(JsonNode? content) => content switch

@@ -23,6 +23,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     string? _activity;
     string _status = "starting claude…";
     string _state = "starting";
+    string _mode = "";
     bool _isReady, _exitNoted, _disposed;
     volatile bool _readerDone;
 
@@ -38,12 +39,14 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 
     public LaunchOptions Options { get; }
     public string Title { get; }
-    public TranscriptProjector Transcript { get; } = new();
+    public TranscriptProjector Transcript { get; } = new() { ReadFile = ReadFileOrNull };
     public ObservableCollection<TranscriptItem> Items => Transcript.Items;
     public string Status { get => _status; private set => Set(ref _status, value); }
     public bool IsReady { get => _isReady; private set => Set(ref _isReady, value); }
     /// <summary>starting, idle, working or exited: the colour of the tab's dot.</summary>
     public string State { get => _state; private set => Set(ref _state, value); }
+    /// <summary>The permission mode as the footer shows it.</summary>
+    public string Mode { get => _mode; private set => Set(ref _mode, value); }
 
     public async Task StartAsync()
     {
@@ -84,16 +87,30 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "interrupt failed", ex.Message); }
     }
 
-    public async Task DecideAsync(PermissionItem p, bool allow)
+    public async Task DecideAsync(PermissionItem p, PermissionState decision)
     {
-        if (_session is not { } s || p.State != PermissionState.Pending) return;
-        p.State = allow ? PermissionState.Allowed : PermissionState.Denied;
+        if (_session is not { } s || p.State != PermissionState.Pending || decision == PermissionState.Pending) return;
+        p.State = decision;
         try
         {
-            if (allow) await s.AllowAsync(p.Request);
-            else await s.DenyAsync(p.Request.RequestId, "The user denied this tool call.");
+            switch (decision)
+            {
+                case PermissionState.Allowed: await s.AllowAsync(p.Request); break;
+                case PermissionState.AllowedForSession: await s.AllowAsync(p.Request, updatedPermissions: p.SessionRules); break;
+                default: await s.DenyAsync(p.Request.RequestId, "The user denied this tool call."); break;
+            }
         }
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "permission reply failed", ex.Message); }
+        UpdateStatus(); // a setMode rule moves the mode
+    }
+
+    /// <summary>shift+tab: the next mode in <see cref="ClaudeLauncher.PermissionModes"/>, applied to the running process.</summary>
+    public async Task CycleModeAsync()
+    {
+        if (_session is not { } s || !IsReady) return;
+        try { await s.SetPermissionModeAsync(ClaudeLauncher.NextPermissionMode(s.PermissionMode ?? Options.PermissionMode)); }
+        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "mode change failed", ex.Message); }
+        UpdateStatus();
     }
 
     /// <summary>UI thread only; call before <see cref="DisposeAsync"/>, which may run on any thread.</summary>
@@ -154,6 +171,20 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         }
     }
 
+    /// <summary>Write previews diff against this; a missing, locked or huge file previews as new.</summary>
+    static string? ReadFileOrNull(string path)
+    {
+        try
+        {
+            var f = new FileInfo(path);
+            return f.Exists && f.Length <= 4 << 20 ? File.ReadAllText(path) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
     async void Report(Task task, string what)
     {
         try { await task; }
@@ -165,6 +196,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         if (_session is not { } s) return;
         var u = s.Usage;
         State = _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : "working";
+        Mode = (s.PermissionMode ?? Options.PermissionMode) switch { "acceptEdits" => "accept edits", var m => m } + " mode";
         string? Pct(RateWindow? w) => w is null ? null : (w.Utilization * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
         string?[] parts =
         [
