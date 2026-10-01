@@ -12,3 +12,6 @@ token-*.log
 checkpoints/
 *.bak
 *.bak-*
+
+# token-chat spike recordings: carry account email and local paths until scrubbed
+*.raw.jsonl
