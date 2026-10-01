@@ -6,8 +6,8 @@ using TokenChat.Core;
 
 namespace TokenChat.App;
 
-/// <summary>TokenChat.App [--lite] [--model name] [--resume sid] [directory]: opens a tab in directory (resuming sid),
-/// else the start screen. With TokenChat already running, the request goes to that window and this process exits.</summary>
+/// <summary>TokenChat.App [--lite] [--model name] [--effort level] [--resume sid] [--prompt text] [directory]: opens a tab
+/// in directory (resuming sid, sending text first), else the start screen. With TokenChat already running, the request goes to that window and this process exits.</summary>
 public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
@@ -22,7 +22,8 @@ public partial class App : Application
         }
         DispatcherUnhandledException += OnUnhandled;
         LiftCodeColours();
-        var window = new MainWindow { Lite = request.Lite, Model = request.Model };
+        // A --prompt launch (the Parked tab's /unpark) carries that session's model: its own tab's, not the window's default.
+        var window = request.Prompt is null ? new MainWindow { Lite = request.Lite, Model = request.Model } : new MainWindow();
         MainWindow = window;
         window.Show();
         window.Handle(request);

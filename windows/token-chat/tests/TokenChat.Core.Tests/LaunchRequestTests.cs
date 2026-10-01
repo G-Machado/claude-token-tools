@@ -16,6 +16,21 @@ public class LaunchRequestTests
     }
 
     [Fact]
+    public void ParsesAnUnparkLaunch()
+    {
+        var r = LaunchRequest.Parse(["--model", "sonnet", "--effort", "medium", "--prompt", "/unpark token-chat-link", @"C:\work"]);
+        Assert.Equal(@"C:\work", r.Directory);
+        Assert.Equal("medium", r.Effort);
+        Assert.Equal("/unpark token-chat-link", r.Prompt);
+        Assert.Null(r.ResumeSessionId);
+        Assert.Null(r.Error);
+    }
+
+    [Fact]
+    public void PromptWithoutADirectoryIsAnError() =>
+        Assert.Contains("--prompt needs a directory", LaunchRequest.Parse(["--prompt", "/unpark"]).Error);
+
+    [Fact]
     public void NoArgumentsMeansTheStartScreen() => Assert.Equal(new LaunchRequest(null), LaunchRequest.Parse([]));
 
     [Fact]
@@ -25,7 +40,7 @@ public class LaunchRequestTests
     [Fact]
     public void SurvivesThePipe()
     {
-        var r = new LaunchRequest(@"C:\work", true, "haiku", "abc");
+        var r = new LaunchRequest(@"C:\work", true, "haiku", "abc", "xhigh", "/unpark topic");
         Assert.Equal(r, JsonSerializer.Deserialize<LaunchRequest>(JsonSerializer.Serialize(r)));
     }
 

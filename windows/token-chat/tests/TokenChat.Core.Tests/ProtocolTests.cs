@@ -84,13 +84,16 @@ public class ProtocolTests
     [Fact]
     public void LiteProfileArguments()
     {
-        var spec = ClaudeLauncher.Build(new LaunchOptions { WorkingDirectory = ".", Profile = Profile.Lite, Model = "opus" }, exe: "claude.exe");
+        var spec = ClaudeLauncher.Build(new LaunchOptions { WorkingDirectory = ".", Profile = Profile.Lite, Model = "opus", Effort = "xhigh" }, exe: "claude.exe");
         var args = string.Join(" ", spec.Arguments);
         Assert.Contains("--input-format stream-json --output-format stream-json", args);
         Assert.Contains("--permission-prompt-tool stdio", args);
         Assert.Contains("--tools Read,Edit,Write,Bash,Grep,Glob,AskUserQuestion --strict-mcp-config", args);
         Assert.Contains("--model opus", args);
+        Assert.Contains("--effort xhigh", args);
         Assert.Equal("1", spec.Environment["TOKEN_CHAT"]);
-        Assert.DoesNotContain("--tools", string.Join(" ", ClaudeLauncher.Build(new LaunchOptions { WorkingDirectory = "." }, "x").Arguments));
+        var bare = string.Join(" ", ClaudeLauncher.Build(new LaunchOptions { WorkingDirectory = "." }, "x").Arguments);
+        Assert.DoesNotContain("--tools", bare);
+        Assert.DoesNotContain("--effort", bare);
     }
 }

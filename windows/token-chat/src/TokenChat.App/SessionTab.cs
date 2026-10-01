@@ -26,10 +26,13 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     string _mode = "";
     bool _isReady, _exitNoted, _disposed;
     volatile bool _readerDone;
+    string? _firstPrompt;
 
-    public SessionTab(LaunchOptions options)
+    /// <summary>firstPrompt goes out as the first message once claude is up: the Parked tab's /unpark.</summary>
+    public SessionTab(LaunchOptions options, string? firstPrompt = null)
     {
         Options = options;
+        _firstPrompt = firstPrompt;
         var name = Path.GetFileName(options.WorkingDirectory.TrimEnd('\\', '/'));
         Title = options.Profile == Profile.Lite ? name + " · lite" : name;
         _render = new DispatcherTimer(RenderInterval, DispatcherPriority.Normal, (_, _) => Drain(), Dispatcher.CurrentDispatcher);
@@ -69,6 +72,11 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
             _ = Task.Run(ReadAsync);
             IsReady = true;
             UpdateStatus();
+            if (_firstPrompt is { } prompt)
+            {
+                _firstPrompt = null;
+                await SendAsync(prompt);
+            }
         }
         catch (Exception ex)
         {

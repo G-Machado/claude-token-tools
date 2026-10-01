@@ -57,20 +57,21 @@ public partial class MainWindow : Window
             Start.Visibility = Visibility.Collapsed;
             return;
         }
-        if (r.Directory is { } directory) Open(directory, r.ResumeSessionId, r.Lite, r.Model);
+        if (r.Directory is { } directory) Open(directory, r.ResumeSessionId, r.Lite, r.Model, r.Effort, r.Prompt);
     }
 
-    public void Open(string directory) => Open(directory, null, false, null);
+    public void Open(string directory) => Open(directory, null, false, null, null, null);
 
-    void Open(string directory, string? resume, bool lite, string? model)
+    void Open(string directory, string? resume, bool lite, string? model, string? effort, string? prompt)
     {
         var tab = new SessionTab(new LaunchOptions
         {
             WorkingDirectory = directory,
             Profile = lite || LiteBox.IsChecked == true ? Profile.Lite : Profile.Full,
             Model = model ?? Model,
+            Effort = effort,
             ResumeSessionId = resume,
-        });
+        }, prompt);
         _tabs.Add(tab);
         Tabs.SelectedItem = tab;
         Start.Visibility = Visibility.Collapsed;

@@ -14,6 +14,8 @@ public sealed record LaunchOptions
     public Profile Profile { get; init; } = Profile.Full;
     public string? ResumeSessionId { get; init; }
     public string? Model { get; init; }
+    /// <summary>--effort: low, medium, high, xhigh, max. Null leaves the account default.</summary>
+    public string? Effort { get; init; }
     /// <summary>--permission-mode. auto lets the classifier pass safe calls without a card; manual asks for every one.</summary>
     public string PermissionMode { get; init; } = "auto";
     public IReadOnlyList<string> ExtraArguments { get; init; } = [];
@@ -73,6 +75,7 @@ public static class ClaudeLauncher
         ];
         if (o.Profile == Profile.Lite) args.AddRange(["--tools", string.Join(",", LiteTools), "--strict-mcp-config"]);
         if (o.Model is { } model) args.AddRange(["--model", model]);
+        if (o.Effort is { } effort) args.AddRange(["--effort", effort]);
         if (o.ResumeSessionId is { } sid) args.AddRange(["--resume", sid]);
         args.AddRange(o.ExtraArguments);
         // Hooks see TOKEN_CHAT=1 so the token tooling can tell an app session from a terminal one (assumed: hooks inherit the child env).
