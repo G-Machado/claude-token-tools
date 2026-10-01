@@ -15,13 +15,20 @@ public sealed class TranscriptProjector
     readonly Dictionary<int, TranscriptItem> _blocks = []; // content block index → row, current message
     readonly Dictionary<string, ToolUseItem> _tools = [];
     readonly HashSet<StreamedItem> _dirty = [];
+    readonly List<OpenBlock> _open = []; // ▶ blocks the user has not replied past
 
     public ObservableCollection<TranscriptItem> Items { get; } = [];
 
     /// <summary>A file's text, or null if there is none; Write previews diff against it. Unset: every Write is a new file.</summary>
     public Func<string, string?>? ReadFile { get; init; }
 
-    public void AddUser(string text) => Items.Add(new UserItem(text));
+    /// <summary>Any message answers the ▶ asks before it, so their buttons close.</summary>
+    public void AddUser(string text)
+    {
+        foreach (var b in _open) b.IsClosed = true;
+        _open.Clear();
+        Items.Add(new UserItem(text));
+    }
 
     public void AddNote(NoteKind kind, string text, string? detail = null) => Items.Add(new NoteItem(kind, text, detail));
 
@@ -36,6 +43,7 @@ public sealed class TranscriptProjector
             case UserEvent { ParentToolUseId: null } u: ApplyUser(u.Content); break;
             case ResultEvent r: EndTurn(r); break;
             case PermissionRequest p: Items.Add(NewPermission(p)); break;
+            case QuestionRequest q: Items.Add(new QuestionItem(q)); break;
             case PermissionDeniedEvent d: AddNote(NoteKind.Warning, $"{d.ToolName} denied", d.Message); break;
             case CompactBoundaryEvent c: AddNote(NoteKind.Compact, $"Compacted ({c.Trigger}): {Tokens.K(c.PreTokens)} → {Tokens.K(c.PostTokens)}"); break;
             case InformationalEvent { Content: { Length: > 0 } text } i: AddNote(i.Level == "error" ? NoteKind.Error : NoteKind.Info, text); break;
@@ -85,11 +93,21 @@ public sealed class TranscriptProjector
             case StreamedItem s:
                 s.Flush();
                 _dirty.Remove(s);
-                s.IsStreaming = false;
+                EndStream(s);
                 break;
             case ToolUseItem t:
                 t.Summary = Summarize(t.InputJson.ToString());
                 break;
+        }
+    }
+
+    void EndStream(StreamedItem s)
+    {
+        s.IsStreaming = false;
+        if (s is AssistantTextItem { Open: null } a && OpenBlock.Parse(a.Text) is { } block)
+        {
+            a.Open = block;
+            _open.Add(block);
         }
     }
 
@@ -137,7 +155,7 @@ public sealed class TranscriptProjector
         foreach (var row in _blocks.Values.OfType<StreamedItem>())
         {
             row.Flush();
-            row.IsStreaming = false;
+            if (row.IsStreaming) EndStream(row);
         }
         _dirty.Clear();
         _blocks.Clear();
@@ -192,6 +210,9 @@ public sealed class TranscriptProjector
 
     public static string Summarize(JsonObject input)
     {
+        if (input["questions"] is JsonArray { Count: > 0 } questions && questions[0] is JsonObject first
+            && Json.Str(first["question"]) is { Length: > 0 } question)
+            return OneLine(question, 160); // AskUserQuestion
         foreach (var key in SummaryKeys)
             if (input[key] is JsonValue v && v.TryGetValue<string>(out var s) && s.Length > 0) return OneLine(s, 160);
         return OneLine(input.ToJsonString(), 160);

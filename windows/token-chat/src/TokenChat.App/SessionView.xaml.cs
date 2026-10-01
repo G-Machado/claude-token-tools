@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using TokenChat.Core.Transcript;
 
 namespace TokenChat.App;
@@ -78,5 +79,45 @@ public partial class SessionView : UserControl
     void Decide(object sender, PermissionState decision)
     {
         if ((sender as FrameworkElement)?.DataContext is PermissionItem p) _ = Tab?.DecideAsync(p, decision);
+    }
+
+    void OnPickOption(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not OptionPick o) return;
+        o.Pick();
+        if (Owner<QuestionItem>(sender) is { AnswersOnPick: true, CanSubmit: true } q) _ = Tab?.AnswerAsync(q);
+    }
+
+    void OnSubmitAnswer(object sender, RoutedEventArgs e)
+    {
+        if (Owner<QuestionItem>(sender) is { } q) _ = Tab?.AnswerAsync(q);
+    }
+
+    void OnDeclineQuestion(object sender, RoutedEventArgs e)
+    {
+        if (Owner<QuestionItem>(sender) is { } q) _ = Tab?.DeclineAsync(q);
+    }
+
+    /// <summary>Enter in a typed answer submits the card once every question has an answer.</summary>
+    void OnOtherKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
+        e.Handled = true;
+        if (Owner<QuestionItem>(sender) is { CanSubmit: true } q) _ = Tab?.AnswerAsync(q);
+    }
+
+    void OnSendOpen(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not OpenBlock { CanSend: true, Reply: { } reply } || Tab is not { IsReady: true } tab) return;
+        _stick = true;
+        _ = tab.SendAsync(reply);
+    }
+
+    /// <summary>The nearest data context of type T above a control in a nested template: the card a button sits in.</summary>
+    static T? Owner<T>(object sender) where T : class
+    {
+        for (var d = sender as DependencyObject; d is not null; d = VisualTreeHelper.GetParent(d))
+            if (d is FrameworkElement { DataContext: T t }) return t;
+        return null;
     }
 }

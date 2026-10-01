@@ -6,8 +6,8 @@ using TokenChat.Core.Protocol;
 
 namespace TokenChat.Core.Transcript;
 
-/// <summary>One row of a tab's transcript. Created and mutated on one thread (the UI's).</summary>
-public abstract class TranscriptItem : INotifyPropertyChanged
+/// <summary>Change notification for the transcript's view models.</summary>
+public abstract class Bindable : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -15,10 +15,15 @@ public abstract class TranscriptItem : INotifyPropertyChanged
     {
         if (EqualityComparer<T>.Default.Equals(field, value)) return false;
         field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        Notify(name);
         return true;
     }
+
+    protected void Notify(string? name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
+
+/// <summary>One row of a tab's transcript. Created and mutated on one thread (the UI's).</summary>
+public abstract class TranscriptItem : Bindable;
 
 public sealed class UserItem(string text) : TranscriptItem
 {
@@ -45,7 +50,13 @@ public abstract class StreamedItem : TranscriptItem
     }
 }
 
-public sealed class AssistantTextItem : StreamedItem;
+public sealed class AssistantTextItem : StreamedItem
+{
+    OpenBlock? _open;
+
+    /// <summary>The reply's ▶ asks as buttons; parsed once the text stops streaming, null if it has none.</summary>
+    public OpenBlock? Open { get => _open; internal set => Set(ref _open, value); }
+}
 
 public sealed class ThinkingItem : StreamedItem;
 
@@ -83,6 +94,47 @@ public sealed class PermissionItem(PermissionRequest request, string summary) : 
     /// <summary>Sent with an allow-for-session; null hides the button.</summary>
     public System.Text.Json.Nodes.JsonArray? SessionRules { get; init; }
     public string? SessionLabel { get; init; }
+}
+
+public enum QuestionState { Pending, Answered, Declined }
+
+/// <summary>An AskUserQuestion: pick an option per question, or type an answer, then submit.</summary>
+public sealed class QuestionItem : TranscriptItem
+{
+    QuestionState _state;
+
+    public QuestionItem(QuestionRequest request)
+    {
+        Request = request;
+        Questions = request.Questions.Select(q => new QuestionPick(q)).ToList();
+        foreach (var q in Questions) q.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(QuestionPick.Answer)) Notify(nameof(CanSubmit)); };
+    }
+
+    public QuestionRequest Request { get; }
+    public IReadOnlyList<QuestionPick> Questions { get; }
+    public bool CanSubmit => State == QuestionState.Pending && Questions.All(q => q.Answer is not null);
+    /// <summary>A lone single-select question is answered by its first click.</summary>
+    public bool AnswersOnPick => Questions is [{ MultiSelect: false }];
+    public string? Outcome => State switch
+    {
+        QuestionState.Answered => "answered · " + string.Join(" · ", Questions.Select(q => q.Answer)),
+        QuestionState.Declined => "declined",
+        _ => null,
+    };
+
+    public QuestionState State
+    {
+        get => _state;
+        set
+        {
+            if (!Set(ref _state, value)) return;
+            Notify(nameof(CanSubmit));
+            Notify(nameof(Outcome));
+        }
+    }
+
+    /// <summary>Question text → answer, as <c>ClaudeSession.AnswerAsync</c> takes it.</summary>
+    public Dictionary<string, string> Answers() => Questions.Where(q => q.Answer is not null).ToDictionary(q => q.Text, q => q.Answer!);
 }
 
 public enum NoteKind { Info, Warning, Error, Command, Compact }

@@ -104,6 +104,25 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         UpdateStatus(); // a setMode rule moves the mode
     }
 
+    public async Task AnswerAsync(QuestionItem q)
+    {
+        if (_session is not { } s || !q.CanSubmit) return;
+        var answers = q.Answers();
+        q.State = QuestionState.Answered;
+        try { await s.AnswerAsync(q.Request, answers); }
+        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "answer failed", ex.Message); }
+        UpdateStatus();
+    }
+
+    public async Task DeclineAsync(QuestionItem q)
+    {
+        if (_session is not { } s || q.State != QuestionState.Pending) return;
+        q.State = QuestionState.Declined;
+        try { await s.DenyAsync(q.Request.RequestId, "The user declined to answer. Ask in plain text if you still need to know."); }
+        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "decline failed", ex.Message); }
+        UpdateStatus();
+    }
+
     /// <summary>shift+tab: the next mode in <see cref="ClaudeLauncher.PermissionModes"/>, applied to the running process.</summary>
     public async Task CycleModeAsync()
     {
@@ -162,12 +181,6 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         {
             case StatusEvent s: _activity = s.Status; break;
             case ResultEvent: _activity = null; break;
-            case QuestionRequest q:
-                // M3 renders questions as buttons; until then decline so the turn does not hang.
-                Transcript.AddNote(NoteKind.Warning, "Question declined (answer buttons arrive in M3)",
-                    string.Join("\n", q.Questions.Select(x => x.Text)));
-                Report(_session!.DenyAsync(q.RequestId, "token-chat cannot answer AskUserQuestion yet. Ask in plain text instead."), "declining the question");
-                break;
         }
     }
 
@@ -183,12 +196,6 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         {
             return null;
         }
-    }
-
-    async void Report(Task task, string what)
-    {
-        try { await task; }
-        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, what + " failed", ex.Message); }
     }
 
     void UpdateStatus()
