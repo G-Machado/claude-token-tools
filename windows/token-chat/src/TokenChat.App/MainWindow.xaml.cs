@@ -40,13 +40,36 @@ public partial class MainWindow : Window
 
     void OnClose(object sender, RoutedEventArgs e) => Close();
 
-    public void Open(string directory)
+    /// <summary>A launch, this process's or one forwarded by a later launch: come to the front, then focus the tab already
+    /// holding the session, or open one.</summary>
+    public void Handle(LaunchRequest r)
+    {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        if (r.Error is { } error)
+        {
+            MessageBox.Show(this, error, "token-chat", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (r.ResumeSessionId is { } sid && _tabs.FirstOrDefault(t => t.SessionId == sid) is { } open)
+        {
+            Tabs.SelectedItem = open;
+            Start.Visibility = Visibility.Collapsed;
+            return;
+        }
+        if (r.Directory is { } directory) Open(directory, r.ResumeSessionId, r.Lite, r.Model);
+    }
+
+    public void Open(string directory) => Open(directory, null, false, null);
+
+    void Open(string directory, string? resume, bool lite, string? model)
     {
         var tab = new SessionTab(new LaunchOptions
         {
             WorkingDirectory = directory,
-            Profile = LiteBox.IsChecked == true ? Profile.Lite : Profile.Full,
-            Model = Model,
+            Profile = lite || LiteBox.IsChecked == true ? Profile.Lite : Profile.Full,
+            Model = model ?? Model,
+            ResumeSessionId = resume,
         });
         _tabs.Add(tab);
         Tabs.SelectedItem = tab;

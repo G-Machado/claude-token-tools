@@ -56,6 +56,12 @@ public static class ClaudeLauncher
         throw new FileNotFoundException($"claude.exe not found. Tried: {string.Join("; ", tried)}. Set {ExeVariable}.");
     }
 
+    /// <summary>Variables a claude.exe child must not inherit. Started from inside a session (the widget, --watch, a
+    /// terminal), it would come up in child-session mode: transcript saving off, no sessions/&lt;pid&gt;.json, invisible to
+    /// the token tooling. Same wildcard as token-unpark-launch.cmd, because the marker set has grown before.</summary>
+    public static bool IsSessionMarker(string name) =>
+        name.StartsWith("CLAUDE", StringComparison.OrdinalIgnoreCase) || name.Equals("AI_AGENT", StringComparison.OrdinalIgnoreCase);
+
     public static LaunchSpec Build(LaunchOptions o, string? exe = null)
     {
         List<string> args =

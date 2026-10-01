@@ -34,11 +34,17 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         Title = options.Profile == Profile.Lite ? name + " · lite" : name;
         _render = new DispatcherTimer(RenderInterval, DispatcherPriority.Normal, (_, _) => Drain(), Dispatcher.CurrentDispatcher);
         Attachments.CollectionChanged += (_, _) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AttachmentsTotal)));
+        // The stream starts at the next turn; claude has the history, this tab does not.
+        if (options.ResumeSessionId is { } sid)
+            Transcript.AddNote(NoteKind.Info, $"Resumed {sid[..Math.Min(8, sid.Length)]}", "earlier turns are in the session but not shown here");
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public LaunchOptions Options { get; }
+    /// <summary>The session this tab holds: the one it resumed, else claude's own once init has arrived.
+    /// A resume keeps its id (measured 2026-10-01), so the two never disagree.</summary>
+    public string? SessionId => Options.ResumeSessionId ?? _session?.SessionId;
     public string Title { get; }
     public TranscriptProjector Transcript { get; } = new() { ReadFile = ReadFileOrNull };
     public ObservableCollection<TranscriptItem> Items => Transcript.Items;

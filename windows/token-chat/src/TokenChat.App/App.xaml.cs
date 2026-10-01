@@ -1,4 +1,3 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using ICSharpCode.AvalonEdit.Highlighting;
@@ -7,35 +6,27 @@ using TokenChat.Core;
 
 namespace TokenChat.App;
 
-/// <summary>TokenChat.App [--lite] [--model name] [directory]: opens a tab in directory, else the start screen.</summary>
+/// <summary>TokenChat.App [--lite] [--model name] [--resume sid] [directory]: opens a tab in directory (resuming sid),
+/// else the start screen. With TokenChat already running, the request goes to that window and this process exits.</summary>
 public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        var request = LaunchRequest.Parse(e.Args);
+        var first = SingleInstance.Claim();
+        if (!first && SingleInstance.Forward(request))
+        {
+            Shutdown();
+            return;
+        }
         DispatcherUnhandledException += OnUnhandled;
         LiftCodeColours();
-        var (directory, lite, model) = Parse(e.Args);
-        var window = new MainWindow { Lite = lite, Model = model };
+        var window = new MainWindow { Lite = request.Lite, Model = request.Model };
         MainWindow = window;
         window.Show();
-        if (directory is not null) window.Open(directory);
-    }
-
-    static (string? Directory, bool Lite, string? Model) Parse(string[] args)
-    {
-        string? directory = null, model = null;
-        var lite = false;
-        for (var i = 0; i < args.Length; i++)
-        {
-            switch (args[i])
-            {
-                case "--lite": lite = true; break;
-                case "--model" when i + 1 < args.Length: model = args[++i]; break;
-                default: directory = Path.GetFullPath(args[i]); break;
-            }
-        }
-        return (directory, lite, model);
+        window.Handle(request);
+        if (first) _ = Task.Run(() => SingleInstance.ServeAsync(r => Dispatcher.Invoke(() => window.Handle(r))));
     }
 
     /// <summary>AvalonEdit's syntax colours are chosen for white paper (navy keywords, dark green comments). Code blocks
