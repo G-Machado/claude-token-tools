@@ -13,6 +13,9 @@ public static class Outbound
     public static string Interrupt(string requestId) =>
         ControlRequest(requestId, new JsonObject { ["subtype"] = "interrupt" });
 
+    public static string SetPermissionMode(string requestId, string mode) =>
+        ControlRequest(requestId, new JsonObject { ["subtype"] = "set_permission_mode", ["mode"] = mode });
+
     public static string UserText(string text) => User(JsonValue.Create(text));
 
     /// <summary>content is a string or an array of content blocks (text, image, document).</summary>

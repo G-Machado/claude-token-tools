@@ -14,6 +14,8 @@ public sealed record LaunchOptions
     public Profile Profile { get; init; } = Profile.Full;
     public string? ResumeSessionId { get; init; }
     public string? Model { get; init; }
+    /// <summary>--permission-mode. auto lets the classifier pass safe calls without a card; manual asks for every one.</summary>
+    public string PermissionMode { get; init; } = "auto";
     public IReadOnlyList<string> ExtraArguments { get; init; } = [];
 }
 
@@ -26,6 +28,16 @@ public static class ClaudeLauncher
     public const string ExeVariable = "TOKEN_CHAT_CLAUDE_EXE";
 
     public static readonly IReadOnlyList<string> LiteTools = ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "AskUserQuestion"];
+
+    /// <summary>The shift+tab cycle. bypassPermissions and dontAsk are left out on purpose.</summary>
+    public static readonly IReadOnlyList<string> PermissionModes = ["auto", "manual", "acceptEdits", "plan"];
+
+    /// <summary>The mode after current in <see cref="PermissionModes"/>; auto for anything outside the cycle.</summary>
+    public static string NextPermissionMode(string? current)
+    {
+        var i = current is null ? -1 : ((List<string>)[.. PermissionModes]).IndexOf(current);
+        return PermissionModes[(i + 1) % PermissionModes.Count];
+    }
 
     /// <summary>The real claude.exe, not the npm claude.cmd shim, so arguments and kill reach the process.</summary>
     public static string LocateExe()
@@ -50,7 +62,7 @@ public static class ClaudeLauncher
         [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json",
             "--verbose", "--include-partial-messages", "--include-hook-events",
-            "--permission-prompts", "host", "--permission-mode", "manual",
+            "--permission-prompts", "host", "--permission-mode", o.PermissionMode,
             "--permission-prompt-tool", "stdio", // hidden flag; with the initialize handshake, prompts reach the host
         ];
         if (o.Profile == Profile.Lite) args.AddRange(["--tools", string.Join(",", LiteTools), "--strict-mcp-config"]);

@@ -32,6 +32,9 @@ public sealed class ClaudeSession : IAsyncDisposable
     /// <summary>initialize response: account, models, commands, agents, pid.</summary>
     public JsonObject? InitializeInfo { get; private set; }
     public string? SessionId => Init?.SessionId;
+    /// <summary>From each turn's init, else the last <see cref="SetPermissionModeAsync"/>; null before either.
+    /// init says default for what --permission-mode calls manual.</summary>
+    public string? PermissionMode { get; private set; }
 
     /// <summary>No turn running and no permission or question waiting: safe to hand off, compact or park.</summary>
     public bool AtCleanPoint => Volatile.Read(ref _turnsInFlight) == 0 && _openPrompts.IsEmpty;
@@ -72,6 +75,14 @@ public sealed class ClaudeSession : IAsyncDisposable
     {
         var r = await RequestAsync(Outbound.Interrupt, ct);
         if (!r.Success) throw new ClaudeProtocolException("interrupt failed: " + r.Error);
+    }
+
+    /// <summary>Switches mode in the running process, mid-turn included, like shift+tab in the terminal.</summary>
+    public async Task SetPermissionModeAsync(string mode, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(id => Outbound.SetPermissionMode(id, mode), ct);
+        if (!r.Success) throw new ClaudeProtocolException("set_permission_mode failed: " + r.Error);
+        PermissionMode = mode;
     }
 
     public Task AllowAsync(PermissionRequest p, JsonObject? updatedInput = null, CancellationToken ct = default) =>
@@ -135,7 +146,10 @@ public sealed class ClaudeSession : IAsyncDisposable
         _ledger.Apply(e);
         switch (e)
         {
-            case InitEvent i: Init = i; break;
+            case InitEvent i:
+                Init = i;
+                PermissionMode = i.PermissionMode == "default" ? "manual" : i.PermissionMode;
+                break;
             case RateLimitEvent r: RateLimit = r; break;
             case PermissionRequest p: _openPrompts[p.RequestId] = 0; break;
             case QuestionRequest q: _openPrompts[q.RequestId] = 0; break;
