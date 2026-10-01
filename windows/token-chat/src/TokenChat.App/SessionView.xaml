@@ -231,6 +231,14 @@
                     <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
                     <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Faint}"/>
                 </DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="Cancelled">
+                    <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Decided" Property="Text" Value="Cancelled: the turn was stopped"/>
+                    <Setter TargetName="Decided" Property="Foreground" Value="{StaticResource Faint}"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
+                    <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Faint}"/>
+                </DataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
 
@@ -312,6 +320,13 @@
                     <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
                     <Setter TargetName="Decided" Property="Foreground" Value="{StaticResource Red}"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
+                    <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Faint}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="Cancelled">
+                    <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Decided" Property="Foreground" Value="{StaticResource Faint}"/>
                     <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
                     <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Faint}"/>
                 </DataTrigger>

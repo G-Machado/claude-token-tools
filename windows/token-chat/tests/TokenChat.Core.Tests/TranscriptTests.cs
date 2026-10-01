@@ -52,7 +52,10 @@ public class TranscriptTests
     [Fact]
     public void PermissionRequestsBecomePendingCards()
     {
-        var (projector, events) = Replay("perm");
+        // the recording answered every prompt; replayed without those replies, a turn end would cancel the cards
+        var projector = new TranscriptProjector();
+        var events = Fixture.Lines("perm").Select(EventParser.Parse).ToList();
+        foreach (var e in events.Where(e => e is not ResultEvent)) projector.Apply(e);
         var cards = projector.Items.OfType<PermissionItem>().ToList();
         Assert.Equal(events.OfType<PermissionRequest>().Count(), cards.Count);
         Assert.NotEmpty(cards);
@@ -98,5 +101,31 @@ public class TranscriptTests
         projector.Apply(new UserEvent(late, null));
         Assert.False(tool.IsInterrupted);
         Assert.Equal("ok", tool.Result);
+    }
+
+    /// Stop while cards wait: the CLI withdraws them and ends the turn with error_during_execution.
+    [Fact]
+    public void StopCancelsPendingCardsAndIsNoError()
+    {
+        var projector = new TranscriptProjector();
+        var input = new System.Text.Json.Nodes.JsonObject();
+        projector.Apply(new PermissionRequest("p1", "Edit", input, null, "toolu_1", null));
+        projector.Apply(new PermissionRequest("p2", "Bash", input, null, "toolu_2", null));
+        projector.Apply(new QuestionRequest("q1", "toolu_3", input, []));
+        var cards = projector.Items.OfType<PermissionItem>().ToList();
+        cards[1].State = PermissionState.Allowed;
+        Assert.IsType<PromptCancelledEvent>(EventParser.Parse("""{"type":"control_cancel_request","request_id":"p1"}"""));
+        projector.Apply(EventParser.Parse("""{"type":"control_cancel_request","request_id":"p1"}"""));
+        Assert.Equal(PermissionState.Cancelled, cards[0].State);
+        Assert.Equal(QuestionState.Pending, projector.Items.OfType<QuestionItem>().Single().State);
+
+        projector.Apply(new UserEvent(System.Text.Json.Nodes.JsonValue.Create("[Request interrupted by user]"), null));
+        projector.Apply(new ResultEvent("error_during_execution", true, null, 1, new TokenUsage(), 0, 10, "aborted_streaming"));
+        Assert.Equal(PermissionState.Allowed, cards[1].State);
+        Assert.Equal(QuestionState.Cancelled, projector.Items.OfType<QuestionItem>().Single().State);
+        var turn = projector.Items.OfType<TurnItem>().Single();
+        Assert.True(turn.IsStopped);
+        Assert.False(turn.IsError);
+        Assert.StartsWith("stopped ·", turn.Summary);
     }
 }

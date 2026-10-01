@@ -75,6 +75,9 @@ public sealed record Question(string Text, string? Header, bool MultiSelect, IRe
 /// <summary>can_use_tool for AskUserQuestion. Answered by allowing with input.answers = {question: label}.</summary>
 public sealed record QuestionRequest(string RequestId, string? ToolUseId, JsonObject Input, IReadOnlyList<Question> Questions) : ClaudeEvent;
 
+/// <summary>control_cancel_request: the CLI withdrew a prompt it was waiting on, e.g. after an interrupt.</summary>
+public sealed record PromptCancelledEvent(string RequestId) : ClaudeEvent;
+
 /// <summary>A control_request subtype token-chat does not handle; the session replies with an error so the CLI never hangs.</summary>
 public sealed record UnhandledControlRequest(string RequestId, string? Subtype) : ClaudeEvent;
 

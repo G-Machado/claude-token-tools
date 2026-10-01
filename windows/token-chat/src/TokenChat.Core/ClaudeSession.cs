@@ -159,8 +159,10 @@ public sealed class ClaudeSession : IAsyncDisposable
             case RateLimitEvent r: RateLimit = r; break;
             case PermissionRequest p: _openPrompts[p.RequestId] = 0; break;
             case QuestionRequest q: _openPrompts[q.RequestId] = 0; break;
+            case PromptCancelledEvent c: _openPrompts.TryRemove(c.RequestId, out _); break;
             case ResultEvent:
                 if (Interlocked.Decrement(ref _turnsInFlight) < 0) Interlocked.Exchange(ref _turnsInFlight, 0);
+                _openPrompts.Clear(); // a prompt left open when its turn ends was withdrawn by an interrupt
                 break;
             case ControlResponseEvent c when _pending.TryGetValue(c.RequestId, out var tcs):
                 tcs.TrySetResult(c);

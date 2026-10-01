@@ -15,7 +15,8 @@ public class ChoicesTests
     public void QuestionRequestBecomesPendingCard()
     {
         var projector = new TranscriptProjector();
-        foreach (var e in Fixture.Lines("perm").Select(EventParser.Parse)) projector.Apply(e);
+        // without its result: replayed with no reply, the turn end would cancel the card
+        foreach (var e in Fixture.Lines("perm").Select(EventParser.Parse).Where(e => e is not ResultEvent)) projector.Apply(e);
         var q = Assert.Single(projector.Items.OfType<QuestionItem>());
         Assert.Equal(QuestionState.Pending, q.State);
         Assert.True(q.AnswersOnPick);

@@ -64,6 +64,8 @@ public static class EventParser
             }
             case "control_request":
                 return ParseControlRequest(Json.Str(o["request_id"]) ?? "", o["request"] as JsonObject);
+            case "control_cancel_request":
+                return new PromptCancelledEvent(Json.Str(o["request_id"]) ?? "");
             case "control_response":
             {
                 var r = o["response"];

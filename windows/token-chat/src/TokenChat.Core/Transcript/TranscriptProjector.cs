@@ -16,6 +16,8 @@ public sealed class TranscriptProjector
     readonly Dictionary<string, ToolUseItem> _tools = [];
     readonly HashSet<StreamedItem> _dirty = [];
     readonly List<OpenBlock> _open = []; // ▶ blocks the user has not replied past
+    readonly List<TranscriptItem> _prompts = []; // permission and question cards of the running turn
+    bool _interrupted; // the running turn saw the CLI's interrupt marker
 
     public ObservableCollection<TranscriptItem> Items { get; } = [];
 
@@ -42,8 +44,9 @@ public sealed class TranscriptProjector
             case BlockStopEvent { ParentToolUseId: null } s when _blocks.TryGetValue(s.Index, out var row): StopBlock(row); break;
             case UserEvent { ParentToolUseId: null } u: ApplyUser(u.Content); break;
             case ResultEvent r: EndTurn(r); break;
-            case PermissionRequest p: Items.Add(NewPermission(p)); break;
-            case QuestionRequest q: Items.Add(new QuestionItem(q)); break;
+            case PermissionRequest p: AddPrompt(NewPermission(p)); break;
+            case QuestionRequest q: AddPrompt(new QuestionItem(q)); break;
+            case PromptCancelledEvent c: CancelPrompts(c.RequestId); break;
             case PermissionDeniedEvent d: AddNote(NoteKind.Warning, $"{d.ToolName} denied", d.Message); break;
             case CompactBoundaryEvent c: AddNote(NoteKind.Compact, $"Compacted ({c.Trigger}): {Tokens.K(c.PreTokens)} → {Tokens.K(c.PostTokens)}"); break;
             case InformationalEvent { Content: { Length: > 0 } text } i: AddNote(i.Level == "error" ? NoteKind.Error : NoteKind.Info, text); break;
@@ -144,7 +147,10 @@ public sealed class TranscriptProjector
     {
         const string stdout = "<local-command-stdout>";
         if (text.StartsWith("[Request interrupted", StringComparison.Ordinal))
+        {
+            _interrupted = true;
             AddNote(NoteKind.Warning, "Interrupted");
+        }
         else if (text.StartsWith(stdout, StringComparison.Ordinal))
             AddNote(NoteKind.Command, text[stdout.Length..].Replace("</local-command-stdout>", "").Trim());
         else
@@ -163,7 +169,29 @@ public sealed class TranscriptProjector
         // a main-chain tool's result always lands before its turn's result, unless the turn was stopped
         foreach (var t in _tools.Values)
             if (t.Result is null) t.IsInterrupted = true;
-        Items.Add(new TurnItem(r));
+        CancelPrompts(null);
+        var stopped = _interrupted || r.TerminalReason?.StartsWith("aborted", StringComparison.Ordinal) == true;
+        _interrupted = false;
+        Items.Add(new TurnItem(r) { IsStopped = stopped });
+    }
+
+    void AddPrompt(TranscriptItem card)
+    {
+        _prompts.Add(card);
+        Items.Add(card);
+    }
+
+    /// <summary>Cards still pending lose their buttons: one by request id, or all of them (null) at the end of a turn.</summary>
+    void CancelPrompts(string? requestId)
+    {
+        foreach (var card in _prompts)
+        {
+            if (card is PermissionItem { State: PermissionState.Pending } p && (requestId is null || p.Request.RequestId == requestId))
+                p.State = PermissionState.Cancelled;
+            else if (card is QuestionItem { State: QuestionState.Pending } q && (requestId is null || q.Request.RequestId == requestId))
+                q.State = QuestionState.Cancelled;
+        }
+        if (requestId is null) _prompts.Clear();
     }
 
     PermissionItem NewPermission(PermissionRequest p)

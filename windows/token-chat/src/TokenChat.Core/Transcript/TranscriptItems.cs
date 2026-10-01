@@ -79,7 +79,8 @@ public sealed class ToolUseItem(string toolName, string? toolUseId) : Transcript
     public bool IsInterrupted { get => _isInterrupted; internal set => Set(ref _isInterrupted, value); }
 }
 
-public enum PermissionState { Pending, Allowed, AllowedForSession, Denied }
+/// <summary>Cancelled: the turn ended (stopped) before it was decided.</summary>
+public enum PermissionState { Pending, Allowed, AllowedForSession, Denied, Cancelled }
 
 public sealed class PermissionItem(PermissionRequest request, string summary) : TranscriptItem
 {
@@ -98,7 +99,7 @@ public sealed class PermissionItem(PermissionRequest request, string summary) : 
     public string? SessionLabel { get; init; }
 }
 
-public enum QuestionState { Pending, Answered, Declined }
+public enum QuestionState { Pending, Answered, Declined, Cancelled }
 
 /// <summary>An AskUserQuestion: pick an option per question, or type an answer, then submit.</summary>
 public sealed class QuestionItem : TranscriptItem
@@ -121,6 +122,7 @@ public sealed class QuestionItem : TranscriptItem
     {
         QuestionState.Answered => "answered · " + string.Join(" · ", Questions.Select(q => q.Answer)),
         QuestionState.Declined => "declined",
+        QuestionState.Cancelled => "cancelled",
         _ => null,
     };
 
@@ -152,15 +154,17 @@ public sealed class NoteItem(NoteKind kind, string text, string? detail = null) 
 public sealed class TurnItem(ResultEvent result) : TranscriptItem
 {
     public ResultEvent Result { get; } = result;
-    public bool IsError => Result.IsError;
-    public string? Detail => Result.IsError ? Result.Text : null;
+    /// <summary>Ended by an interrupt; the CLI reports that as error_during_execution, which is no error to the user.</summary>
+    public bool IsStopped { get; init; }
+    public bool IsError => Result.IsError && !IsStopped;
+    public string? Detail => IsError ? Result.Text : null;
 
     public string Summary
     {
         get
         {
             var u = Result.Usage;
-            var head = Result.IsError ? Result.Subtype : "done";
+            var head = IsStopped ? "stopped" : Result.IsError ? Result.Subtype : "done";
             return string.Create(CultureInfo.InvariantCulture,
                 $"{head} · {Result.DurationMs / 1000.0:0.0}s · {Result.NumTurns} steps · in {Tokens.K(u.Input)} · cache r {Tokens.K(u.CacheRead)} w {Tokens.K(u.CacheWrite)} · out {Tokens.K(u.Output)} · ≈${Result.TotalCostUsd:0.00}");
         }
