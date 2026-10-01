@@ -33,6 +33,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         var name = Path.GetFileName(options.WorkingDirectory.TrimEnd('\\', '/'));
         Title = options.Profile == Profile.Lite ? name + " · lite" : name;
         _render = new DispatcherTimer(RenderInterval, DispatcherPriority.Normal, (_, _) => Drain(), Dispatcher.CurrentDispatcher);
+        Attachments.CollectionChanged += (_, _) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AttachmentsTotal)));
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -74,34 +75,47 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     /// <summary>Typed while a turn runs; sent as one message when it ends, or handed back to the input by stop.</summary>
     public ObservableCollection<QueuedMessage> Queued { get; } = [];
 
-    /// <summary>Goes out now at a clean point; otherwise waits in <see cref="Queued"/>.</summary>
+    /// <summary>Files dropped or pasted into the input, going out with the next message.</summary>
+    public ObservableCollection<Attachment> Attachments { get; } = [];
+
+    /// <summary>"3 files ≈ 7.2k tokens" over the chips; empty with none.</summary>
+    public string AttachmentsTotal => Attachments.Count == 0 ? ""
+        : $"{Attachments.Count} file{(Attachments.Count == 1 ? "" : "s")} ≈ {Tokens.K(Attachments.Sum(a => a.Tokens))} tokens";
+
+    /// <summary>Goes out now at a clean point; otherwise waits in <see cref="Queued"/>. Takes the pending attachments.</summary>
     public async Task SendAsync(string text)
     {
         if (_session is not { } s || !IsReady) return;
+        var m = new QueuedMessage(text, [.. Attachments]);
+        Attachments.Clear();
         if (!s.AtCleanPoint)
         {
-            Queued.Add(new QueuedMessage(text));
+            Queued.Add(m);
             return;
         }
-        await SendNowAsync(s, text);
+        await SendNowAsync(s, m);
     }
 
-    async Task SendNowAsync(ClaudeSession s, string text)
+    async Task SendNowAsync(ClaudeSession s, QueuedMessage m)
     {
-        Transcript.AddUser(text);
-        try { await s.SendAsync(text); }
+        Transcript.AddUser(m.Text, m.Files.Select(f => f.Label).ToList());
+        try { await (m.Files.Count == 0 ? s.SendAsync(m.Text) : s.SendAsync(Core.Attachments.Blocks(m.Text, m.Files))); }
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "send failed", ex.Message); }
         UpdateStatus();
     }
 
-    /// <summary>The queued messages as one text, oldest first, and an empty queue; null if there were none.</summary>
-    public string? TakeQueued()
+    /// <summary>The queued messages as one, oldest first, and an empty queue; null if there were none.</summary>
+    public QueuedMessage? TakeQueued()
     {
         if (Queued.Count == 0) return null;
-        var text = string.Join("\n\n", Queued.Select(m => m.Text));
+        var m = new QueuedMessage(string.Join("\n\n", Queued.Select(q => q.Text).Where(t => t.Length > 0)), [.. Queued.SelectMany(q => q.Files)]);
         Queued.Clear();
-        return text;
+        return m;
     }
+
+    public void Attach(Attachment a) => Attachments.Add(a);
+
+    public void Detach(Attachment a) => Attachments.Remove(a);
 
     public void Unqueue(QueuedMessage m) => Queued.Remove(m);
 
@@ -254,8 +268,10 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 }
 
 /// <summary>A class, not a record: two identical messages are still two rows.</summary>
-public sealed class QueuedMessage(string text)
+public sealed class QueuedMessage(string text, IReadOnlyList<Attachment> files)
 {
     public string Text { get; } = text;
-    public string Preview { get; } = text.ReplaceLineEndings(" ⏎ ");
+    public IReadOnlyList<Attachment> Files { get; } = files;
+    public string Preview { get; } = text.ReplaceLineEndings(" ⏎ ")
+        + (files.Count == 0 ? "" : $"{(text.Length == 0 ? "" : "  ")}+{files.Count} file{(files.Count == 1 ? "" : "s")}");
 }

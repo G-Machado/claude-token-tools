@@ -25,11 +25,11 @@ public sealed class TranscriptProjector
     public Func<string, string?>? ReadFile { get; init; }
 
     /// <summary>Any message answers the ▶ asks before it, so their buttons close.</summary>
-    public void AddUser(string text)
+    public void AddUser(string text, IReadOnlyList<string>? files = null)
     {
         foreach (var b in _open) b.IsClosed = true;
         _open.Clear();
-        Items.Add(new UserItem(text));
+        Items.Add(new UserItem(text, files));
     }
 
     public void AddNote(NoteKind kind, string text, string? detail = null) => Items.Add(new NoteItem(kind, text, detail));

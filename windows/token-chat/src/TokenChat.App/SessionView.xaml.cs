@@ -1,7 +1,9 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using TokenChat.Core;
 using TokenChat.Core.Transcript;
 
 namespace TokenChat.App;
@@ -15,6 +17,15 @@ public partial class SessionView : UserControl
     {
         InitializeComponent();
         Transcript.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(OnScrollChanged));
+        CommandManager.AddPreviewExecutedHandler(Input, OnPaste);
+        // the text box disables paste when the clipboard holds no text, e.g. a screenshot alone
+        CommandManager.AddPreviewCanExecuteHandler(Input, (_, e) =>
+        {
+            if (e.Command != ApplicationCommands.Paste || Clipboard.ContainsText()) return;
+            if (!Clipboard.ContainsFileDropList() && !Clipboard.ContainsImage() && !Clipboard.ContainsData("PNG")) return;
+            e.CanExecute = true;
+            e.Handled = true;
+        });
         Loaded += (_, _) =>
         {
             _scroller = (ScrollViewer?)Transcript.Template.FindName("Scroller", Transcript);
@@ -69,8 +80,9 @@ public partial class SessionView : UserControl
         if (Tab is not { } tab) return;
         if (tab.TakeQueued() is { } queued)
         {
-            Input.Text = Input.Text.Length == 0 ? queued : queued + "\n\n" + Input.Text;
+            if (queued.Text.Length > 0) Input.Text = Input.Text.Length == 0 ? queued.Text : queued.Text + "\n\n" + Input.Text;
             Input.CaretIndex = Input.Text.Length;
+            for (var i = 0; i < queued.Files.Count; i++) tab.Attachments.Insert(i, queued.Files[i]);
         }
         Input.Focus();
         _ = tab.InterruptAsync();
@@ -84,10 +96,67 @@ public partial class SessionView : UserControl
     void Send()
     {
         var text = Input.Text.Trim();
-        if (text.Length == 0 || Tab is not { IsReady: true } tab) return;
+        if (Tab is not { IsReady: true } tab || text.Length == 0 && tab.Attachments.Count == 0) return;
         Input.Clear();
         _stick = true;
         _ = tab.SendAsync(text);
+    }
+
+    void OnDetach(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is Attachment a) Tab?.Detach(a);
+        Input.Focus();
+    }
+
+    /// <summary>Files dropped anywhere on the tab attach; dragged text still goes to the input as text.</summary>
+    void OnDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        e.Effects = Tab is { IsReady: true } ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    void OnDrop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths) return;
+        e.Handled = true;
+        AttachFiles(paths);
+        Input.Focus();
+    }
+
+    /// <summary>ctrl+v: copied files and images attach; anything else pastes as text.</summary>
+    void OnPaste(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (e.Command != ApplicationCommands.Paste || Tab is not { } tab) return;
+        if (Clipboard.ContainsFileDropList())
+        {
+            e.Handled = true;
+            AttachFiles(Clipboard.GetFileDropList().Cast<string>());
+        }
+        else if (Clipboard.ContainsImage() || Clipboard.ContainsData("PNG"))
+        {
+            e.Handled = true;
+            Try(() => AttachmentLoader.FromClipboard() is { } a ? [a] : []);
+        }
+    }
+
+    void AttachFiles(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            if (Directory.Exists(path)) Tab?.Transcript.AddNote(NoteKind.Warning, "folders don't attach", path);
+            else Try(() => [AttachmentLoader.FromFile(path)]);
+        }
+    }
+
+    void Try(Func<IEnumerable<Attachment>> load)
+    {
+        if (Tab is not { } tab) return;
+        try
+        {
+            foreach (var a in load()) tab.Attach(a);
+        }
+        catch (AttachmentException ex) { tab.Transcript.AddNote(NoteKind.Error, "can't attach", ex.Message); }
     }
 
     void OnAllow(object sender, RoutedEventArgs e) => Decide(sender, PermissionState.Allowed);

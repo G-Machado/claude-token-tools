@@ -3,7 +3,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:t="clr-namespace:TokenChat.Core.Transcript;assembly=TokenChat.Core"
              xmlns:local="clr-namespace:TokenChat.App"
-             xmlns:md="clr-namespace:MdXaml;assembly=MdXaml">
+             xmlns:core="clr-namespace:TokenChat.Core;assembly=TokenChat.Core"
+             xmlns:md="clr-namespace:MdXaml;assembly=MdXaml"
+             AllowDrop="True" PreviewDragEnter="OnDragOver" PreviewDragOver="OnDragOver" PreviewDrop="OnDrop">
     <UserControl.Resources>
         <Style x:Key="Small" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11.5"/>
@@ -44,7 +46,35 @@
         <DataTemplate DataType="{x:Type t:UserItem}">
             <Border Background="{StaticResource Sel}" BorderBrush="{StaticResource Track}" BorderThickness="1"
                     CornerRadius="6" Padding="11,7" Margin="80,14,0,6" HorizontalAlignment="Right">
-                <TextBox Style="{StaticResource Selectable}" Text="{Binding Text, Mode=OneWay}"/>
+                <StackPanel>
+                    <TextBox Text="{Binding Text, Mode=OneWay}">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource Selectable}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text.Length}" Value="0">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+                    <ItemsControl ItemsSource="{Binding Files, Mode=OneTime}" Focusable="False">
+                        <ItemsControl.Style>
+                            <Style TargetType="ItemsControl">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasFiles}" Value="False">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ItemsControl.Style>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Mode=OneTime, StringFormat='+ {0}'}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
             </Border>
         </DataTemplate>
 
@@ -443,12 +473,50 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBox x:Name="Input" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="36" MaxHeight="220"
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
+                <!-- attachments: a chip each with its token estimate, and the total; they go out with the next send -->
+                <DockPanel Grid.ColumnSpan="3" Margin="0,0,0,6">
+                    <DockPanel.Style>
+                        <Style TargetType="DockPanel">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Attachments.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DockPanel.Style>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding AttachmentsTotal}" Style="{StaticResource Meta}"
+                               VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="NoWrap"/>
+                    <ItemsControl ItemsSource="{Binding Attachments}" Focusable="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type core:Attachment}">
+                                <Border Background="{StaticResource Sel}" BorderBrush="{StaticResource Track}" BorderThickness="1"
+                                        CornerRadius="5" Padding="8,1,2,1" Margin="0,0,6,4" ToolTip="{Binding Detail, Mode=OneTime}">
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource GlyphClose}" Content="✕" ToolTip="remove"
+                                                Click="OnDetach"/>
+                                        <TextBlock Text="{Binding Label, Mode=OneTime}" Style="{StaticResource Meta}"
+                                                   Foreground="{StaticResource Dim}" VerticalAlignment="Center" TextWrapping="NoWrap"/>
+                                    </DockPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </DockPanel>
+                <TextBox x:Name="Input" Grid.Row="1" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="36" MaxHeight="220"
                          VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKey" VerticalContentAlignment="Top"
                          Background="Transparent" BorderThickness="0" Padding="0,2,0,2" FontSize="13"
                          Foreground="{StaticResource Text}" CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}"/>
                 <!-- stop shows only while a turn runs; send then says queue -->
-                <Button Grid.Column="1" Content="stop" Foreground="{StaticResource Red}" Margin="8,0,0,0" VerticalAlignment="Bottom"
+                <Button Grid.Row="1" Grid.Column="1" Content="stop" Foreground="{StaticResource Red}" Margin="8,0,0,0" VerticalAlignment="Bottom"
                         Click="OnStop">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -461,7 +529,7 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                <Button Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Bottom" IsEnabled="{Binding IsReady}" Click="OnSend">
+                <Button Grid.Row="1" Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Bottom" IsEnabled="{Binding IsReady}" Click="OnSend">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource Primary}">
                             <Setter Property="Content" Value="send"/>

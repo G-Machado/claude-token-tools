@@ -25,9 +25,12 @@ public abstract class Bindable : INotifyPropertyChanged
 /// <summary>One row of a tab's transcript. Created and mutated on one thread (the UI's).</summary>
 public abstract class TranscriptItem : Bindable;
 
-public sealed class UserItem(string text) : TranscriptItem
+public sealed class UserItem(string text, IReadOnlyList<string>? files = null) : TranscriptItem
 {
     public string Text { get; } = text;
+    /// <summary>Attachment labels ("shot.png · ≈2.6k"), shown under the text.</summary>
+    public IReadOnlyList<string> Files { get; } = files ?? [];
+    public bool HasFiles => Files.Count > 0;
 }
 
 /// <summary>Text that arrives as deltas. Deltas land in a buffer and <see cref="TranscriptProjector.Flush"/>

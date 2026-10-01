@@ -34,6 +34,13 @@ public static class Outbound
         ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = mediaType, ["data"] = Convert.ToBase64String(data) },
     };
 
+    /// <summary>A PDF; headless claude passes it through (probed 2026-10-01).</summary>
+    public static JsonObject DocumentBlock(string mediaType, byte[] data) => new()
+    {
+        ["type"] = "document",
+        ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = mediaType, ["data"] = Convert.ToBase64String(data) },
+    };
+
     /// <summary>updatedPermissions: permission updates applied with the allow, e.g. <see cref="PermissionRules.ForSession"/>.</summary>
     public static string Allow(string requestId, JsonObject updatedInput, JsonArray? updatedPermissions = null)
     {
