@@ -7,7 +7,7 @@ using TokenChat.Core;
 
 namespace TokenChat.App;
 
-/// <summary>TokenChat.App [--lite] [--model name] [directory]: opens one tab, in the current directory by default.</summary>
+/// <summary>TokenChat.App [--lite] [--model name] [directory]: opens a tab in directory, else the start screen.</summary>
 public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
@@ -15,27 +15,27 @@ public partial class App : Application
         base.OnStartup(e);
         DispatcherUnhandledException += OnUnhandled;
         LiftCodeColours();
-        var window = new MainWindow();
+        var (directory, lite, model) = Parse(e.Args);
+        var window = new MainWindow { Lite = lite, Model = model };
         MainWindow = window;
         window.Show();
-        window.Open(Parse(e.Args));
+        if (directory is not null) window.Open(directory);
     }
 
-    static LaunchOptions Parse(string[] args)
+    static (string? Directory, bool Lite, string? Model) Parse(string[] args)
     {
-        var profile = Profile.Full;
-        string? model = null;
-        var cwd = Environment.CurrentDirectory;
+        string? directory = null, model = null;
+        var lite = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
-                case "--lite": profile = Profile.Lite; break;
+                case "--lite": lite = true; break;
                 case "--model" when i + 1 < args.Length: model = args[++i]; break;
-                default: cwd = Path.GetFullPath(args[i]); break;
+                default: directory = Path.GetFullPath(args[i]); break;
             }
         }
-        return new LaunchOptions { WorkingDirectory = cwd, Profile = profile, Model = model };
+        return (directory, lite, model);
     }
 
     /// <summary>AvalonEdit's syntax colours are chosen for white paper (navy keywords, dark green comments). Code blocks

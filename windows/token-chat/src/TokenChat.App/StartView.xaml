@@ -1,0 +1,65 @@
+<UserControl x:Class="TokenChat.App.StartView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:TokenChat.App"
+             Background="{StaticResource Card}" KeyDown="OnKey">
+    <UserControl.Resources>
+        <!-- a recent folder: flat until hovered or focused, then the widget's selection colour -->
+        <Style x:Key="RowButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="Transparent" CornerRadius="6" Padding="12,7">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource Sel}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource Sel}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+        <StackPanel MaxWidth="640" Margin="24,36,24,24">
+            <TextBlock Text="Open a project" FontSize="18" FontWeight="SemiBold" Margin="12,0,0,2"/>
+            <TextBlock Text="Folders claude has worked in, newest first" FontSize="11.5" Foreground="{StaticResource Dim}"
+                       Margin="12,0,0,14"/>
+            <ItemsControl x:Name="Recents" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type local:RecentRow}">
+                        <Button Style="{StaticResource RowButton}" Click="OnRecent">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource Text}"/>
+                                    <TextBlock Text="{Binding Path}" FontFamily="{StaticResource Mono}" FontSize="10.5"
+                                               Foreground="{StaticResource Faint}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding Ago}" FontFamily="{StaticResource Mono}" FontSize="10.5"
+                                           Foreground="{StaticResource Dim}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                            </Grid>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock x:Name="Empty" Text="No recent folders yet." FontSize="12" Foreground="{StaticResource Faint}"
+                       Margin="12,4,0,0" Visibility="Collapsed"/>
+            <StackPanel Orientation="Horizontal" Margin="12,18,0,0">
+                <Button Content="Open folder…" Style="{StaticResource Primary}" Click="OnBrowse"/>
+                <Button x:Name="CancelButton" Content="Cancel" Margin="8,0,0,0" Click="OnCancel"/>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
