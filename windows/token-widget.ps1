@@ -2454,7 +2454,7 @@ function Build-Legend {
 # analytics tab's; four rows in a corner want a scrollbar, not a query.
 $KEYMAP = @(
   @('j k', 'move the selection'),      @('1-9', 'select that row'),
-  @('d',   'detail on the selected row'),
+  @('d',   'detail on the selected row'), @('enter', 'open it: TokenChat or its window'),
   @('n',   'name the selected row'),   @('e E', 'add / remove an extension mark'),
   @('u',   'lift the input block'),
   @('c',   'minimise to the live one'),
@@ -3488,6 +3488,11 @@ function Open-Dashboard {
 # into $el and share Br/Tip/Flash/Apply-Chrome with everything else.
 . (Join-Path $Root 'token-parked-tab.ps1')
 
+# Enter on a session: focus the TokenChat tab or the terminal holding it, or
+# resume it in TokenChat. The same route token-sessions.sh --watch runs.
+$OpenPs1 = Join-Path $Root 'token-open.ps1'
+if (Test-Path $OpenPs1) { . $OpenPs1 }
+
 # A browser's tabs: the one showing takes a ground a step up from the card and
 # a hairline edge that runs into the rule below, the other is just its title,
 # dimmed. Only the grounds and the title colours change - the dots keep saying
@@ -3761,9 +3766,10 @@ function Handle-Key {
     'D'      { $script:View.detail = -not $script:View.detail
                if (-not $script:Sel -and $n) { $script:Sel = 1 }
                Update-View -Redraw; Save-State; return }
-    'Return' { $script:View.detail = -not $script:View.detail
-               if (-not $script:Sel -and $n) { $script:Sel = 1 }
-               Update-View -Redraw; Save-State; return }
+    'Return' { $s = Selected-Session
+               if (-not $s) { return }
+               if (-not (Get-Command Open-Session -ErrorAction SilentlyContinue)) { Flash 'token-open.ps1 is not installed'; return }
+               Flash (Open-Session $s.sid $s.cwd ([int]$s.pid) ([int]$s.alive)); return }
     'N'      { if ($n) { if (-not $script:Sel) { $script:Sel = 1; Update-View -Redraw }
                           Open-Rename }
                return }

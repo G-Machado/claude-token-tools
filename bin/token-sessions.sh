@@ -713,8 +713,9 @@ g G|first row / last row|
 /n|"/n build-fix" names a row without leaving the prompt line|
 s|re-order: lapse, context, cost, active, project|sort
 d|expand the selected row into the full panel|expand
+enter|open it: its TokenChat tab or terminal window, else resume in TokenChat|open
 y|copy "claude -r <id>" to the clipboard|copy
-o|open the checkpoint, or the transcript folder|open
+o|open the checkpoint, or the transcript folder|
 n|name this row - the line opens on its current name, empty clears it|rename
 D|move a closed session log to deleted-sessions|delete
 t|analytics: the whole history|analytics
@@ -6999,6 +7000,19 @@ open_row() {
   FLASH="opened ${f##*/}"
 }
 
+# Enter: the widget's route, token-open.ps1, so the two cannot disagree about
+# where a session lives. Its one line of output is the flash. The cwd field is
+# JSON-escaped in the snapshot, hence the \\ -> \.
+open_session() {
+  local sid cwd pid alive ps1="$CL/token-open.ps1"
+  sid=$(row_field "$1" 15); [ -n "$sid" ] || { FLASH="nothing to open"; return; }
+  [ -f "$ps1" ] || { FLASH="token-open.ps1 is not installed"; return; }
+  cwd=$(row_field "$1" 30); cwd=$(printf '%s' "$cwd" | sed 's/\\\\/\\/g')
+  pid=$(row_field "$1" 8); alive=$(row_field "$1" 2)
+  FLASH=$(powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$ps1")" \
+            "$sid" "$cwd" "${pid:-0}" "${alive:-0}" 2>&1 | tr -d '\r' | tail -n 1)
+}
+
 term_cols() {
   COLS=$( (tput cols) 2>/dev/null ) || COLS=""
   [ -n "$COLS" ] || COLS="${COLUMNS:-92}"
@@ -7142,9 +7156,11 @@ if [ "$WATCH" = 1 ]; then
     GOT=0; WAIT=1
     [ "$ANYRUN" -gt 0 ] && WAIT=0.25
     while true; do
-      key=""
-      IFS= read -rsn1 -t "$WAIT" key || true
-      [ -n "$key" ] || break
+      key=""; rc=0
+      IFS= read -rsn1 -t "$WAIT" key || rc=$?
+      # Enter is the delimiter read stops on, so it arrives as an empty key with
+      # a clean exit; a timeout is the same empty key with a status over 128.
+      if [ -z "$key" ]; then [ "$rc" = 0 ] || break; key=ENTER; fi
       # An arrow key arrives as ESC [ A; a bare ESC has no tail and means "back
       # to the overview", so the follow-up read must be able to time out.
       if [ "$key" = "$ESC" ]; then
@@ -7265,6 +7281,7 @@ if [ "$WATCH" = 1 ]; then
         "["|"$ESC[5~") VIEW=1; APAGE=$((APAGE - 1)); [ "$APAGE" -lt 1 ] && APAGE=1 ;;
         y)          [ "$SEL" -gt 0 ] && { VIEW=0; copy_resume "$SEL"; } ;;
         o)          [ "$SEL" -gt 0 ] && { VIEW=0; open_row "$SEL"; } ;;
+        ENTER)      [ "$SEL" -gt 0 ] && { VIEW=0; open_session "$SEL"; } ;;
         # Muting re-primes rather than just going quiet, so unmuting later does
         # not immediately ring for every window that lapsed while it was off.
         b)          BELL=$((1 - BELL)); BELL_PRIMED=0; RUNG=() ;;
