@@ -60,12 +60,13 @@ public static class TranscriptCycles
         long previous = 0;
         foreach (var c in cycles)
         {
-            // As in the script, a cycle with no request (interrupted before any reply) ends at context 0, so the
-            // next cycle's growth is its whole window.
-            var growth = Math.Max(0, c.Context - previous);
-            stats.Add(new CycleStats(stats.Count + 1, c.PromptId, c.Usage, c.Context, growth,
+            // A cycle with no request (interrupted before any reply) left the window as it was: carry the previous
+            // context forward, or the next cycle would count the whole window as growth.
+            var context = c.Context > 0 ? c.Context : previous;
+            var growth = Math.Max(0, context - previous);
+            stats.Add(new CycleStats(stats.Count + 1, c.PromptId, c.Usage, context, growth,
                 Math.Max(0, c.Usage.CacheWrite - growth), c.Requests));
-            previous = c.Context;
+            previous = context;
         }
         return stats;
     }

@@ -56,7 +56,7 @@ public class TranscriptCyclesTests
     }
 
     [Fact]
-    public void ACycleWithNoReplyEndsAtZeroLikeTheScript()
+    public void ACycleWithNoReplyCarriesTheContextForward()
     {
         var cycles = TranscriptCycles.Parse([
             Prompt("p1"), Reply("msg_a", 2, 1000, 0, 1),
@@ -64,8 +64,8 @@ public class TranscriptCyclesTests
             Prompt("p3"), Reply("msg_b", 2, 10, 1000, 1),
         ]);
 
-        Assert.Equal(new long[] { 1002, 0, 1012 }, cycles.Select(c => c.Context));
-        Assert.Equal(new long[] { 1002, 0, 1012 }, cycles.Select(c => c.Growth));
+        Assert.Equal(new long[] { 1002, 1002, 1012 }, cycles.Select(c => c.Context));
+        Assert.Equal(new long[] { 1002, 0, 10 }, cycles.Select(c => c.Growth));
     }
 
     [Fact]

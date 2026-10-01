@@ -946,6 +946,9 @@ END {
   for (i = 1; i <= cycle; i++) {
     ov = o[i] + 0; cv = c[i] + 0
     o[i] = ov; c[i] = cv; r[i] = r[i] + 0; q[i] = q[i] + 0; nq[i] = nq[i] + 0
+    # A cycle with no request (interrupted before any reply) left the window as it was: carry the
+    # previous context forward, or the next cycle would count the whole window as growth.
+    if (i > 1 && r[i] == 0) r[i] = r[i-1]
     outTotal += ov; newTotal += cv; readTotal += q[i]
     if (cv > maxNew) maxNew = cv
     if (ov > budget) over++
