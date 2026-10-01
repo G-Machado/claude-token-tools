@@ -1,0 +1,241 @@
+<UserControl x:Class="TokenChat.App.SessionView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:t="clr-namespace:TokenChat.Core.Transcript;assembly=TokenChat.Core"
+             xmlns:md="clr-namespace:MdXaml;assembly=MdXaml">
+    <UserControl.Resources>
+        <Style x:Key="Small" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <!-- figures and bookkeeping, in the widget's Consolas -->
+        <Style x:Key="Meta" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="Selectable" TargetType="TextBox">
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="SelectionBrush" Value="{StaticResource Blue}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource Blue}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <!-- the window rounds layout to whole pixels, which can take the last line's descenders -->
+            <Setter Property="Padding" Value="0,0,0,2"/>
+        </Style>
+
+        <DataTemplate DataType="{x:Type t:UserItem}">
+            <Border Background="{StaticResource Sel}" BorderBrush="{StaticResource Track}" BorderThickness="1"
+                    CornerRadius="6" Padding="11,7" Margin="80,14,0,6" HorizontalAlignment="Right">
+                <TextBox Style="{StaticResource Selectable}" Text="{Binding Text, Mode=OneWay}"/>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type t:AssistantTextItem}">
+            <md:MarkdownScrollViewer Markdown="{Binding Text}" MarkdownStyle="{StaticResource Markdown}" Margin="0,4,0,2"
+                                     VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"/>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type t:ThinkingItem}">
+            <Expander Margin="0,3">
+                <Expander.Header>
+                    <TextBlock Text="thinking" Style="{StaticResource Meta}"/>
+                </Expander.Header>
+                <TextBox Style="{StaticResource Selectable}" Text="{Binding Text, Mode=OneWay}"
+                         Foreground="{StaticResource Dim}" FontStyle="Italic" FontSize="12"/>
+            </Expander>
+        </DataTemplate>
+
+        <!-- A tool call is a row with a stripe down its left edge: blue while it runs, the card's
+             hairline once it is done, red if it failed. -->
+        <DataTemplate DataType="{x:Type t:ToolUseItem}">
+            <Border x:Name="Bar" BorderBrush="{StaticResource Track}" BorderThickness="2,0,0,0" Padding="10,3,0,3" Margin="0,4">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" FontFamily="{StaticResource Mono}" FontSize="12">
+                        <Run Text="{Binding ToolName, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource Text}"/>
+                        <Run Text="{Binding Summary, Mode=OneWay}" Foreground="{StaticResource Dim}"/>
+                    </TextBlock>
+                    <Expander x:Name="ResultBox" Margin="0,3,0,0">
+                        <Expander.Header>
+                            <TextBlock x:Name="ResultHead" Style="{StaticResource Meta}">
+                                <Run Text="{Binding ResultLines, Mode=OneWay}"/><Run Text=" lines"/>
+                            </TextBlock>
+                        </Expander.Header>
+                        <Border Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                CornerRadius="4" Padding="9,6">
+                            <TextBox Style="{StaticResource Selectable}" Text="{Binding Result, Mode=OneWay}"
+                                     FontFamily="{StaticResource Mono}" FontSize="11.5" Foreground="{StaticResource Dim}"/>
+                        </Border>
+                    </Expander>
+                    <TextBlock x:Name="Running" Text="running…" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
+                               Margin="0,2,0,0" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Result}" Value="{x:Null}">
+                    <Setter TargetName="ResultBox" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Running" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Blue}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsError}" Value="True">
+                    <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Red}"/>
+                    <Setter TargetName="ResultHead" Property="Foreground" Value="{StaticResource Red}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- Waiting on you: a yellow ring, the widget's attention colour, until it is decided. -->
+        <DataTemplate DataType="{x:Type t:PermissionItem}">
+            <Border x:Name="Card" Background="{StaticResource Inset}" BorderBrush="{StaticResource Yellow}" BorderThickness="1"
+                    CornerRadius="6" Padding="12,8,12,9" Margin="0,6">
+                <StackPanel>
+                    <TextBlock FontSize="11" FontWeight="SemiBold">
+                        <Run x:Name="Ask" Text="ALLOW" Foreground="{StaticResource Yellow}"/>
+                        <Run Text="{Binding ToolName, Mode=OneWay}" Foreground="{StaticResource Text}"/>
+                    </TextBlock>
+                    <TextBox Style="{StaticResource Selectable}" Text="{Binding Summary, Mode=OneWay}"
+                             FontFamily="{StaticResource Mono}" FontSize="12" Margin="0,5,0,8"/>
+                    <StackPanel x:Name="Buttons" Orientation="Horizontal">
+                        <Button Content="Allow" Style="{StaticResource Primary}" Click="OnAllow"/>
+                        <Button Content="Deny" Margin="8,0,0,0" Click="OnDeny"/>
+                    </StackPanel>
+                    <TextBlock x:Name="Decided" Text="{Binding State}" Style="{StaticResource Meta}" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding State}" Value="Allowed">
+                    <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Decided" Property="Foreground" Value="{StaticResource Green}"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
+                    <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Faint}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="Denied">
+                    <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Decided" Property="Foreground" Value="{StaticResource Red}"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
+                    <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Faint}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type t:NoteItem}">
+            <Grid Margin="0,3">
+                <Expander x:Name="WithDetail">
+                    <Expander.Header>
+                        <TextBlock x:Name="Head" Text="{Binding Text}" Style="{StaticResource Small}"/>
+                    </Expander.Header>
+                    <TextBox Style="{StaticResource Selectable}" Text="{Binding Detail, Mode=OneWay}" FontSize="12"
+                             Foreground="{StaticResource Dim}"/>
+                </Expander>
+                <TextBlock x:Name="Plain" Text="{Binding Text}" Style="{StaticResource Small}" Visibility="Collapsed"/>
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Detail}" Value="{x:Null}">
+                    <Setter TargetName="WithDetail" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Plain" Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Kind}" Value="Warning">
+                    <Setter TargetName="Head" Property="Foreground" Value="{StaticResource Orange}"/>
+                    <Setter TargetName="Plain" Property="Foreground" Value="{StaticResource Orange}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Kind}" Value="Error">
+                    <Setter TargetName="Head" Property="Foreground" Value="{StaticResource Red}"/>
+                    <Setter TargetName="Plain" Property="Foreground" Value="{StaticResource Red}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- The end of a turn: its figures, then a hairline to the edge, like the widget's rules. -->
+        <DataTemplate DataType="{x:Type t:TurnItem}">
+            <StackPanel Margin="0,6,0,10">
+                <DockPanel>
+                    <TextBlock x:Name="Line" Text="{Binding Summary, Mode=OneWay}" Style="{StaticResource Meta}"
+                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" MaxWidth="700"/>
+                    <Border Height="1" Background="{StaticResource Line}" Margin="10,1,0,0" VerticalAlignment="Center"/>
+                </DockPanel>
+                <TextBox x:Name="Error" Style="{StaticResource Selectable}" Text="{Binding Detail, Mode=OneWay}"
+                         Foreground="{StaticResource Red}" FontSize="12" Margin="0,3,0,0" Visibility="Collapsed"/>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsError}" Value="True">
+                    <Setter TargetName="Line" Property="Foreground" Value="{StaticResource Red}"/>
+                    <Setter TargetName="Error" Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ItemsControl x:Name="Transcript" ItemsSource="{Binding Items}" Padding="20,10,14,10"
+                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                      VirtualizingPanel.ScrollUnit="Pixel" PreviewMouseWheel="OnTranscriptWheel">
+            <ItemsControl.Template>
+                <ControlTemplate TargetType="ItemsControl">
+                    <ScrollViewer x:Name="Scroller" CanContentScroll="True" HorizontalScrollBarVisibility="Disabled"
+                                  Focusable="False" Padding="{TemplateBinding Padding}">
+                        <ItemsPresenter/>
+                    </ScrollViewer>
+                </ControlTemplate>
+            </ItemsControl.Template>
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+        </ItemsControl>
+
+        <!-- the input: an inset well that rings blue while it has the keyboard -->
+        <Border Grid.Row="1" Margin="14,4,14,12" CornerRadius="6" BorderThickness="1" Padding="11,7,7,7"
+                Background="{StaticResource Inset}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="BorderBrush" Value="{StaticResource Track}"/>
+                    <Style.Triggers>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter Property="BorderBrush" Value="{StaticResource Blue}"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="Input" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="36" MaxHeight="220"
+                         VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKey" VerticalContentAlignment="Top"
+                         Background="Transparent" BorderThickness="0" Padding="0,2,0,2" FontSize="13"
+                         Foreground="{StaticResource Text}" CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}"/>
+                <Button Grid.Column="1" Content="send" Style="{StaticResource Primary}" Margin="8,0,0,0" VerticalAlignment="Bottom"
+                        IsEnabled="{Binding IsReady}" Click="OnSend"/>
+            </Grid>
+        </Border>
+
+        <!-- the widget's footer strip: figures on the left, the keys on the right -->
+        <Border Grid.Row="2" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
+                Padding="14,6,14,7">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Status}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
+                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Grid.Column="1" Style="{StaticResource Meta}" FontSize="9.5" Margin="14,1,0,0" TextWrapping="NoWrap"
+                           Text="enter send · shift+enter newline · esc stop"/>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

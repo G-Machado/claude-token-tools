@@ -77,8 +77,10 @@ The 300k hard block in `token-block.sh` never comes into play.
    send / interrupt / answer permission / answer question. Usage accounting deduplicates the
    repeated `assistant` events by message id. Rate-limit info. Tests replay **scrubbed**
    fixtures, so a scrub script (email, user paths) comes first.
-2. **Window**: tabs, a virtualized transcript, markdown (MdXaml assumed; fall back to Markdig
-   plus a small renderer), streaming deltas throttled to about 10 Hz, input box.
+2. **Window**: tabs, a virtualized transcript, markdown (MdXaml verified 2026-10-01: rows size
+   to content, 10 Hz re-render smooth), streaming deltas throttled to about 10 Hz, input box.
+   Styled as the token-sessions widget (`Theme.xaml`); code blocks are AvalonEdit editors whose
+   named colours are lifted for the dark card at startup.
 3. **Interaction**: permission cards with an Edit/Write diff preview and "allow for session";
    AskUserQuestion and `▶` blocks as buttons; Stop; message queue; attachments (drag, paste;
    image and document blocks with a token estimate before send).

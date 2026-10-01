@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/TokenChat.App/TokenChat.App.csproj" />
     <Project Path="src/TokenChat.Core/TokenChat.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">

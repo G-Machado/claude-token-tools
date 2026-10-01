@@ -1,0 +1,362 @@
+<!-- The token-sessions widget's look (windows/token-widget.ps1, $Pal): a dark card, hairline rules,
+     a step-up ground for whatever is selected, Segoe UI for words and Consolas for figures. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:ae="clr-namespace:ICSharpCode.AvalonEdit;assembly=ICSharpCode.AvalonEdit">
+
+    <SolidColorBrush x:Key="Card" Color="#FF212228"/>
+    <SolidColorBrush x:Key="Inset" Color="#FF1B1C22"/>
+    <SolidColorBrush x:Key="Sel" Color="#FF2A2C34"/>
+    <SolidColorBrush x:Key="Line" Color="#FF2E3038"/>
+    <SolidColorBrush x:Key="Track" Color="#FF34363F"/>
+    <SolidColorBrush x:Key="Thumb" Color="#FF4A4D57"/>
+    <SolidColorBrush x:Key="Text" Color="#FFE6E7EA"/>
+    <SolidColorBrush x:Key="Dim" Color="#FF8A8D97"/>
+    <SolidColorBrush x:Key="Faint" Color="#FF5A5D66"/>
+    <SolidColorBrush x:Key="Ghost" Color="#01000000"/> <!-- hit-testable and invisible -->
+    <SolidColorBrush x:Key="Green" Color="#FF4ADE80"/>
+    <SolidColorBrush x:Key="Yellow" Color="#FFFACC15"/>
+    <SolidColorBrush x:Key="Orange" Color="#FFFB923C"/>
+    <SolidColorBrush x:Key="Red" Color="#FFF87171"/>
+    <SolidColorBrush x:Key="Blue" Color="#FF60A5FA"/>
+
+    <FontFamily x:Key="Ui">Segoe UI</FontFamily>
+    <FontFamily x:Key="Mono">Consolas</FontFamily>
+    <FontFamily x:Key="Sym">Segoe UI Symbol</FontFamily>
+
+    <!-- A 6px thumb in the card's greys and nothing else, both ways (code blocks scroll sideways).
+         MinWidth/MinHeight beat the theme style's 17px system width. -->
+    <Style x:Key="ThumbStyle" TargetType="Thumb">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Border x:Name="T" CornerRadius="2" Background="{StaticResource Thumb}"/>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="T" Property="Background" Value="{StaticResource Faint}"/>
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="T" Property="Background" Value="{StaticResource Dim}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Width" Value="6"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Grid Background="Transparent">
+                        <Track x:Name="PART_Track" IsDirectionReversed="True">
+                            <Track.Thumb><Thumb Style="{StaticResource ThumbStyle}" Margin="2,0,1,0"/></Track.Thumb>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto"/>
+                <Setter Property="Height" Value="6"/>
+                <Setter Property="MinHeight" Value="0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ScrollBar">
+                            <Grid Background="Transparent">
+                                <Track x:Name="PART_Track">
+                                    <Track.Thumb><Thumb Style="{StaticResource ThumbStyle}" Margin="0,2,0,1"/></Track.Thumb>
+                                </Track>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style TargetType="ToolTip">
+        <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="HasDropShadow" Value="False"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToolTip">
+                    <Border Background="{StaticResource Inset}" BorderBrush="{StaticResource Track}" BorderThickness="1"
+                            CornerRadius="5" Padding="8,5">
+                        <ContentPresenter/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Buttons are a ground a step up with a hairline edge, like the widget's selected tab. -->
+    <Style TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Setter Property="Background" Value="{StaticResource Sel}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Track}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="Padding" Value="12,3"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="B" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1" CornerRadius="5" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{StaticResource Track}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{StaticResource Line}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Foreground" Value="{StaticResource Blue}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Blue}"/>
+    </Style>
+
+    <!-- The widget's header glyphs: faint until the pointer is on them. -->
+    <Style x:Key="Glyph" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Sym}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Padding" Value="7,0"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="VerticalAlignment" Value="Stretch"/>
+        <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{StaticResource Ghost}" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="GlyphClose" TargetType="Button" BasedOn="{StaticResource Glyph}">
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Red}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- A word that is a switch, like the widget's footer toggles: faint off, blue on. -->
+    <Style x:Key="TextToggle" TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+        <Setter Property="FontSize" Value="10.5"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Border Background="{StaticResource Ghost}" Padding="6,0">
+                        <ContentPresenter VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Blue}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- A fold, the widget's way: a small triangle and the header, no chrome. -->
+    <Style TargetType="Expander">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Expander">
+                    <DockPanel>
+                        <ToggleButton DockPanel.Dock="Top" HorizontalAlignment="Left" Focusable="False" Cursor="Hand"
+                                      IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                      Content="{TemplateBinding Header}" ContentTemplate="{TemplateBinding HeaderTemplate}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <StackPanel Orientation="Horizontal" Background="{StaticResource Ghost}">
+                                        <TextBlock x:Name="G" Text="&#9656;" FontFamily="{StaticResource Sym}" FontSize="9"
+                                                   Foreground="{StaticResource Faint}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                        <ContentPresenter VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="G" Property="Text" Value="&#9662;"/>
+                                        </Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="G" Property="Foreground" Value="{StaticResource Text}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter x:Name="Body" Visibility="Collapsed" Margin="15,4,0,2"/>
+                    </DockPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsExpanded" Value="True">
+                            <Setter TargetName="Body" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Markdown on the card. A full replacement for MdXaml's Compact style (whose greys and navy are
+         for white paper), keyed on the tags MdXaml 1.27 sets: Heading1-6, CodeSpan, CodeBlock, Note,
+         Blockquote, TableHeader, EvenTableRow. Code blocks are AvalonEdit editors; App lifts their colours. -->
+    <Style x:Key="Markdown" TargetType="FlowDocument">
+        <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Setter Property="PagePadding" Value="0"/>
+        <Setter Property="TextAlignment" Value="Left"/>
+        <Style.Resources>
+            <Style TargetType="Paragraph">
+                <Setter Property="Margin" Value="0,3,0,7"/>
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="Heading1">
+                        <Setter Property="FontSize" Value="18"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Margin" Value="0,12,0,6"/>
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading2">
+                        <Setter Property="FontSize" Value="15.5"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Margin" Value="0,10,0,5"/>
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading3">
+                        <Setter Property="FontSize" Value="13.5"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Margin" Value="0,8,0,4"/>
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading4">
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading5">
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading6">
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+                    </Trigger>
+                    <Trigger Property="Tag" Value="CodeBlock">
+                        <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+                        <Setter Property="FontSize" Value="12"/>
+                        <Setter Property="Background" Value="{StaticResource Inset}"/>
+                        <Setter Property="Padding" Value="10,6"/>
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Note">
+                        <Setter Property="Background" Value="{StaticResource Inset}"/>
+                        <Setter Property="BorderBrush" Value="{StaticResource Track}"/>
+                        <Setter Property="BorderThickness" Value="3,0,0,0"/>
+                        <Setter Property="Padding" Value="10,4"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="Run">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="CodeSpan">
+                        <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+                        <Setter Property="Background" Value="{StaticResource Sel}"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="Span">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="CodeSpan">
+                        <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+                        <Setter Property="Background" Value="{StaticResource Sel}"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="Section">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="Blockquote">
+                        <Setter Property="BorderBrush" Value="{StaticResource Track}"/>
+                        <Setter Property="BorderThickness" Value="3,0,0,0"/>
+                        <Setter Property="Padding" Value="10,0,0,0"/>
+                        <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="Hyperlink">
+                <Setter Property="Foreground" Value="{StaticResource Blue}"/>
+                <Setter Property="Cursor" Value="Hand"/>
+            </Style>
+            <Style TargetType="List">
+                <Setter Property="Margin" Value="0,2,0,7"/>
+                <Setter Property="Padding" Value="22,0,0,0"/>
+            </Style>
+            <Style TargetType="BlockUIContainer">
+                <Setter Property="Margin" Value="0,4,0,8"/>
+            </Style>
+            <Style TargetType="Table">
+                <Setter Property="CellSpacing" Value="0"/>
+                <Setter Property="BorderBrush" Value="{StaticResource Track}"/>
+                <Setter Property="BorderThickness" Value="1,1,0,0"/>
+                <Setter Property="Margin" Value="0,4,0,8"/>
+            </Style>
+            <Style TargetType="TableRowGroup">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="TableHeader">
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                        <Setter Property="Background" Value="{StaticResource Sel}"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="TableCell">
+                <Setter Property="Padding" Value="8,3"/>
+                <Setter Property="BorderBrush" Value="{StaticResource Track}"/>
+                <Setter Property="BorderThickness" Value="0,0,1,1"/>
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=TableRow}}" Value="EvenTableRow">
+                        <Setter Property="Background" Value="{StaticResource Inset}"/>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="ae:TextEditor">
+                <Setter Property="Background" Value="{StaticResource Inset}"/>
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Padding" Value="10,6"/>
+                <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
+                <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+            </Style>
+        </Style.Resources>
+    </Style>
+</ResourceDictionary>
