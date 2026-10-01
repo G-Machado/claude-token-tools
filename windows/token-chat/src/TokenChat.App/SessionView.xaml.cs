@@ -50,7 +50,7 @@ public partial class SessionView : UserControl
         else if (e.Key == Key.Escape)
         {
             e.Handled = true;
-            _ = Tab?.InterruptAsync();
+            Stop();
         }
         else if (e.Key == Key.Tab && Keyboard.Modifiers == ModifierKeys.Shift)
         {
@@ -60,6 +60,26 @@ public partial class SessionView : UserControl
     }
 
     void OnSend(object sender, RoutedEventArgs e) => Send();
+
+    void OnStop(object sender, RoutedEventArgs e) => Stop();
+
+    /// <summary>Interrupts the turn; queued messages come back into the input, ahead of anything typed since.</summary>
+    void Stop()
+    {
+        if (Tab is not { } tab) return;
+        if (tab.TakeQueued() is { } queued)
+        {
+            Input.Text = Input.Text.Length == 0 ? queued : queued + "\n\n" + Input.Text;
+            Input.CaretIndex = Input.Text.Length;
+        }
+        Input.Focus();
+        _ = tab.InterruptAsync();
+    }
+
+    void OnUnqueue(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is QueuedMessage m) Tab?.Unqueue(m);
+    }
 
     void Send()
     {

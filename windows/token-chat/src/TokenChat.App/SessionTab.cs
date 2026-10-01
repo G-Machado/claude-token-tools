@@ -71,14 +71,39 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         }
     }
 
+    /// <summary>Typed while a turn runs; sent as one message when it ends, or handed back to the input by stop.</summary>
+    public ObservableCollection<QueuedMessage> Queued { get; } = [];
+
+    /// <summary>Goes out now at a clean point; otherwise waits in <see cref="Queued"/>.</summary>
     public async Task SendAsync(string text)
     {
         if (_session is not { } s || !IsReady) return;
+        if (!s.AtCleanPoint)
+        {
+            Queued.Add(new QueuedMessage(text));
+            return;
+        }
+        await SendNowAsync(s, text);
+    }
+
+    async Task SendNowAsync(ClaudeSession s, string text)
+    {
         Transcript.AddUser(text);
         try { await s.SendAsync(text); }
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "send failed", ex.Message); }
         UpdateStatus();
     }
+
+    /// <summary>The queued messages as one text, oldest first, and an empty queue; null if there were none.</summary>
+    public string? TakeQueued()
+    {
+        if (Queued.Count == 0) return null;
+        var text = string.Join("\n\n", Queued.Select(m => m.Text));
+        Queued.Clear();
+        return text;
+    }
+
+    public void Unqueue(QueuedMessage m) => Queued.Remove(m);
 
     public async Task InterruptAsync()
     {
@@ -172,6 +197,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
             changed = true;
         }
         if (changed) UpdateStatus();
+        if (Queued.Count > 0 && IsReady && _session is { AtCleanPoint: true } s) _ = SendNowAsync(s, TakeQueued()!);
     }
 
     void Handle(ClaudeEvent e)
@@ -225,4 +251,11 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
+}
+
+/// <summary>A class, not a record: two identical messages are still two rows.</summary>
+public sealed class QueuedMessage(string text)
+{
+    public string Text { get; } = text;
+    public string Preview { get; } = text.ReplaceLineEndings(" ⏎ ");
 }

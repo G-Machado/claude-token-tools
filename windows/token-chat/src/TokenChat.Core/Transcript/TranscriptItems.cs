@@ -66,7 +66,7 @@ public sealed class ToolUseItem(string toolName, string? toolUseId) : Transcript
     string _summary = "";
     string? _result;
     int _resultLines;
-    bool _isError;
+    bool _isError, _isInterrupted;
 
     public string ToolName { get; } = toolName;
     public string? ToolUseId { get; } = toolUseId;
@@ -75,6 +75,8 @@ public sealed class ToolUseItem(string toolName, string? toolUseId) : Transcript
     public string? Result { get => _result; internal set => Set(ref _result, value); }
     public int ResultLines { get => _resultLines; internal set => Set(ref _resultLines, value); }
     public bool IsError { get => _isError; internal set => Set(ref _isError, value); }
+    /// <summary>The turn ended with no result for it: stopped mid-run.</summary>
+    public bool IsInterrupted { get => _isInterrupted; internal set => Set(ref _isInterrupted, value); }
 }
 
 public enum PermissionState { Pending, Allowed, AllowedForSession, Denied }

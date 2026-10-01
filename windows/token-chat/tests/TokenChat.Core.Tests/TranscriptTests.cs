@@ -82,4 +82,21 @@ public class TranscriptTests
         projector.Apply(new BlockStartEvent(0, "text", null, null, ParentToolUseId: "toolu_x"));
         Assert.Empty(projector.Items);
     }
+
+    [Fact]
+    public void ToolWithoutResultAtTurnEndIsStopped()
+    {
+        var projector = new TranscriptProjector();
+        projector.Apply(new MessageStartEvent("m1", null, new TokenUsage(), null));
+        projector.Apply(new BlockStartEvent(0, "tool_use", "Bash", "toolu_1", null));
+        projector.Apply(new BlockStopEvent(0, null));
+        var tool = Assert.Single(projector.Items.OfType<ToolUseItem>());
+        Assert.False(tool.IsInterrupted);
+        projector.Apply(new ResultEvent("error_during_execution", true, null, 1, new TokenUsage(), 0, 10, null));
+        Assert.True(tool.IsInterrupted);
+        var late = System.Text.Json.Nodes.JsonNode.Parse("""[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]""");
+        projector.Apply(new UserEvent(late, null));
+        Assert.False(tool.IsInterrupted);
+        Assert.Equal("ok", tool.Result);
+    }
 }

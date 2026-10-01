@@ -128,6 +128,7 @@ public sealed class TranscriptProjector
                         tool.ResultLines = result.Length == 0 ? 0 : result.Split('\n').Length;
                         tool.Result = result.Length <= ResultPreviewChars ? result : result[..ResultPreviewChars] + "…";
                         tool.IsError = block["is_error"] is JsonValue e && e.TryGetValue<bool>(out var isError) && isError;
+                        tool.IsInterrupted = false;
                     }
                     else if (type == "text" && (string?)block["text"] is { Length: > 0 } t)
                     {
@@ -159,6 +160,9 @@ public sealed class TranscriptProjector
         }
         _dirty.Clear();
         _blocks.Clear();
+        // a main-chain tool's result always lands before its turn's result, unless the turn was stopped
+        foreach (var t in _tools.Values)
+            if (t.Result is null) t.IsInterrupted = true;
         Items.Add(new TurnItem(r));
     }
 

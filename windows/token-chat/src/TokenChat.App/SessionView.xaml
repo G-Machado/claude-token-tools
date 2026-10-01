@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:t="clr-namespace:TokenChat.Core.Transcript;assembly=TokenChat.Core"
+             xmlns:local="clr-namespace:TokenChat.App"
              xmlns:md="clr-namespace:MdXaml;assembly=MdXaml">
     <UserControl.Resources>
         <Style x:Key="Small" TargetType="TextBlock">
@@ -135,6 +136,11 @@
                     <Setter TargetName="ResultBox" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Running" Property="Visibility" Value="Visible"/>
                     <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Blue}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsInterrupted}" Value="True">
+                    <Setter TargetName="Running" Property="Text" Value="stopped"/>
+                    <Setter TargetName="Running" Property="Foreground" Value="{StaticResource Faint}"/>
+                    <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Track}"/>
                 </DataTrigger>
                 <DataTrigger Binding="{Binding IsError}" Value="True">
                     <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Red}"/>
@@ -364,6 +370,7 @@
             <RowDefinition/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <ItemsControl x:Name="Transcript" ItemsSource="{Binding Items}" Padding="20,10,14,10"
@@ -384,8 +391,26 @@
             </ItemsControl.ItemsPanel>
         </ItemsControl>
 
+        <!-- messages sent while a turn runs: they go out together when it ends; stop hands them back to the input -->
+        <ItemsControl Grid.Row="1" ItemsSource="{Binding Queued}" Margin="14,4,14,0" Focusable="False">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type local:QueuedMessage}">
+                    <Border Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="5"
+                            Padding="9,2,2,2" Margin="80,0,0,4" HorizontalAlignment="Right">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource GlyphClose}" Content="✕" ToolTip="drop it" Click="OnUnqueue"/>
+                            <TextBlock DockPanel.Dock="Left" Text="queued" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
+                                       Margin="0,2,8,0"/>
+                            <TextBlock Text="{Binding Preview, Mode=OneTime}" Foreground="{StaticResource Dim}" FontSize="12"
+                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                        </DockPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
         <!-- the input: an inset well that rings blue while it has the keyboard -->
-        <Border Grid.Row="1" Margin="14,4,14,12" CornerRadius="6" BorderThickness="1" Padding="11,7,7,7"
+        <Border Grid.Row="2" Margin="14,4,14,12" CornerRadius="6" BorderThickness="1" Padding="11,7,7,7"
                 Background="{StaticResource Inset}">
             <Border.Style>
                 <Style TargetType="Border">
@@ -401,18 +426,43 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBox x:Name="Input" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="36" MaxHeight="220"
                          VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKey" VerticalContentAlignment="Top"
                          Background="Transparent" BorderThickness="0" Padding="0,2,0,2" FontSize="13"
                          Foreground="{StaticResource Text}" CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}"/>
-                <Button Grid.Column="1" Content="send" Style="{StaticResource Primary}" Margin="8,0,0,0" VerticalAlignment="Bottom"
-                        IsEnabled="{Binding IsReady}" Click="OnSend"/>
+                <!-- stop shows only while a turn runs; send then says queue -->
+                <Button Grid.Column="1" Content="stop" Foreground="{StaticResource Red}" Margin="8,0,0,0" VerticalAlignment="Bottom"
+                        Click="OnStop">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding State}" Value="working">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Bottom" IsEnabled="{Binding IsReady}" Click="OnSend">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource Primary}">
+                            <Setter Property="Content" Value="send"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding State}" Value="working">
+                                    <Setter Property="Content" Value="queue"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
             </Grid>
         </Border>
 
         <!-- the widget's footer strip: figures on the left, the keys on the right -->
-        <Border Grid.Row="2" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
+        <Border Grid.Row="3" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
                 Padding="14,6,14,7">
             <Grid>
                 <Grid.ColumnDefinitions>
