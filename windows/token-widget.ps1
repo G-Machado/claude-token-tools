@@ -2211,7 +2211,7 @@ function New-Row {
   $right.Orientation = 'Horizontal'; $right.VerticalAlignment = 'Bottom'
   $right.Children.Add($sgrp) | Out-Null
 
-  # The three grades, back where they started: hard against the right edge of
+  # The grades, back where they started: hard against the right edge of
   # the last figure line, which is this card's bottom-right corner.
   #
   # They spent a while up on line 1 beside the model pill, on the argument that
@@ -2219,7 +2219,9 @@ function New-Row {
   # answering in there". It is - but a verdict read BEFORE its evidence is just
   # three letters, and up there they had no box and no neighbour, so they read
   # as decoration trailing the nickname. Down here they close the line whose
-  # numbers they grade, and the box says they are one thing rather than three.
+  # numbers they grade, and the box says they are one thing rather than four.
+  # The same four axes as the 7d line, on per-session ladders: spend per cycle
+  # left the box for held, and stays readable on the spend bar beside it.
   $gbox = New-Object Windows.Controls.Border
   $gbox.CornerRadius = New-Object Windows.CornerRadius (4)
   $gbox.Background = (Br '#FF1B1C22')
@@ -2231,7 +2233,7 @@ function New-Row {
   $grades = New-Object Windows.Controls.StackPanel
   $grades.Orientation = 'Horizontal'; $grades.VerticalAlignment = 'Center'
   $gbox.Child = $grades
-  foreach ($g in @($S.grades.spend, $S.grades.churn, $S.grades.control)) {
+  foreach ($g in @($S.grades.held, $S.grades.short, $S.grades.churn, $S.grades.control)) {
     $gg = Text-Block $(if ($g) { $g } else { [string][char]0x00B7 }) 10.5 (Grade-Color $g)
     $gg.FontWeight = 'SemiBold'; $gg.VerticalAlignment = 'Center'
     $gg.Margin = '0,0,5,0'
@@ -2241,8 +2243,9 @@ function New-Row {
   if ($grades.Children.Count -gt 0) {
     $grades.Children[$grades.Children.Count - 1].Margin = '0,0,0,0'
   }
-  Tip $gbox ("spend {0} / churn {1} / control {2}   -   {3:N1}k per cycle, {4:N0}% churn. Graded against your own median cycle, not an absolute: spend is what a cycle here costs, churn how much of that is the window being rewritten rather than new material, control whether this session is being kept warm and checkpointed or left to lapse." -f `
-    $S.grades.spend, $S.grades.churn, $S.grades.control, $S.spend_per_cycle, $S.churn_pct)
+  Tip $gbox ("held {0} / short {1} / churn {2} / ctl {3}   -   {4:N0}% of this session's spend was past the cut bar, {5:N0}% went on opening the window, {6:N1}% rewrote it after a lapse, {7:N2} over-budget prompts per cycle. Absolute ladders fitted per session, not your median; blank until 2 cycles." -f `
+    $S.grades.held, $S.grades.short, $S.grades.churn, $S.grades.control, `
+    [double]$S.held_pct, [double]$S.short_pct, [double]$S.churn_pct, [double]$S.control)
   $right.Children.Add($gbox) | Out-Null
 
   [Windows.Controls.Grid]::SetColumn($right, 5 + $co); $l3.Children.Add($right) | Out-Null
@@ -2439,7 +2442,7 @@ function Build-Legend {
     @('a checkpoint on disk', $Pal.faint, '0,0,10,0'),
     @('B', $Pal.red, '0,0,6,0'),
     @('refusing every prompt - u lifts it', $Pal.faint, '0,0,10,0'),
-    @('A-E spend / churn / control', $Pal.faint)))) | Out-Null
+    @('A-E held / short / churn / ctl', $Pal.faint)))) | Out-Null
   # The leading comma is load-bearing: @( @(one, thing) ) unrolls to the inner
   # array, so a one-part line arrives as its own parts and the colour lands in
   # $p[0]. Same trap the note at the top of this function describes.
@@ -3102,7 +3105,7 @@ function Update-View {
 
   $el.Grades.Children.Clear()
   # The week, not a session: spend past the cut bar replaced spend per cycle
-  # here (each card still grades that), and short sessions joined it.
+  # here, and short sessions joined it. Cards grade the same four per session.
   $ov = $d.overall
   foreach ($g in @(@('held',  $ov.grades.held,    $ov.prev_grades.held,
                      ("{0:N0}% of the week's spend was in windows past the {1:N0}k cut bar - hand off or /clear sooner" -f [double]$ov.held, [double]$ov.cut_k)),
@@ -4286,12 +4289,12 @@ if ($SelfTest) {
   foreach ($s in $script:Visible) {
     $rec = @($s.recent)
     $lg = 0; if ($rec.Count) { $lg = [double]$rec[$rec.Count - 1].growth }
-    Write-Output ("  row     : {0,-22} {1,7:N1}k  {2,5}  spark {3}  +{4,-6} {5,8}  heat {9,6}  {6}{7}{8}{10}" -f `
+    Write-Output ("  row     : {0,-22} {1,7:N1}k  {2,5}  spark {3}  +{4,-6} {5,8}  heat {9,6}  {6}{7}{8}{11}{10}" -f `
       $s.nick, $s.context_k, `
       $(if ($s.cache_left_min -le 0) { 'COLD' } else { "$($s.cache_left_min)m" }), `
-      $rec.Count, (Tok $lg), (Tok $s.cost.total), $s.grades.spend, $s.grades.churn, $s.grades.control, `
+      $rec.Count, (Tok $lg), (Tok $s.cost.total), $s.grades.held, $s.grades.short, $s.grades.churn, `
       $(if ($s.hot -gt 0) { '{0:N2}x' -f $s.hot } else { '-' }), `
-      $(if ($s.running -eq 1) { '  <- spinner, breathing name' } else { '' }))
+      $(if ($s.running -eq 1) { '  <- spinner, breathing name' } else { '' }), $s.grades.control)
   }
   # The elapsed clock, read back off the built rows rather than recomputed from
   # the payload - the point of the check is that the TextBlock got the number,

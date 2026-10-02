@@ -2785,6 +2785,14 @@ emit_json() {
     return (v <= 10) ? "A" : (v <= 25) ? "B" : (v <= 45) ? "C" : (v <= 65) ? "D" : "E" }
   function shortgrade(v) {
     return (v <= 5) ? "A" : (v <= 10) ? "B" : (v <= 20) ? "C" : (v <= 35) ? "D" : "E" }
+  # The per-session ladders, fitted 2026-10-01 on 278 sessions of two or more
+  # real cycles. Held is the share of a session paid past the cut bar: zero-
+  # inflated, 52 percent never got there, so A is real and B-E split the rest at
+  # its quartiles (42/69/79). Short is the floor write as a share of the
+  # session, median 15 percent - the 7d short cuts already land that on C, so a
+  # session reuses shortgrade.
+  function sheldgrade(v) {
+    return (v <= 10) ? "A" : (v <= 40) ? "B" : (v <= 65) ? "C" : (v <= 80) ? "D" : "E" }
 
   function ago(m) {
     if (m < 60)   return sprintf("%dm", m)
@@ -2891,7 +2899,12 @@ emit_json() {
         PCX[hs] = hr[6] + 0
         hk = ++HN[hs]
         HCY[hs, hk] = hr[3] + 0; HOU[hs, hk] = hr[4] + 0
-        HGR[hs, hk] = hg; HRC[hs, hk] = hr[5] + 0; HCX[hs, hk] = hr[6] + 0 }
+        HGR[hs, hk] = hg; HRC[hs, hk] = hr[5] + 0; HCX[hs, hk] = hr[6] + 0
+        # Held, per session: the same row test the 7d line uses, real cycles
+        # only, so a card and the week cannot disagree on what "past" means.
+        if (hr[8] != "renew" && hr[8] != "park") {
+          hw = hr[4] * 5 + hr[5] * 2 + hr[6] * RPC * 0.1
+          HPW[hs] += hw; if (hr[6] + 0 > cutk * 1000) HHB[hs] += hw } }
       close(hf) } }
 
   /^#/ { if ($2 == "hidden") { HID = $3 + 0; HTOT = $4 + 0 } next }
@@ -3104,6 +3117,11 @@ emit_json() {
       chn2  = R[i,25] - R[i,26] - FLOOR * 1000; if (chn2 < 0) chn2 = 0
       chn2  = (wtd > 0) ? chn2 * 2 * 100 / wtd : 0
       ctl   = (cy > 0) ? R[i,27] / cy : 0
+      # Short, per session: what opening the window cost, as a share of what
+      # the session spent. The week grades whole short sessions; one session
+      # can only say how much of itself went on the floor.
+      held  = (HPW[R[i,1]] > 0) ? HHB[R[i,1]] * 100 / HPW[R[i,1]] : 0
+      shrt  = (wtd > 0) ? FLOOR * 2000 * 100 / wtd : 0; if (shrt > 100) shrt = 100
       u = urank(i)
       # Keyed by the SHORT id, which is what the pane writes into the file.
       # This read the full sid until 2026-09-02, so a name typed in the pane
@@ -3192,8 +3210,12 @@ emit_json() {
       printf "\"pct_output\":%.1f,\"pct_write\":%.1f,\"pct_read\":%.1f,\"usd\":%.3f,\"agents\":%.0f,\"with_agents\":%.0f,\"usd_with_agents\":%.3f},", \
         (wtd ? cout * 100 / wtd : 0), (wtd ? cwrite * 100 / wtd : 0), (wtd ? cread * 100 / wtd : 0), wtd * price / 1000000, agc, wtd + agc, (wtd + agc) * price / 1000000
       printf "\"spend_per_cycle\":%.1f,\"production_pct\":%.0f,\"churn_pct\":%.1f,\"control\":%.3f,", spend, prod, chn2, ctl
-      printf "\"grades\":{\"spend\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
-        (cy < 2 ? "" : grade(spend, p_wpc, 1)), (cy < 2 ? "" : churngrade(chn2)), (cy < 2 ? "" : ctlgrade(ctl))
+      printf "\"held_pct\":%.1f,\"short_pct\":%.1f,", held, shrt
+      # Spend stays in the object for token-scorecard.csv, whose g_spend column
+      # has rows since 2026-09-23; the card shows the other four.
+      printf "\"grades\":{\"held\":\"%s\",\"short\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\",\"spend\":\"%s\"},", \
+        (cy < 2 ? "" : sheldgrade(held)), (cy < 2 ? "" : shortgrade(shrt)), (cy < 2 ? "" : churngrade(chn2)), (cy < 2 ? "" : ctlgrade(ctl)), \
+        (cy < 2 ? "" : grade(spend, p_wpc, 1))
       # Extension marks: how many times this window may be kept warm, and how
       # many of those are spent. The cost of one is the context at the cache
       # READ rate, against the same context at the write rate for letting it go.

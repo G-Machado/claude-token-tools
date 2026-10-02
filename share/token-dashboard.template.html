@@ -441,7 +441,7 @@ const R7 = within(7), R14 = within(14);
            c.style.color = css(s.cache_left_min <= 10 ? "orange" : s.cache_left_min <= 20 ? "yellow" : "dim"); }
     rt.append(c);
     const g = el("div", "delta",
-      [s.grades.spend, s.grades.churn, s.grades.control].filter(Boolean).join(" ") || "—");
+      [s.grades.held, s.grades.short, s.grades.churn, s.grades.control].filter(Boolean).join(" ") || "—");
     rt.append(g);
     rt.append(el("div", "delta", usd(s.cost.total)));
     row.append(rt);
