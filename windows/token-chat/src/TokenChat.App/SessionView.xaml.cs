@@ -184,6 +184,11 @@ public partial class SessionView : UserControl
         if ((sender as FrameworkElement)?.DataContext is QuestionPick pick && Owner<QuestionItem>(sender) is { } q) q.Current = pick;
     }
 
+    void OnOpenTab(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is OpenAsk ask && Owner<OpenBlock>(sender) is { } b) b.Current = ask;
+    }
+
     void OnSubmitAnswer(object sender, RoutedEventArgs e)
     {
         if (Owner<QuestionItem>(sender) is { } q) _ = Tab?.AnswerAsync(q);

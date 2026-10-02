@@ -136,6 +136,26 @@ public class ChoicesTests
     }
 
     [Fact]
+    public void TabbedBarMovesToTheNextUnansweredAskOnAPick()
+    {
+        var b = OpenBlock.Parse("▶ 1 Go? — go / stop\n▶ 2 Anything else?\n▶ 3 Commit now? — yes / hold")!;
+        Assert.Equal(("1  Go?", true), (b.Asks[0].Title, b.Asks[0].IsCurrent));
+        b.Asks[0].Options[0].Pick();
+        Assert.Same(b.Asks[0], b.Current); // stacked: nothing moves
+        b.Asks[0].Options[0].Pick(); // a second click clears it
+        Assert.False(b.Asks[0].IsAnswered);
+        b.IsTabbed = true;
+        b.Asks[0].Options[1].Pick();
+        Assert.Same(b.Asks[1], b.Current);
+        b.Asks[1].Other = "no";
+        Assert.Same(b.Asks[1], b.Current); // typing doesn't move: the box would lose focus mid-word
+        b.Current = b.Asks[2];
+        b.Asks[2].Options[0].Pick();
+        Assert.Same(b.Asks[2], b.Current); // all answered: stays for send
+        Assert.True(b.Asks[1].IsAnswered);
+    }
+
+    [Fact]
     public void TypedAnswerReplacesThePickAndAnswersAnAskWithoutOptions()
     {
         var b = OpenBlock.Parse("▶ 1 Go? — go / stop\n▶ 2 Anything else?")!;

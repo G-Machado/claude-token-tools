@@ -5,16 +5,16 @@ using TokenChat.Core.Transcript;
 
 namespace TokenChat.App;
 
-/// <summary>The question card's list. Stacked while the card fits the transcript's viewport; past that every
-/// question shares one cell and the card's tabs show the current one (the others are Hidden, not Collapsed).
-/// Every question is measured either way, and a tabbed card is as tall as its tallest question: switching tabs
-/// doesn't move what is under it.</summary>
+/// <summary>A question list, the card's questions or a reply's ▶ asks: one rule for both. Stacked while it fits the
+/// transcript's viewport; past that every question shares one cell and the tabs above show the current one (the
+/// others are Hidden, not Collapsed). Every question is measured either way, and a tabbed list is as tall as its
+/// tallest question: switching tabs doesn't move what is under it.</summary>
 public sealed class QuestionStack : Panel
 {
-    /// <summary>The card's padding, tabs and buttons, counted against the viewport with the questions.</summary>
+    /// <summary>The padding, tabs and buttons round the list, counted against the viewport with the questions.</summary>
     const double Chrome = 110;
-    /// <summary>More than a header pill's row, per question.</summary>
-    const double Slack = 26;
+    /// <summary>More than a header pill's row, per question; 0 where tabbing drops nothing (the ▶ bar).</summary>
+    public double Slack { get; set; } = 26;
     ScrollViewer? _viewport;
     bool _tabbed;
 
@@ -24,19 +24,21 @@ public sealed class QuestionStack : Panel
         {
             for (DependencyObject? d = this; d is not null && _viewport is null; d = VisualTreeHelper.GetParent(d))
                 _viewport = d as ScrollViewer;
-            if (_viewport is not null) _viewport.SizeChanged += OnViewportSize;
+            if (_viewport is not null) _viewport.ScrollChanged += OnViewportScroll;
             InvalidateMeasure();
         };
         Unloaded += (_, _) =>
         {
-            if (_viewport is not null) _viewport.SizeChanged -= OnViewportSize;
+            if (_viewport is not null) _viewport.ScrollChanged -= OnViewportScroll;
             _viewport = null;
         };
     }
 
-    void OnViewportSize(object sender, SizeChangedEventArgs e)
+    // ScrollChanged, not SizeChanged: on a resize SizeChanged comes first, and a measure then still read the old
+    // ViewportHeight. Text boxes and markdown bubble their own ScrollChanged through here: only the viewport's counts.
+    void OnViewportScroll(object sender, ScrollChangedEventArgs e)
     {
-        if (e.HeightChanged) InvalidateMeasure();
+        if (e.OriginalSource == _viewport && e.ViewportHeightChange != 0) InvalidateMeasure();
     }
 
     protected override Size MeasureOverride(Size available)
@@ -49,11 +51,11 @@ public sealed class QuestionStack : Panel
             tallest = Math.Max(tallest, child.DesiredSize.Height);
             widest = Math.Max(widest, child.DesiredSize.Width);
         }
-        // tabbed drops each question's header pill, so the stacked sum shrinks a little once tabbed: going back
+        // a tabbed card drops each question's header pill, so the stacked sum shrinks a little once tabbed: going back
         // takes that much spare room, or a card on the edge would flip on every pass
         var need = sum + Chrome + (_tabbed ? Slack * InternalChildren.Count : 0);
         _tabbed = InternalChildren.Count > 1 && _viewport is { ViewportHeight: > 0 } v && need > v.ViewportHeight;
-        if (DataContext is QuestionItem item) item.IsTabbed = _tabbed;
+        if (DataContext is ITabbedQuestions list) list.IsTabbed = _tabbed;
         return new Size(widest, _tabbed ? tallest : sum);
     }
 

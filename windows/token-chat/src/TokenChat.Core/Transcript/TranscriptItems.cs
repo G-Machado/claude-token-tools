@@ -110,7 +110,7 @@ public sealed class PermissionItem(PermissionRequest request, string summary) : 
 public enum QuestionState { Pending, Answered, Declined, Cancelled }
 
 /// <summary>An AskUserQuestion: pick an option per question, or type an answer, then submit.</summary>
-public sealed class QuestionItem : TranscriptItem
+public sealed class QuestionItem : TranscriptItem, ITabbedQuestions
 {
     QuestionState _state;
     QuestionPick? _current;
@@ -147,8 +147,7 @@ public sealed class QuestionItem : TranscriptItem
     public void AdvanceFrom(QuestionPick picked)
     {
         if (!IsTabbed || picked.MultiSelect || !picked.IsAnswered) return;
-        var at = Questions.ToList().IndexOf(picked);
-        if (Questions.Skip(at + 1).Concat(Questions.Take(at)).FirstOrDefault(q => !q.IsAnswered) is { } next) Current = next;
+        if (Tabs.NextUnanswered(Questions, picked, q => q.IsAnswered) is { } next) Current = next;
     }
     public bool CanSubmit => State == QuestionState.Pending && Questions.All(q => q.Answer is not null);
     /// <summary>A lone single-select question is answered by its first click.</summary>

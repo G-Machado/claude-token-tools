@@ -285,8 +285,11 @@
         </Setter>
     </Style>
 
-    <!-- A tabbed question card's tab: the header, yellow while showing, ticked green once answered.
-         DataContext is the QuestionPick. -->
+    <!-- A tabbed question list's tab: its Title, TabTint/TabInk while showing (the card's yellow here; the ▶ bar
+         re-declares them blue), ticked green once answered. DataContext is the QuestionPick or OpenAsk.
+         Plain brushes, not <StaticResource> aliases: an alias read through DynamicResource overflowed the stack. -->
+    <SolidColorBrush x:Key="TabTint" Color="#1AFACC15"/>
+    <SolidColorBrush x:Key="TabInk" Color="#FFFACC15"/>
     <Style x:Key="QuestionTab" TargetType="Button">
         <Setter Property="Foreground" Value="{StaticResource Dim}"/>
         <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
@@ -312,8 +315,8 @@
                             <Setter TargetName="Tick" Property="Text" Value="&#x2713; "/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="{StaticResource YellowTint}"/>
-                            <Setter Property="Foreground" Value="{StaticResource Yellow}"/>
+                            <Setter TargetName="B" Property="Background" Value="{DynamicResource TabTint}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource TabInk}"/>
                             <Setter Property="FontWeight" Value="SemiBold"/>
                         </DataTrigger>
                     </ControlTemplate.Triggers>

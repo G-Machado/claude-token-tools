@@ -76,11 +76,46 @@
                                          VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"/>
                 <Border x:Name="OpenBar" DataContext="{Binding Open}" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}"
                         BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,2,0,6" MaxWidth="760" HorizontalAlignment="Left">
+                    <Border.Resources>
+                        <!-- BlueTint and Blue: the tabs' current colours (Theme.xaml QuestionTab) -->
+                        <SolidColorBrush x:Key="TabTint" Color="#2460A5FA"/>
+                        <SolidColorBrush x:Key="TabInk" Color="#FF60A5FA"/>
+                    </Border.Resources>
                     <StackPanel>
+                        <!-- shown when the asks don't fit stacked: the card's rule (QuestionStack decides) -->
+                        <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="0,0,0,8" Margin="0,0,0,10">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsTabbed}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <ItemsControl ItemsSource="{Binding Asks, Mode=OneTime}" Focusable="False">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type t:OpenAsk}">
+                                        <Button Style="{StaticResource QuestionTab}" Click="OnOpenTab"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
                         <ItemsControl ItemsSource="{Binding Asks, Mode=OneTime}" Focusable="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <local:QuestionStack Slack="0"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate DataType="{x:Type t:OpenAsk}">
-                                    <Grid Margin="0,0,0,10">
+                                    <Grid x:Name="Row" Margin="0,0,0,10">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition/>
@@ -139,6 +174,14 @@
                                                 <Condition Binding="{Binding Other}" Value=""/>
                                             </MultiDataTrigger.Conditions>
                                             <Setter TargetName="Typed" Property="Visibility" Value="Collapsed"/>
+                                        </MultiDataTrigger>
+                                        <!-- tabbed: only the current ask shows -->
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding DataContext.IsTabbed, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True"/>
+                                                <Condition Binding="{Binding IsCurrent}" Value="False"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter TargetName="Row" Property="Visibility" Value="Hidden"/>
                                         </MultiDataTrigger>
                                     </DataTemplate.Triggers>
                                 </DataTemplate>

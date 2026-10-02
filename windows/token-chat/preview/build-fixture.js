@@ -21,6 +21,8 @@ const reply = [
   '▶ 2 Keep the terminal fallback? — yes (Recommended) / drop it / only when TokenChat is missing',
   '▶ 3 Which branch for the release? — master / release-2026-10 / a new branch named after the topic slug',
   '▶ 4 Anything else before I build?',
+  '▶ 5 Ship the capture script with the repo? — yes / keep it local',
+  '▶ 6 Who reviews the XAML? — me / skip the review',
 ].join('\n');
 
 const questions = [
