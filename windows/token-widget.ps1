@@ -93,6 +93,10 @@ $ErrorActionPreference = 'Stop'
 $Root    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Script  = Join-Path $Root 'token-sessions.sh'
 $PosFile = Join-Path $Root 'token-widget-pos.json'
+# Every collect, replaced whole, for TokenChat's footer. Fixed under the profile
+# rather than $Root: the reader's path is fixed, so a copy run from the repo
+# must still land where it looks.
+$FeedFile = Join-Path $env:USERPROFILE '.claude\token-sessions.json'
 $Dash    = Join-Path $Root 'token-dashboard.html'
 $DashGen = Join-Path $Root 'token-dashboard.sh'
 
@@ -2746,6 +2750,25 @@ function Start-Collect {
   }
 }
 
+# The collect that just parsed, handed on to TokenChat as it came in. Its footer
+# shows a tab's row from this file instead of running a collect of its own, so
+# the two can never disagree about a figure: there is only one computation.
+# Written beside and swapped in, so a reader never sees half a file; Replace
+# keeps working while TokenChat holds it open, because it opens with
+# FileShare.Delete. A failed write costs one refresh of staleness, nothing more.
+# [NullString], not $null: PowerShell hands a .NET string parameter '' for
+# $null, and Replace refuses '' as the backup path - every swap after the
+# first failed silently that way.
+function Save-Feed([string]$txt) {
+  if ($SelfTest) { return }
+  try {
+    $tmp = "$FeedFile.tmp"
+    [IO.File]::WriteAllText($tmp, $txt, (New-Object Text.UTF8Encoding $false))
+    if (Test-Path $FeedFile) { [IO.File]::Replace($tmp, $FeedFile, [NullString]::Value) }
+    else { [IO.File]::Move($tmp, $FeedFile) }
+  } catch { }
+}
+
 # Called once a second. Cheap when nothing has landed - one IsCompleted read.
 function Poll-Collect {
   if (-not $script:CollectPS) { return }
@@ -2758,6 +2781,7 @@ function Poll-Collect {
       if ($d) {
         $script:Data = $d
         $ok = $true
+        Save-Feed $txt
       }
     }
   } catch { }
@@ -3095,6 +3119,7 @@ function Update-View {
   $script:Bands = [pscustomobject]@{
     floor = $cn.floor; park_at = $cn.park_at; overheat = $cn.overheat
     cut_pk = $cn.cut_pk; cut_no = $cn.cut_no; ctxmax = $cn.ctxmax; gbud = $cn.gbud
+    max_at = $cn.max_at
   }
   if ($el.Legend.Children.Count -eq 0) { Build-Legend; Build-Keys }
 

@@ -41,7 +41,7 @@ public class TranscriptTests
     [Theory, MemberData(nameof(Fixture.All), MemberType = typeof(Fixture))]
     public void EveryToolRowGetsSummaryAndResult(string fixture)
     {
-        var tools = Replay(fixture).Projector.Items.OfType<ToolUseItem>().ToList();
+        var tools = Replay(fixture).Projector.Tools.ToList();
         Assert.All(tools, t =>
         {
             Assert.NotEmpty(t.Summary);

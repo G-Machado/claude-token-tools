@@ -17,9 +17,19 @@ public sealed class TranscriptProjector
     readonly HashSet<StreamedItem> _dirty = [];
     readonly List<OpenBlock> _open = []; // ▶ blocks the user has not replied past
     readonly List<TranscriptItem> _prompts = []; // permission and question cards of the running turn
+    readonly List<ToolUseItem> _unpriced = []; // results since the last main-chain request, waiting for the next one's growth
+    ToolUseItem? _unplaced; // a shell call whose input is still streaming: only that says whether it folds
+    long? _lastPrompt;
+    long _lastOutput;
     bool _interrupted; // the running turn saw the CLI's interrupt marker
 
     public ObservableCollection<TranscriptItem> Items { get; } = [];
+
+    /// <summary>Every tool row, folded or not.</summary>
+    public IEnumerable<ToolUseItem> Tools => _tools.Values;
+
+    /// <summary>The session's directory, from its init event; tool rows show paths relative to it.</summary>
+    public string? Cwd { get; set; }
 
     /// <summary>A file's text, or null if there is none; Write previews diff against it. Unset: every Write is a new file.</summary>
     public Func<string, string?>? ReadFile { get; init; }
@@ -29,6 +39,7 @@ public sealed class TranscriptProjector
     {
         foreach (var b in _open) b.IsClosed = true;
         _open.Clear();
+        _unpriced.Clear(); // the next request's growth is mostly this message
         Items.Add(new UserItem(text, files));
     }
 
@@ -38,7 +49,9 @@ public sealed class TranscriptProjector
     {
         switch (e)
         {
-            case MessageStartEvent { ParentToolUseId: null }: _blocks.Clear(); break;
+            case InitEvent i: Cwd = i.Cwd; break;
+            case MessageStartEvent { ParentToolUseId: null } m: _blocks.Clear(); Price(m.Usage); break;
+            case MessageDeltaEvent { ParentToolUseId: null } d: _lastOutput = Math.Max(_lastOutput, d.Usage.Output); break;
             case BlockStartEvent { ParentToolUseId: null } b: StartBlock(b); break;
             case DeltaEvent { ParentToolUseId: null } d when _blocks.TryGetValue(d.Index, out var row): Append(row, d); break;
             case BlockStopEvent { ParentToolUseId: null } s when _blocks.TryGetValue(s.Index, out var row): StopBlock(row); break;
@@ -70,9 +83,65 @@ public sealed class TranscriptProjector
             _ => null,
         };
         if (row is null) return;
-        if (row is ToolUseItem { ToolUseId: { } id } tool) _tools[id] = tool;
+        PlaceUnplaced();
         _blocks[b.Index] = row;
-        Items.Add(row);
+        if (row is not ToolUseItem tool)
+        {
+            Items.Add(row);
+            return;
+        }
+        if (tool.ToolUseId is { } id) _tools[id] = tool;
+        if (ToolText.NeedsInput(tool.ToolName)) _unplaced = tool;
+        else Place(tool, ToolText.IsLook(tool.ToolName, null));
+    }
+
+    /// <summary>A call that only looks joins the run of them just before it, taking the thinking before it along, and a
+    /// new run takes its caption from that thinking. Any other call goes on the transcript as is.</summary>
+    void Place(ToolUseItem tool, bool looks)
+    {
+        if (!looks)
+        {
+            Items.Add(tool);
+            return;
+        }
+        var thought = Items.Count > 0 ? Items[^1] as ThinkingItem : null;
+        if (thought is not null) Items.RemoveAt(Items.Count - 1);
+        if ((Items.Count > 0 ? Items[^1] : null) is not ToolGroupItem run) Items.Add(run = new ToolGroupItem());
+        if (thought is not null)
+        {
+            run.Add(thought);
+            run.Caption ??= ToolText.Intent(thought.Text);
+        }
+        run.Add(tool);
+    }
+
+    void PlaceUnplaced()
+    {
+        if (_unplaced is not { } tool) return;
+        _unplaced = null;
+        Place(tool, ToolText.IsLook(tool.ToolName, tool.Input));
+    }
+
+    /// <summary>A main-chain request's prompt is the last one's prompt, plus its output, plus what landed in between: in
+    /// a tool loop, the results (with anything the CLI attached to them). Checked on this repo's transcripts
+    /// (2026-10-02): growth tracks result size at a steady 2.0-2.6 chars/token. One result takes the growth as
+    /// measured; a parallel batch splits it by result size.</summary>
+    void Price(TokenUsage usage)
+    {
+        if (usage.Prompt == 0) return;
+        var growth = usage.Prompt - (_lastPrompt ?? 0) - _lastOutput;
+        if (_lastPrompt is not null && _unpriced.Count > 0 && growth > 0)
+        {
+            var chars = _unpriced.Sum(t => (long)Math.Max(1, t.ResultChars));
+            foreach (var t in _unpriced)
+            {
+                t.Tokens = growth * Math.Max(1, t.ResultChars) / chars;
+                t.TokensExact = _unpriced.Count == 1;
+            }
+        }
+        _unpriced.Clear();
+        _lastPrompt = usage.Prompt;
+        _lastOutput = usage.Output;
     }
 
     void Append(TranscriptItem row, DeltaEvent d)
@@ -99,7 +168,11 @@ public sealed class TranscriptProjector
                 EndStream(s);
                 break;
             case ToolUseItem t:
-                t.Summary = Summarize(t.InputJson.ToString());
+                var json = t.InputJson.ToString();
+                t.Input = Parse(json);
+                t.Summary = t.Input is { } input ? Summarize(input) : OneLine(json, 160);
+                t.Line = ToolText.Describe(t.ToolName, t.Input, Cwd);
+                if (t == _unplaced) PlaceUnplaced();
                 break;
         }
     }
@@ -129,8 +202,13 @@ public sealed class TranscriptProjector
                     {
                         var result = ResultText(block["content"]);
                         tool.ResultLines = result.Length == 0 ? 0 : result.Split('\n').Length;
-                        tool.Result = result.Length <= ResultPreviewChars ? result : result[..ResultPreviewChars] + "…";
                         tool.IsError = block["is_error"] is JsonValue e && e.TryGetValue<bool>(out var isError) && isError;
+                        tool.Outcome = ToolText.Outcome(tool.ToolName, tool.Input, result, tool.IsError);
+                        tool.ResultChars = result.Length;
+                        tool.TokensExact = false;
+                        tool.Tokens = ToolText.Estimate(result.Length);
+                        _unpriced.Add(tool);
+                        tool.Result = result.Length <= ResultPreviewChars ? result : result[..ResultPreviewChars] + "…";
                         tool.IsInterrupted = false;
                     }
                     else if (type == "text" && (string?)block["text"] is { Length: > 0 } t)
@@ -146,6 +224,7 @@ public sealed class TranscriptProjector
     void AddUserText(string text)
     {
         const string stdout = "<local-command-stdout>";
+        _unpriced.Clear(); // it lands in the window beside the results
         if (text.StartsWith("[Request interrupted", StringComparison.Ordinal))
         {
             _interrupted = true;
@@ -159,6 +238,8 @@ public sealed class TranscriptProjector
 
     void EndTurn(ResultEvent r)
     {
+        PlaceUnplaced();
+        _unpriced.Clear();
         foreach (var row in _blocks.Values.OfType<StreamedItem>())
         {
             row.Flush();
@@ -230,14 +311,18 @@ public sealed class TranscriptProjector
     };
 
     /// <summary>One line naming what a tool call touches: the command, path or pattern if there is one.</summary>
-    public static string Summarize(string inputJson)
+    public static string Summarize(string inputJson) => Parse(inputJson) is { } o ? Summarize(o) : OneLine(inputJson, 160);
+
+    static JsonObject? Parse(string json)
     {
         try
         {
-            if (JsonNode.Parse(inputJson) is JsonObject o) return Summarize(o);
+            return JsonNode.Parse(json) as JsonObject;
         }
-        catch (JsonException) { }
-        return OneLine(inputJson, 160);
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public static string Summarize(JsonObject input)
@@ -250,7 +335,7 @@ public sealed class TranscriptProjector
         return OneLine(input.ToJsonString(), 160);
     }
 
-    static string OneLine(string s, int max)
+    internal static string OneLine(string s, int max)
     {
         var line = s.ReplaceLineEndings(" ").Trim();
         return line.Length <= max ? line : line[..max] + "…";

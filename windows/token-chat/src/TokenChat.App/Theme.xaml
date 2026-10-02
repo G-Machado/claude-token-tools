@@ -371,7 +371,8 @@
         </Style.Triggers>
     </Style>
 
-    <!-- A fold, the widget's way: a small triangle and the header, no chrome. -->
+    <!-- A fold, the widget's way: a small triangle and the header, no chrome. The header docks beside the
+         triangle rather than stacking, so a long one wraps instead of running off the edge. -->
     <Style TargetType="Expander">
         <Setter Property="Template">
             <Setter.Value>
@@ -382,11 +383,11 @@
                                       Content="{TemplateBinding Header}" ContentTemplate="{TemplateBinding HeaderTemplate}">
                             <ToggleButton.Template>
                                 <ControlTemplate TargetType="ToggleButton">
-                                    <StackPanel Orientation="Horizontal" Background="{StaticResource Ghost}">
-                                        <TextBlock x:Name="G" Text="&#9656;" FontFamily="{StaticResource Sym}" FontSize="9"
+                                    <DockPanel Background="{StaticResource Ghost}">
+                                        <TextBlock x:Name="G" DockPanel.Dock="Left" Text="&#9656;" FontFamily="{StaticResource Sym}" FontSize="9"
                                                    Foreground="{StaticResource Faint}" Margin="0,0,6,0" VerticalAlignment="Center"/>
                                         <ContentPresenter VerticalAlignment="Center"/>
-                                    </StackPanel>
+                                    </DockPanel>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsChecked" Value="True">
                                             <Setter TargetName="G" Property="Text" Value="&#9662;"/>

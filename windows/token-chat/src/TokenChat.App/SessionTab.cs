@@ -31,8 +31,13 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     }
 
     readonly ConcurrentQueue<ClaudeEvent> _inbox = new();
+    /// <summary>The widget's collect, one watcher for every tab.</summary>
+    static readonly Lazy<SessionFeed> Feed = new(() => new SessionFeed());
+
     readonly DispatcherTimer _render;
+    readonly DispatcherTimer _clock;
     ClaudeSession? _session;
+    FooterRow? _row;
     string? _activity;
     string _status = "starting claude…";
     string _state = "starting";
@@ -55,6 +60,9 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         ProjectBrush = ProjectBrushes[Project.Slot(options.WorkingDirectory, ProjectBrushes.Length)];
         _render = new DispatcherTimer(RenderInterval, DispatcherPriority.Normal, (_, _) => Drain(), Dispatcher.CurrentDispatcher);
         Attachments.CollectionChanged += (_, _) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AttachmentsTotal)));
+        // the cache clock runs down between collects
+        _clock = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) => UpdateStatus(), Dispatcher.CurrentDispatcher);
+        Feed.Value.Changed += OnFeed;
         // The stream starts at the next turn; claude has the history, this tab does not.
         if (options.ResumeSessionId is { } sid)
             Transcript.AddNote(NoteKind.Info, $"Resumed {sid[..Math.Min(8, sid.Length)]}", "earlier turns are in the session but not shown here");
@@ -74,6 +82,8 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     public TranscriptProjector Transcript { get; } = new() { ReadFile = ReadFileOrNull };
     public ObservableCollection<TranscriptItem> Items => Transcript.Items;
     public string Status { get => _status; private set => Set(ref _status, value); }
+    /// <summary>This session's row from the widget's collect; null until the widget has listed it.</summary>
+    public FooterRow? Row { get => _row; private set => Set(ref _row, value); }
     public bool IsReady { get => _isReady; private set => Set(ref _isReady, value); }
     /// <summary>starting, idle, working or exited: the colour of the tab's dot.</summary>
     public string State { get => _state; private set => Set(ref _state, value); }
@@ -208,7 +218,14 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     }
 
     /// <summary>UI thread only; call before <see cref="DisposeAsync"/>, which may run on any thread.</summary>
-    public void StopRendering() => _render.Stop();
+    public void StopRendering()
+    {
+        _render.Stop();
+        _clock.Stop();
+        Feed.Value.Changed -= OnFeed;
+    }
+
+    void OnFeed() => _clock.Dispatcher.BeginInvoke(UpdateStatus);
 
     public async ValueTask DisposeAsync()
     {
@@ -280,17 +297,28 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         var u = s.Usage;
         State = _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : "working";
         Mode = (s.PermissionMode ?? Options.PermissionMode) switch { "acceptEdits" => "accept edits", var m => m } + " mode";
+        Row = SessionId is { } sid && Feed.Value.Snapshot is { } feed && feed.Sessions.TryGetValue(sid, out var row)
+            ? FooterRow.From(row, feed, u.Context, DateTimeOffset.Now)
+            : null;
+        var state = _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : _activity ?? "working";
+        // headless claude has no id until its first prompt, so the widget can't list it yet; its zeros say less than this
+        if (SessionId is null)
+        {
+            Status = string.Join("  ·  ", Options.Profile.ToString().ToLowerInvariant(), "row after first prompt", state);
+            return;
+        }
         string? Pct(RateWindow? w) => w is null ? null : (w.Utilization * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
+        // model and ctx are on the row's line once the widget has this session
         string?[] parts =
         [
-            s.Init?.Model,
+            Row is null ? s.Init?.Model : null,
             Options.Profile.ToString().ToLowerInvariant(),
-            $"ctx {Tokens.K(u.Context)}",
+            Row is null ? $"ctx {Tokens.K(u.Context)}" : null,
             $"floor {Tokens.K(u.Floor)}",
             $"out {Tokens.K(u.Session.Output)}",
             Pct(s.RateLimit?.FiveHour) is { } five ? "5h " + five : null,
             Pct(s.RateLimit?.SevenDay) is { } seven ? "7d " + seven : null,
-            _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : _activity ?? "working",
+            state,
         ];
         Status = string.Join("  ·  ", parts.Where(p => p is not null));
     }

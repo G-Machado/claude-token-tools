@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -72,19 +73,69 @@ public sealed class ToolUseItem(string toolName, string? toolUseId) : Transcript
 {
     internal readonly StringBuilder InputJson = new();
     string _summary = "";
+    ToolHeadline _line = new(toolName, "");
+    string _outcome = "";
     string? _result;
     int _resultLines;
-    bool _isError, _isInterrupted;
+    long? _tokens;
+    bool _isError, _isInterrupted, _tokensExact;
 
     public string ToolName { get; } = toolName;
     public string? ToolUseId { get; } = toolUseId;
     public string Summary { get => _summary; internal set => Set(ref _summary, value); }
+    /// <summary>The call as a phrase; just the tool's name until its input is in.</summary>
+    public ToolHeadline Line { get => _line; internal set => Set(ref _line, value); }
+    /// <summary>What came back, in the tool's terms ("lines 95–130", "3 hits · 2 files", "+4 −1"); empty until it does.</summary>
+    public string Outcome { get => _outcome; internal set => Set(ref _outcome, value); }
+    /// <summary>What the result added to the window, in tokens; null until it arrives.</summary>
+    public long? Tokens { get => _tokens; internal set { if (Set(ref _tokens, value)) { Notify(nameof(TokensText)); Notify(nameof(IsBig)); } } }
+    /// <summary>Measured: the next request's growth was this call's alone. False: estimated from the result's size,
+    /// or this call's share (by size) of a parallel batch's growth.</summary>
+    public bool TokensExact { get => _tokensExact; internal set { if (Set(ref _tokensExact, value)) Notify(nameof(TokensText)); } }
+    public string TokensText => _tokens is { } n ? ToolText.Cost(n, _tokensExact) : "";
+    public bool IsBig => _tokens >= ToolText.BigCall;
+    internal int ResultChars;
+    internal System.Text.Json.Nodes.JsonObject? Input;
     /// <summary>The first lines of the tool result; null until it arrives.</summary>
     public string? Result { get => _result; internal set => Set(ref _result, value); }
     public int ResultLines { get => _resultLines; internal set => Set(ref _resultLines, value); }
     public bool IsError { get => _isError; internal set => Set(ref _isError, value); }
     /// <summary>The turn ended with no result for it: stopped mid-run.</summary>
     public bool IsInterrupted { get => _isInterrupted; internal set => Set(ref _isInterrupted, value); }
+}
+
+/// <summary>A run of calls that only look (reads, searches, read-only shell) folded into one row, with the
+/// thinking between them. Anything else, an edit, text, a prompt, ends the run.</summary>
+public sealed class ToolGroupItem : TranscriptItem
+{
+    static readonly string[] Derived = [nameof(Title), nameof(Counts), nameof(TokensText), nameof(IsBig), nameof(IsRunning), nameof(HasFailed), nameof(State)];
+    string? _caption;
+
+    public ObservableCollection<TranscriptItem> Children { get; } = [];
+    public IEnumerable<ToolUseItem> Tools => Children.OfType<ToolUseItem>();
+    /// <summary>Why the run happened, from the thinking before it; null when there was none to read.</summary>
+    public string? Caption { get => _caption; internal set { if (Set(ref _caption, value)) Notify(nameof(Title)); } }
+    public string Title => Caption ?? ToolText.Subjects(Tools);
+    public string Counts => ToolText.Counts(Tools);
+    public string TokensText => Tools.Where(t => t.Tokens is not null).ToList() is { Count: > 0 } priced
+        ? ToolText.Cost(priced.Sum(t => t.Tokens!.Value), priced.All(t => t.TokensExact)) : "";
+    public bool IsBig => Tools.Sum(t => t.Tokens ?? 0) >= ToolText.BigRun || Tools.Any(t => t.IsBig);
+    public bool IsRunning => Tools.Any(t => t.Result is null && !t.IsInterrupted);
+    public int Failed => Tools.Count(t => t.IsError);
+    public bool HasFailed => Failed > 0;
+    public string State => IsRunning ? "running…" : Failed > 0 ? $"{Failed} failed" : "";
+
+    internal void Add(TranscriptItem item)
+    {
+        Children.Add(item);
+        if (item is ToolUseItem tool) tool.PropertyChanged += (_, _) => Changed();
+        Changed();
+    }
+
+    void Changed()
+    {
+        foreach (var name in Derived) Notify(name);
+    }
 }
 
 /// <summary>Cancelled: the turn ended (stopped) before it was decided.</summary>

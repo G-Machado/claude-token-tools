@@ -199,45 +199,84 @@
             </Expander>
         </DataTemplate>
 
-        <!-- A tool call is a row with a stripe down its left edge: blue while it runs, the card's
-             hairline once it is done, red if it failed. -->
+        <!-- A tool call is one line with a stripe down its left edge: blue while it runs, the card's hairline once
+             it is done, red if it failed. The line says what it did to what, where, what came back, and what that
+             added to the window (≈ until the next request measures it, yellow when big); a shell call's command sits
+             under its description. The fold opens the result. -->
         <DataTemplate DataType="{x:Type t:ToolUseItem}">
-            <Border x:Name="Bar" BorderBrush="{StaticResource Track}" BorderThickness="2,0,0,0" Padding="10,3,0,3" Margin="0,4">
-                <StackPanel>
-                    <TextBlock TextWrapping="Wrap" FontFamily="{StaticResource Mono}" FontSize="12">
-                        <Run Text="{Binding ToolName, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource Text}"/>
-                        <Run Text="{Binding Summary, Mode=OneWay}" Foreground="{StaticResource Dim}"/>
-                    </TextBlock>
-                    <Expander x:Name="ResultBox" Margin="0,3,0,0">
-                        <Expander.Header>
-                            <TextBlock x:Name="ResultHead" Style="{StaticResource Meta}">
-                                <Run Text="{Binding ResultLines, Mode=OneWay}"/><Run Text=" lines"/>
+            <Border x:Name="Bar" BorderBrush="{StaticResource Track}" BorderThickness="2,0,0,0" Padding="10,2,0,2" Margin="0,3">
+                <Expander>
+                    <Expander.Header>
+                        <StackPanel>
+                            <TextBlock TextWrapping="Wrap" FontFamily="{StaticResource Mono}" FontSize="12">
+                                <Run Text="{Binding Line.Verb, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource Text}"/>
+                                <Run Text="{Binding Line.Subject, Mode=OneWay}" Foreground="{StaticResource Text}"/>
+                                <Run Text="{Binding Line.Detail, Mode=OneWay}" Foreground="{StaticResource Faint}"/>
+                                <Run x:Name="Outcome" Text="{Binding Outcome, Mode=OneWay}" Foreground="{StaticResource Dim}"/>
+                                <Run x:Name="Cost" Text="{Binding TokensText, Mode=OneWay}" Foreground="{StaticResource Faint}"/>
                             </TextBlock>
-                        </Expander.Header>
-                        <Border Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                                CornerRadius="4" Padding="9,6">
-                            <TextBox Style="{StaticResource Selectable}" Text="{Binding Result, Mode=OneWay}"
-                                     FontFamily="{StaticResource Mono}" FontSize="11.5" Foreground="{StaticResource Dim}"/>
-                        </Border>
-                    </Expander>
-                    <TextBlock x:Name="Running" Text="running…" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
-                               Margin="0,2,0,0" Visibility="Collapsed"/>
-                </StackPanel>
+                            <TextBlock x:Name="Command" Text="{Binding Line.Command, Mode=OneWay}" TextWrapping="Wrap"
+                                       FontFamily="{StaticResource Mono}" FontSize="11.5" Foreground="{StaticResource Faint}"/>
+                        </StackPanel>
+                    </Expander.Header>
+                    <Border x:Name="ResultBody" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                            CornerRadius="4" Padding="9,6">
+                        <TextBox Style="{StaticResource Selectable}" Text="{Binding Result, Mode=OneWay}"
+                                 FontFamily="{StaticResource Mono}" FontSize="11.5" Foreground="{StaticResource Dim}"/>
+                    </Border>
+                </Expander>
             </Border>
             <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Line.Command}" Value="{x:Null}">
+                    <Setter TargetName="Command" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
                 <DataTrigger Binding="{Binding Result}" Value="{x:Null}">
-                    <Setter TargetName="ResultBox" Property="Visibility" Value="Collapsed"/>
-                    <Setter TargetName="Running" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="ResultBody" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Outcome" Property="Text" Value="running…"/>
+                    <Setter TargetName="Outcome" Property="Foreground" Value="{StaticResource Blue}"/>
                     <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Blue}"/>
                 </DataTrigger>
                 <DataTrigger Binding="{Binding IsInterrupted}" Value="True">
-                    <Setter TargetName="Running" Property="Text" Value="stopped"/>
-                    <Setter TargetName="Running" Property="Foreground" Value="{StaticResource Faint}"/>
+                    <Setter TargetName="Outcome" Property="Text" Value="stopped"/>
+                    <Setter TargetName="Outcome" Property="Foreground" Value="{StaticResource Faint}"/>
                     <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Track}"/>
                 </DataTrigger>
                 <DataTrigger Binding="{Binding IsError}" Value="True">
                     <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Red}"/>
-                    <Setter TargetName="ResultHead" Property="Foreground" Value="{StaticResource Red}"/>
+                    <Setter TargetName="Outcome" Property="Foreground" Value="{StaticResource Red}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsBig}" Value="True">
+                    <Setter TargetName="Cost" Property="Foreground" Value="{StaticResource Yellow}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- A run of calls that only looked, folded to one line: why (the thinking before it) or else what it touched,
+             its shape, its cost. Same stripe colours as a single call; the fold opens the calls and the thinking. -->
+        <DataTemplate DataType="{x:Type t:ToolGroupItem}">
+            <Border x:Name="Bar" BorderBrush="{StaticResource Track}" BorderThickness="2,0,0,0" Padding="10,2,0,2" Margin="0,3">
+                <Expander>
+                    <Expander.Header>
+                        <TextBlock TextWrapping="Wrap" FontSize="12">
+                            <Run Text="{Binding Title, Mode=OneWay}" Foreground="{StaticResource Text}"/>
+                            <Run Text="{Binding Counts, Mode=OneWay}" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Dim}"/>
+                            <Run x:Name="Cost" Text="{Binding TokensText, Mode=OneWay}" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}"/>
+                            <Run x:Name="State" Text="{Binding State, Mode=OneWay}" Foreground="{StaticResource Red}"/>
+                        </TextBlock>
+                    </Expander.Header>
+                    <ItemsControl ItemsSource="{Binding Children}" Focusable="False"/>
+                </Expander>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding HasFailed}" Value="True">
+                    <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Red}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                    <Setter TargetName="Bar" Property="BorderBrush" Value="{StaticResource Blue}"/>
+                    <Setter TargetName="State" Property="Foreground" Value="{StaticResource Blue}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsBig}" Value="True">
+                    <Setter TargetName="Cost" Property="Foreground" Value="{StaticResource Yellow}"/>
                 </DataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
@@ -559,13 +598,18 @@
                     <ColumnDefinition/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition/>
                 </Grid.RowDefinitions>
+                <!-- voice-nav's live preview while dictating: dim, because the final pass is what lands in the box -->
+                <TextBlock x:Name="VoicePreview" Grid.Row="1" Grid.ColumnSpan="4" Margin="0,0,0,4" Visibility="Collapsed"
+                           Foreground="{StaticResource Dim}" FontStyle="Italic" TextWrapping="Wrap"/>
                 <!-- attachments: a chip each with its token estimate, and the total; they go out with the next send -->
-                <DockPanel Grid.ColumnSpan="3" Margin="0,0,0,6">
+                <DockPanel Grid.ColumnSpan="4" Margin="0,0,0,6">
                     <DockPanel.Style>
                         <Style TargetType="DockPanel">
                             <Style.Triggers>
@@ -598,12 +642,15 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </DockPanel>
-                <TextBox x:Name="Input" Grid.Row="1" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="36" MaxHeight="220"
+                <TextBox x:Name="Input" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="36" MaxHeight="220"
                          VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKey" VerticalContentAlignment="Top"
                          Background="Transparent" BorderThickness="0" Padding="0,2,0,2" FontSize="13"
                          Foreground="{StaticResource Text}" CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}"/>
+                <!-- dictation through voice-nav; content and tooltip are set from VoiceLink's state -->
+                <Button x:Name="Mic" Grid.Row="2" Grid.Column="1" Content="mic" Foreground="{StaticResource Dim}" Margin="8,0,0,0"
+                        VerticalAlignment="Bottom" Focusable="False" Click="OnMic"/>
                 <!-- stop shows only while a turn runs; send then says queue -->
-                <Button Grid.Row="1" Grid.Column="1" Content="stop" Foreground="{StaticResource Red}" Margin="8,0,0,0" VerticalAlignment="Bottom"
+                <Button Grid.Row="2" Grid.Column="2" Content="stop" Foreground="{StaticResource Red}" Margin="8,0,0,0" VerticalAlignment="Bottom"
                         Click="OnStop">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -616,7 +663,7 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                <Button Grid.Row="1" Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Bottom" IsEnabled="{Binding IsReady}" Click="OnSend">
+                <Button Grid.Row="2" Grid.Column="3" Margin="8,0,0,0" VerticalAlignment="Bottom" IsEnabled="{Binding IsReady}" Click="OnSend">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource Primary}">
                             <Setter Property="Content" Value="send"/>
@@ -631,22 +678,177 @@
             </Grid>
         </Border>
 
-        <!-- the widget's footer strip: figures on the left, the keys on the right -->
-        <Border Grid.Row="3" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
+        <!-- the widget's compact row for this session (FooterRow: its rules, its colours), then what the row doesn't
+             carry, the mode and the keys. Card ground so the Inset pills read as they do on the widget. -->
+        <Border Grid.Row="3" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
                 Padding="14,6,14,7">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding Status}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
-                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                <TextBlock Grid.Column="1" Text="{Binding Mode}" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
-                           Margin="14,0,0,0" TextWrapping="NoWrap"/>
-                <TextBlock Grid.Column="2" Style="{StaticResource Meta}" FontSize="9.5" Margin="14,1,0,0" TextWrapping="NoWrap"
-                           Text="enter send · shift+enter newline · shift+tab mode · esc stop"/>
-            </Grid>
+            <StackPanel>
+                <StackPanel.Resources>
+                    <BooleanToVisibilityConverter x:Key="Shown"/>
+                    <Style x:Key="Pill" TargetType="Border">
+                        <Setter Property="Background" Value="{StaticResource Inset}"/>
+                        <Setter Property="CornerRadius" Value="4"/>
+                        <Setter Property="Padding" Value="7,1,7,2"/>
+                        <Setter Property="VerticalAlignment" Value="Center"/>
+                    </Style>
+                    <Style x:Key="Fig" TargetType="TextBlock">
+                        <Setter Property="FontFamily" Value="Consolas"/>
+                        <Setter Property="VerticalAlignment" Value="Center"/>
+                    </Style>
+                </StackPanel.Resources>
+                <StackPanel DataContext="{Binding Row}" Margin="0,0,0,6">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Style.Triggers>
+                                <Trigger Property="DataContext" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <!-- one line, the window is wide enough: verdict, model, growth, cycles, heat, then parked, marks,
+                         ctx and the hour, spend and the grades -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Mark}" Foreground="{Binding MarkBrush}" Style="{StaticResource Fig}" FontSize="9"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Border Style="{StaticResource Pill}" Padding="6,1,6,2" Margin="0,0,10,0">
+                                <TextBlock Style="{StaticResource Fig}" FontSize="9.5">
+                                    <Run Text="{Binding Model, Mode=OneWay}" Foreground="{StaticResource Faint}"/><Run
+                                         Text="{Binding Effort, Mode=OneWay}" Foreground="{Binding EffortBrush, Mode=OneWay}"/>
+                                </TextBlock>
+                            </Border>
+                            <Grid VerticalAlignment="Center">
+                                <TextBlock Text="  -" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="9"
+                                           Visibility="{Binding SparkEmpty, Converter={StaticResource Shown}}"/>
+                                <ItemsControl ItemsSource="{Binding Spark}" Height="13">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Width="{Binding Width}" Height="{Binding Height}" Background="{Binding Fill}" CornerRadius="1"
+                                                    VerticalAlignment="Bottom" Margin="0,0,2,0">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Live}" Value="True">
+                                                                <DataTrigger.EnterActions>
+                                                                    <BeginStoryboard>
+                                                                        <Storyboard>
+                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.35"
+                                                                                             Duration="0:0:0.9" AutoReverse="True" RepeatBehavior="Forever"/>
+                                                                        </Storyboard>
+                                                                    </BeginStoryboard>
+                                                                </DataTrigger.EnterActions>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Grid>
+                            <TextBlock Text="{Binding Growth}" Foreground="{Binding GrowthBrush}" Style="{StaticResource Fig}"
+                                       FontSize="9.5" Margin="2,0,8,0"/>
+                            <Border Style="{StaticResource Pill}" Margin="0,0,10,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="cycles" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="8" Margin="0,1,6,0"/>
+                                    <TextBlock Text="{Binding Cycles}" Foreground="{StaticResource Dim}" Style="{StaticResource Fig}" FontSize="10.5"/>
+                                    <TextBlock Text="{Binding Pokes}" Foreground="{StaticResource Blue}" Style="{StaticResource Fig}" FontSize="9.5" Margin="5,0,0,0"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="{Binding Heat}" Foreground="{Binding HeatBrush}" Style="{StaticResource Fig}"
+                                       FontSize="9.5" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="3" Orientation="Horizontal">
+                            <TextBlock Text="PARKED" Foreground="{Binding ParkedBrush}" Style="{StaticResource Fig}" FontSize="9"
+                                       FontWeight="Bold" Margin="7,0,0,0" Visibility="{Binding Parked, Converter={StaticResource Shown}}"/>
+                            <Border Style="{StaticResource Pill}" Margin="7,0,0,0" Visibility="{Binding HasState, Converter={StaticResource Shown}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding MarksLeft}" Foreground="{StaticResource Blue}" Style="{StaticResource Fig}" FontSize="11"/>
+                                    <TextBlock Text="{Binding MarksSpent}" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="11"/>
+                                    <TextBlock Text="B" Foreground="{StaticResource Red}" Style="{StaticResource Fig}" FontSize="11.5" FontWeight="Bold"
+                                               Margin="5,0,0,0" Visibility="{Binding Blocked, Converter={StaticResource Shown}}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Pill}" Margin="7,0,0,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="ctx" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="8" Margin="0,1,5,0"/>
+                                    <TextBlock Text="{Binding Ctx}" Foreground="{Binding CtxBrush}" Style="{StaticResource Fig}" FontSize="11.5" Margin="0,0,8,0"/>
+                                    <TextBlock Text="⏱" Foreground="{StaticResource Faint}" FontFamily="Segoe UI Symbol, Segoe UI, Consolas" FontSize="10"
+                                               VerticalAlignment="Center" Margin="0,1,6,0"/>
+                                    <TextBlock Text="{Binding Clock}" Foreground="{Binding ClockBrush}" FontSize="11.5"
+                                               MinWidth="30" TextAlignment="Right">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Fig}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Cold}" Value="True">
+                                                        <Setter Property="FontWeight" Value="Bold"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Pill}" Margin="7,0,0,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="spend" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="8" Margin="0,1,7,0"/>
+                                    <Grid Width="66" Height="6" Margin="0,0,7,0" VerticalAlignment="Center">
+                                        <Border Background="{StaticResource Track}" CornerRadius="3"/>
+                                        <Border Background="{Binding SpendBrush}" CornerRadius="3" RenderTransformOrigin="0,0.5">
+                                            <Border.RenderTransform>
+                                                <ScaleTransform ScaleX="{Binding SpendFill}"/>
+                                            </Border.RenderTransform>
+                                        </Border>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Yellow}"
+                                                Margin="{x:Static local:FooterRow.TickOkAt}" Opacity="{Binding TickOk}"/>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Orange}"
+                                                Margin="{x:Static local:FooterRow.TickWatchAt}" Opacity="{Binding TickWatch}"/>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Red}"
+                                                Margin="{x:Static local:FooterRow.TickHeavyAt}" Opacity="{Binding TickHeavy}"/>
+                                    </Grid>
+                                    <TextBlock Text="{Binding Spend}" Foreground="{StaticResource Dim}" Style="{StaticResource Fig}" FontSize="10.5"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Pill}" Padding="7,0,7,1" Margin="7,0,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                                <ItemsControl ItemsSource="{Binding Grades}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Letter}" Foreground="{Binding Fill}" FontFamily="Consolas" FontSize="10.5"
+                                                       FontWeight="SemiBold" Margin="0,0,5,0"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+                <!-- line 2: what the row doesn't carry, the mode, the keys -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding Status}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
+                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Mode}" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
+                               Margin="14,0,0,0" TextWrapping="NoWrap"/>
+                    <TextBlock Grid.Column="2" Style="{StaticResource Meta}" FontSize="9.5" Margin="14,1,0,0" TextWrapping="NoWrap"
+                               Text="enter send · shift+enter newline · shift+tab mode · esc stop"/>
+                </Grid>
+            </StackPanel>
         </Border>
     </Grid>
 </UserControl>

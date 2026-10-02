@@ -31,7 +31,15 @@ public partial class SessionView : UserControl
             _scroller = (ScrollViewer?)Transcript.Template.FindName("Scroller", Transcript);
             _scroller?.ScrollToEnd();
             Input.Focus();
+            UnhookVoice(); // Loaded can fire again on re-parenting
+            VoiceLink.Shared.StateChanged += OnVoiceState;
+            VoiceLink.Shared.Text += OnVoiceText;
+            VoiceLink.Shared.Partial += OnVoicePartial;
+            ShowVoice(VoiceLink.Shared.Current, null);
         };
+        Unloaded += (_, _) => UnhookVoice();
+        PreviewMouseDown += OnMouse4;
+        PreviewMouseUp += OnMouse4;
     }
 
     SessionTab? Tab => DataContext as SessionTab;
@@ -100,6 +108,82 @@ public partial class SessionView : UserControl
         Input.Clear();
         _stick = true;
         _ = tab.SendAsync(text);
+    }
+
+    // Dictation: the mic toggles, Mouse 4 is hold-to-talk, Shift with either is Portuguese. The
+    // transcript lands at the caret and is never sent - reading it over is the point of a composer.
+    static string VoiceLang => (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? "pt" : "en";
+
+    void OnMic(object sender, RoutedEventArgs e)
+    {
+        var voice = VoiceLink.Shared;
+        _ = voice.Current == VoiceLink.State.Off ? voice.StartAsync(VoiceLang) : voice.StopAsync();
+        Input.Focus();
+    }
+
+    /// <summary>Reaches here only when voice-nav runs with --serve; its own hotkey mode takes Mouse 4
+    /// first and pastes, which lands in the focused composer just the same.</summary>
+    void OnMouse4(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.XButton1) return;
+        e.Handled = true;
+        if (e.ButtonState == MouseButtonState.Pressed)
+        {
+            CaptureMouse(); // or a release outside the window never arrives and it records on
+            if (VoiceLink.Shared.Current == VoiceLink.State.Off) _ = VoiceLink.Shared.StartAsync(VoiceLang);
+        }
+        else
+        {
+            ReleaseMouseCapture();
+            _ = VoiceLink.Shared.StopAsync(); // a tap under voice-nav's tap time cancels instead
+        }
+    }
+
+    void OnVoiceState(VoiceLink.State state, string? detail) => Dispatcher.BeginInvoke(() => ShowVoice(state, detail));
+
+    void OnVoiceText(string text) => Dispatcher.BeginInvoke(() => InsertDictation(text));
+
+    void OnVoicePartial(string text) => Dispatcher.BeginInvoke(() =>
+    {
+        if (VoiceLink.Shared.Current is not (VoiceLink.State.Recording or VoiceLink.State.Transcribing)) return;
+        VoicePreview.Text = text + " …";
+        VoicePreview.Visibility = Visibility.Visible;
+    });
+
+    void UnhookVoice()
+    {
+        VoiceLink.Shared.StateChanged -= OnVoiceState;
+        VoiceLink.Shared.Text -= OnVoiceText;
+        VoiceLink.Shared.Partial -= OnVoicePartial;
+    }
+
+    void ShowVoice(VoiceLink.State state, string? detail)
+    {
+        if (state is not (VoiceLink.State.Recording or VoiceLink.State.Transcribing))
+        {
+            VoicePreview.Visibility = Visibility.Collapsed; // the transcript has landed, or there is none
+            VoicePreview.Text = "";
+        }
+        Mic.Content = state switch
+        {
+            VoiceLink.State.Starting => "starting…",
+            VoiceLink.State.Recording => "● rec",
+            VoiceLink.State.Transcribing => "…",
+            _ => "mic",
+        };
+        Mic.Foreground = (Brush)FindResource(state == VoiceLink.State.Recording ? "Red" : "Dim");
+        Mic.ToolTip = detail ?? "dictate - click to start and stop, or hold Mouse 4; with Shift, Portuguese";
+    }
+
+    void InsertDictation(string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return;
+        var at = Input.SelectionStart;
+        if (at > 0 && !char.IsWhiteSpace(Input.Text[at - 1])) text = " " + text;
+        Input.SelectedText = text; // through the selection, so Ctrl+Z takes it back out
+        Input.Select(Input.SelectionStart + Input.SelectionLength, 0);
+        Input.Focus();
     }
 
     void OnDetach(object sender, RoutedEventArgs e)
