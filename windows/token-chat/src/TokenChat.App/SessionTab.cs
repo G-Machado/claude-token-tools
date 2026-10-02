@@ -150,6 +150,25 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         UpdateStatus();
     }
 
+    /// <summary>A poke (<see cref="PokeRequest"/>): "ok" once handed to claude, "busy" while a turn, prompt or queued message
+    /// is open (that turn renews the cache anyway), "no-tab" once claude has exited. Leaves the input, queue and attachments
+    /// alone. A renewal renders dimmed; a /park renders like any message.</summary>
+    public string Poke(string text)
+    {
+        if (_exitNoted || _disposed) return "no-tab";
+        if (_session is not { AtCleanPoint: true } s || !IsReady || Queued.Count > 0) return "busy";
+        Transcript.AddUser(text, renewal: !text.StartsWith('/'));
+        _ = PokeNowAsync(s, text);
+        return "ok";
+    }
+
+    async Task PokeNowAsync(ClaudeSession s, string text)
+    {
+        try { await s.SendAsync(text); }
+        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "poke failed", ex.Message); }
+        UpdateStatus();
+    }
+
     /// <summary>The queued messages as one, oldest first, and an empty queue; null if there were none.</summary>
     public QueuedMessage? TakeQueued()
     {

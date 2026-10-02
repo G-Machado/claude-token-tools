@@ -128,4 +128,16 @@ public class TranscriptTests
         Assert.False(turn.IsError);
         Assert.StartsWith("stopped ·", turn.Summary);
     }
+
+    [Fact]
+    public void ARenewalDimsItsWholeTurnAndNothingAfter()
+    {
+        var projector = new TranscriptProjector();
+        projector.AddUser("[auto-renew] reply with only: ok", renewal: true);
+        projector.AddNote(NoteKind.Error, "inside the renewal");
+        projector.Apply(EventParser.Parse("""{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"ok","usage":{"input_tokens":1,"output_tokens":1}}"""));
+        projector.AddUser("next");
+
+        Assert.Equal([true, true, true, false], projector.Items.Select(i => i.IsRenewal));
+    }
 }

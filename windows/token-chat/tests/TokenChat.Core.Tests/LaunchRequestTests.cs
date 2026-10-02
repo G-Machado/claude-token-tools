@@ -62,4 +62,13 @@ public class LaunchRequestTests
     [InlineData("TOKEN_CHAT_CLAUDE_EXE", false)]
     [InlineData("PATH", false)]
     public void ScrubsTheSessionMarkers(string name, bool scrubbed) => Assert.Equal(scrubbed, ClaudeLauncher.IsSessionMarker(name));
+
+    /// token-poke.ps1 builds this with ConvertTo-Json: PascalCase, no Directory.
+    [Fact]
+    public void APokeFromPowerShellParsesWithNoError()
+    {
+        var r = JsonSerializer.Deserialize<LaunchRequest>("""{"Poke":{"SessionId":"7cef843d","Text":"[auto-renew: 12m left] reply with only: ok"}}""")!;
+        Assert.Equal(new PokeRequest("7cef843d", "[auto-renew: 12m left] reply with only: ok"), r.Poke);
+        Assert.Null(r.Error);
+    }
 }

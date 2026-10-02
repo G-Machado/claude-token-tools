@@ -560,6 +560,16 @@
                     <VirtualizingStackPanel/>
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemContainerStyle>
+                <!-- a poke's renewal turn keeps the cache warm; it is not there to be read -->
+                <Style TargetType="ContentPresenter">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsRenewal}" Value="True">
+                            <Setter Property="Opacity" Value="0.45"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </ItemsControl.ItemContainerStyle>
         </ItemsControl>
 
         <!-- messages sent while a turn runs: they go out together when it ends; stop hands them back to the input -->

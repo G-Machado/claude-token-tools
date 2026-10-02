@@ -39,19 +39,28 @@ static class SingleInstance
         catch (Exception ex) when (ex is TimeoutException or IOException) { return false; }
     }
 
-    /// <summary>Serves requests until the process ends. <paramref name="onRequest"/> runs on the pipe thread.</summary>
-    public static async Task ServeAsync(Action<LaunchRequest> onRequest)
+    /// <summary>Serves requests until the process ends. <paramref name="onRequest"/> runs on the pipe thread; what it
+    /// returns goes back as one line (a poke's answer), null for a launch, whose sender has already hung up.</summary>
+    public static async Task ServeAsync(Func<LaunchRequest, string?> onRequest)
     {
         while (true)
         {
-            await using var pipe = new NamedPipeServerStream(Name, PipeDirection.In, 1, PipeTransmissionMode.Byte,
+            await using var pipe = new NamedPipeServerStream(Name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             await pipe.WaitForConnectionAsync();
-            using var reader = new StreamReader(pipe);
+            using var reader = new StreamReader(pipe, leaveOpen: true);
             LaunchRequest? request = null;
             try { if (await reader.ReadLineAsync() is { } line) request = JsonSerializer.Deserialize<LaunchRequest>(line); }
             catch (Exception ex) when (ex is JsonException or IOException) { } // a broken sender; serve the next one
-            if (request is not null) onRequest(request);
+            if (request is null || onRequest(request) is not { } reply) continue;
+            try
+            {
+                await using var writer = new StreamWriter(pipe, leaveOpen: true);
+                await writer.WriteLineAsync(reply);
+                await writer.FlushAsync();
+                pipe.WaitForPipeDrain(); // closing first can drop the line before the sender reads it
+            }
+            catch (IOException) { } // the sender gave up waiting
         }
     }
 

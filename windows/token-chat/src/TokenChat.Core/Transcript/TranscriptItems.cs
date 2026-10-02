@@ -24,7 +24,13 @@ public abstract class Bindable : INotifyPropertyChanged
 }
 
 /// <summary>One row of a tab's transcript. Created and mutated on one thread (the UI's).</summary>
-public abstract class TranscriptItem : Bindable;
+public abstract class TranscriptItem : Bindable
+{
+    bool _isRenewal;
+
+    /// <summary>Part of an extension-mark renewal turn (a poke): drawn dimmed.</summary>
+    public bool IsRenewal { get => _isRenewal; set => Set(ref _isRenewal, value); }
+}
 
 public sealed class UserItem(string text, IReadOnlyList<string>? files = null) : TranscriptItem
 {

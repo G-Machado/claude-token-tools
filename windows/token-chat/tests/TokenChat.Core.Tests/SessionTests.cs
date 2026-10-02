@@ -80,6 +80,49 @@ public class SessionTests
     }
 
     [Fact]
+    public async Task EveryMainRequestRewritesTheSessionUsagePayload()
+    {
+        var dir = Directory.CreateTempSubdirectory("tc-usage-").FullName;
+        try
+        {
+            var file = new SessionUsageFile(dir);
+            await using var session = new ClaudeSession(Fixture.Replay("perm"), file);
+            var before = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            await session.HandshakeAsync(Timeout);
+            await foreach (var _ in session.Events.ReadAllAsync().WithCancellation(new CancellationTokenSource(Timeout).Token)) { }
+
+            var path = Assert.Single(Directory.GetFiles(dir));
+            Assert.Equal(file.PathFor(session.SessionId!), path);
+            var text = File.ReadAllText(path);
+            Assert.Contains($"\"total_input_tokens\":{session.Usage.Context}", text);
+            Assert.Contains($"\"requests\":{session.Usage.Requests}", text);
+            Assert.Contains("\"ttl\":\"1h\"", text);
+            var expires = (long)System.Text.Json.Nodes.JsonNode.Parse(text)!["prompt_cache"]!["expires_at"]!;
+            Assert.InRange(expires, before + 3600, DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600);
+            Assert.True(session.Usage.Requests > 0);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void TouchKeepsAPayloadLiveButNeverCreatesOne()
+    {
+        var dir = Directory.CreateTempSubdirectory("tc-usage-").FullName;
+        try
+        {
+            var file = new SessionUsageFile(dir);
+            file.Touch("s1");
+            Assert.Empty(Directory.GetFiles(dir));
+
+            file.Write("s1", "C:\\p", 1000, 1, DateTimeOffset.UtcNow);
+            File.SetLastWriteTimeUtc(file.PathFor("s1"), DateTime.UtcNow.AddMinutes(-10));
+            file.Touch("s1");
+            Assert.InRange(DateTime.UtcNow - File.GetLastWriteTimeUtc(file.PathFor("s1")), TimeSpan.Zero, TimeSpan.FromSeconds(30));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public async Task SendWritesOneUserLineAndOpensATurn()
     {
         var transport = new ReplayTransport([]);

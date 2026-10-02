@@ -22,6 +22,12 @@ public sealed class TranscriptProjector
     long? _lastPrompt;
     long _lastOutput;
     bool _interrupted; // the running turn saw the CLI's interrupt marker
+    bool _renewal; // the running turn is a poke's renewal: every row it adds, its own message to its summary, is IsRenewal
+
+    public TranscriptProjector() => Items.CollectionChanged += (_, e) =>
+    {
+        if (_renewal && e.NewItems is { } added) foreach (TranscriptItem item in added) item.IsRenewal = true;
+    };
 
     public ObservableCollection<TranscriptItem> Items { get; } = [];
 
@@ -34,9 +40,10 @@ public sealed class TranscriptProjector
     /// <summary>A file's text, or null if there is none; Write previews diff against it. Unset: every Write is a new file.</summary>
     public Func<string, string?>? ReadFile { get; init; }
 
-    /// <summary>Any message answers the ▶ asks before it, so their buttons close.</summary>
-    public void AddUser(string text, IReadOnlyList<string>? files = null)
+    /// <summary>Any message answers the ▶ asks before it, so their buttons close. renewal: a poke's, dimmed to its turn's end.</summary>
+    public void AddUser(string text, IReadOnlyList<string>? files = null, bool renewal = false)
     {
+        _renewal = renewal;
         foreach (var b in _open) b.IsClosed = true;
         _open.Clear();
         _unpriced.Clear(); // the next request's growth is mostly this message
@@ -254,6 +261,7 @@ public sealed class TranscriptProjector
         var stopped = _interrupted || r.TerminalReason?.StartsWith("aborted", StringComparison.Ordinal) == true;
         _interrupted = false;
         Items.Add(new TurnItem(r) { IsStopped = stopped });
+        _renewal = false;
     }
 
     void AddPrompt(TranscriptItem card)

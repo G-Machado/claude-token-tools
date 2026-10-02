@@ -29,7 +29,8 @@ public readonly record struct TokenUsage(long Input, long CacheWrite, long Cache
 /// <param name="LastTurn">the turn that the last result closed</param>
 /// <param name="Context">main-chain window size: prompt of the latest request, or post_tokens after a compact</param>
 /// <param name="Floor">prompt of the first main-chain request: F in the auto-handoff bar (docs/token-chat-design.md)</param>
-public sealed record UsageSnapshot(TokenUsage Session, TokenUsage Turn, TokenUsage LastTurn, long Context, long Floor);
+/// <param name="Requests">main-chain requests this process made; each one restarts the window's cache TTL</param>
+public sealed record UsageSnapshot(TokenUsage Session, TokenUsage Turn, TokenUsage LastTurn, long Context, long Floor, int Requests);
 
 /// <summary>Counts each API message once. assistant events repeat per content block and carry the
 /// message_start usage (stale output count); message_delta carries the final output. Every sighting
@@ -40,7 +41,7 @@ public sealed class UsageLedger
     readonly Dictionary<string, string> _streaming = []; // parent tool use id ("" = main) -> message id
     string? _firstMainMessage;
 
-    public UsageSnapshot Snapshot { get; private set; } = new(default, default, default, 0, 0);
+    public UsageSnapshot Snapshot { get; private set; } = new(default, default, default, 0, 0, 0);
 
     public void Apply(ClaudeEvent e)
     {
@@ -68,7 +69,7 @@ public sealed class UsageLedger
     void Record(string messageId, TokenUsage usage, string? parentToolUseId)
     {
         if (messageId.Length == 0) return;
-        var old = _messages.GetValueOrDefault(messageId);
+        var seen = _messages.TryGetValue(messageId, out var old);
         var merged = TokenUsage.Max(old, usage);
         _messages[messageId] = merged;
         var growth = merged - old;
@@ -79,6 +80,7 @@ public sealed class UsageLedger
             Turn = Snapshot.Turn + growth,
             Context = parentToolUseId is null ? merged.Prompt : Snapshot.Context,
             Floor = messageId == _firstMainMessage ? merged.Prompt : Snapshot.Floor,
+            Requests = parentToolUseId is null && !seen ? Snapshot.Requests + 1 : Snapshot.Requests,
         };
     }
 }

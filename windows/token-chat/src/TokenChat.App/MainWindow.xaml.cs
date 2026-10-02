@@ -67,27 +67,31 @@ public partial class MainWindow : Window
     void OnClose(object sender, RoutedEventArgs e) => Close();
 
     /// <summary>A launch, this process's or one forwarded by a later launch: come to the front, then focus the tab already
-    /// holding the session, or open one.</summary>
-    public void Handle(LaunchRequest r)
+    /// holding the session, or open one. A poke goes to its tab without raising the window, and its answer is returned for
+    /// the pipe; null for everything else.</summary>
+    public string? Handle(LaunchRequest r)
     {
+        if (r.Poke is { } poke)
+            return _tabs.FirstOrDefault(t => t.SessionId == poke.SessionId) is { } tab ? tab.Poke(poke.Text) : "no-tab";
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();
         if (r.Error is { } error)
         {
             MessageBox.Show(this, error, "token-chat", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            return null;
         }
         if (r.ResumeSessionId is { } sid && _tabs.FirstOrDefault(t => t.SessionId == sid) is { } open)
         {
             Tabs.SelectedItem = open;
             Start.Visibility = Visibility.Collapsed;
-            return;
+            return null;
         }
         if (r.Preview is { } fixtures)
             foreach (var fixture in fixtures)
                 Show(new SessionTab(new LaunchOptions { WorkingDirectory = Path.GetDirectoryName(fixture)! },
                     replay: new ReplayTransport(File.ReadLines(fixture).Where(l => l.Length > 0).ToList(), holdOpen: true)));
         else if (r.Directory is { } directory) Open(directory, r.ResumeSessionId, r.Lite, r.Model, r.Effort, r.Prompt);
+        return null;
     }
 
     public void Open(string directory) => Open(directory, null, false, null, null, null);
