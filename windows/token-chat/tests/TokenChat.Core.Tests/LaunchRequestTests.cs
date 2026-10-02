@@ -34,6 +34,16 @@ public class LaunchRequestTests
     public void NoArgumentsMeansTheStartScreen() => Assert.Equal(new LaunchRequest(null), LaunchRequest.Parse([]));
 
     [Fact]
+    public void PreviewRepeatsForATabPerFixture()
+    {
+        var a = Path.GetTempFileName();
+        var r = LaunchRequest.Parse(["--preview", a, "--preview", "missing.jsonl"]);
+        Assert.Equal([a, Path.GetFullPath("missing.jsonl")], r.Preview!);
+        Assert.Contains("--preview: no file", r.Error);
+        File.Delete(a);
+    }
+
+    [Fact]
     public void ResumeWithoutADirectoryIsAnError() =>
         Assert.Contains("needs the session's directory", LaunchRequest.Parse(["--resume", "abc"]).Error);
 

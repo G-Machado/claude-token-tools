@@ -21,11 +21,15 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TabItem">
-                        <Border x:Name="B" Cursor="Hand" CornerRadius="6,6,0,0" BorderThickness="1,1,1,0"
-                                Padding="8,5,4,6" Margin="0,0,3,0"
-                                Background="{StaticResource Ghost}" BorderBrush="{StaticResource Ghost}">
-                            <ContentPresenter ContentSource="Header"/>
-                        </Border>
+                        <!-- the project's colour along the top edge, inset clear of the rounded corners -->
+                        <Grid Cursor="Hand" Margin="0,0,3,0">
+                            <Border x:Name="B" CornerRadius="6,6,0,0" BorderThickness="1,1,1,0" Padding="8,5,4,6"
+                                    Background="{StaticResource Ghost}" BorderBrush="{StaticResource Ghost}">
+                                <ContentPresenter ContentSource="Header"/>
+                            </Border>
+                            <Border Height="3" VerticalAlignment="Top" Margin="6,0" CornerRadius="0,0,1.5,1.5"
+                                    Background="{Binding ProjectBrush}"/>
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>

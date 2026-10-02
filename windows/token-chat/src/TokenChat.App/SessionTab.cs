@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Windows.Media;
 using System.Windows.Threading;
 using TokenChat.Core;
 using TokenChat.Core.Protocol;
@@ -16,6 +17,18 @@ namespace TokenChat.App;
 public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 {
     static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Project colours: hues no state uses (the dot's green, blue and red; the question card's yellow).
+    /// violet, pink, teal, lime, fuchsia, sand.</summary>
+    static readonly Brush[] ProjectBrushes =
+        [.. new[] { "#A78BFA", "#F472B6", "#2DD4BF", "#A3E635", "#D946EF", "#CBB994" }.Select(Frozen)];
+
+    static Brush Frozen(string hex)
+    {
+        var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        b.Freeze();
+        return b;
+    }
 
     readonly ConcurrentQueue<ClaudeEvent> _inbox = new();
     readonly DispatcherTimer _render;
@@ -38,6 +51,8 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         _replay = replay;
         var name = Path.GetFileName(options.WorkingDirectory.TrimEnd('\\', '/'));
         Title = options.Profile == Profile.Lite ? name + " · lite" : name;
+        ProjectKey = Project.Key(options.WorkingDirectory);
+        ProjectBrush = ProjectBrushes[Project.Slot(options.WorkingDirectory, ProjectBrushes.Length)];
         _render = new DispatcherTimer(RenderInterval, DispatcherPriority.Normal, (_, _) => Drain(), Dispatcher.CurrentDispatcher);
         Attachments.CollectionChanged += (_, _) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AttachmentsTotal)));
         // The stream starts at the next turn; claude has the history, this tab does not.
@@ -52,6 +67,10 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     /// A resume keeps its id (measured 2026-10-01), so the two never disagree.</summary>
     public string? SessionId => Options.ResumeSessionId ?? _session?.SessionId;
     public string Title { get; }
+    /// <summary>Tabs of one project sit together: a new one opens after its project's last.</summary>
+    public string ProjectKey { get; }
+    /// <summary>The stripe on the tab's top edge.</summary>
+    public Brush ProjectBrush { get; }
     public TranscriptProjector Transcript { get; } = new() { ReadFile = ReadFileOrNull };
     public ObservableCollection<TranscriptItem> Items => Transcript.Items;
     public string Status { get => _status; private set => Set(ref _status, value); }

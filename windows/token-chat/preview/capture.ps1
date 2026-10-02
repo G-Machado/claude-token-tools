@@ -1,5 +1,6 @@
 # Dev loop for --preview: launch TokenChat on a fixture, PrintWindow the window to a PNG, kill it.
 # powershell -File preview/capture.ps1 -Exe <abs TokenChat.App.exe> -Fixture <abs preview/asks.jsonl> -Out <png>
+# -Fixture a.jsonl,b.jsonl opens a tab per fixture (split here: -File passes the list as one string).
 param([string]$Exe, [string]$Fixture, [string]$Out, [int]$Settle = 6000)
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
@@ -13,7 +14,8 @@ public static class Cap {
 }
 '@
 [void][Cap]::SetProcessDPIAware()
-$p = Start-Process -FilePath $Exe -ArgumentList '--preview', ('"{0}"' -f $Fixture) -PassThru
+$argv = @($Fixture -split ',' | ForEach-Object { '--preview'; '"{0}"' -f $_ })
+$p = Start-Process -FilePath $Exe -ArgumentList $argv -PassThru
 try {
   $deadline = (Get-Date).AddSeconds(20)
   while ($p.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200; $p.Refresh() }
