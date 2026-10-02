@@ -32,29 +32,31 @@ public sealed class OptionPick(string label, string? description, Action<OptionP
     }
 }
 
-/// <summary>A question list the view's QuestionStack shows one question at a time, as tabs, once stacked it won't fit
-/// the window: an AskUserQuestion card's questions, a reply's ▶ asks.</summary>
-public interface ITabbedQuestions
+/// <summary>A question in a folding list, an AskUserQuestion card's or a reply's ▶ asks: open it shows its options,
+/// folded it is one line with its answer. The first starts open; the user opens and folds any by hand.</summary>
+public interface IFoldingQuestion
 {
-    /// <summary>The view's call, made while it measures the list.</summary>
-    bool IsTabbed { get; set; }
+    bool IsExpanded { get; set; }
+    bool IsAnswered { get; }
 }
 
-static class Tabs
+static class Fold
 {
-    /// <summary>The first question after <paramref name="from"/> still unanswered, wrapping round; null once all are.</summary>
-    internal static T? NextUnanswered<T>(IReadOnlyList<T> list, T from, Func<T, bool> answered) where T : class
+    /// <summary>A pick answered <paramref name="picked"/>: fold it and open the first question after it still
+    /// unanswered, wrapping round. Once all are answered nothing opens, and the list sits folded over its answers.</summary>
+    internal static void Advance(IReadOnlyList<IFoldingQuestion> list, IFoldingQuestion picked)
     {
-        var at = list.ToList().IndexOf(from);
-        return list.Skip(at + 1).Concat(list.Take(at)).FirstOrDefault(q => !answered(q));
+        picked.IsExpanded = false;
+        var at = list.ToList().IndexOf(picked);
+        if (list.Skip(at + 1).Concat(list.Take(at)).FirstOrDefault(q => !q.IsAnswered) is { } next) next.IsExpanded = true;
     }
 }
 
 /// <summary>One question of an AskUserQuestion. Its answer is the picked labels, then any typed text, comma-joined.</summary>
-public sealed class QuestionPick : Bindable
+public sealed class QuestionPick : Bindable, IFoldingQuestion
 {
     string _other = "";
-    bool _isCurrent;
+    bool _isExpanded;
 
     internal QuestionPick(Question q, int number)
     {
@@ -68,12 +70,11 @@ public sealed class QuestionPick : Bindable
     public string Text { get; }
     public string? Header { get; }
     public bool MultiSelect { get; }
-    /// <summary>Its tab's name: the header, else "Q2".</summary>
+    /// <summary>Its pill on the folding line: the header, else "Q2".</summary>
     public string Title { get; }
     public IReadOnlyList<OptionPick> Options { get; }
     public bool IsAnswered => Answer is not null;
-    /// <summary>The tab showing while the card is tabbed.</summary>
-    public bool IsCurrent { get => _isCurrent; internal set => Set(ref _isCurrent, value); }
+    public bool IsExpanded { get => _isExpanded; set => Set(ref _isExpanded, value); }
 
     /// <summary>A typed answer. In a single-select question it replaces the picked option.</summary>
     public string Other
@@ -114,18 +115,16 @@ public sealed class QuestionPick : Bindable
 
 /// <summary>The ▶ asks that close a reply ("▶ 1 Keep the fallback? — yes / drop it"), one button group per ask.
 /// It sends "1 yes, 2 drop it", the shape the user would type. Closed once the user sends anything.</summary>
-public sealed class OpenBlock : Bindable, ITabbedQuestions
+public sealed class OpenBlock : Bindable
 {
     static readonly Regex AskLine = new(@"^\s*▶\s*(?<n>\d+)?[.):]?\s*(?<rest>.+?)\s*$");
     bool _isClosed;
-    bool _isTabbed;
-    OpenAsk? _current;
 
     OpenBlock(string body, IEnumerable<(string Number, string Text, string[] Options)> asks)
     {
         Body = body;
         Asks = asks.Select(a => new OpenAsk(this, a.Number, a.Text, a.Options)).ToList();
-        Current = Asks.FirstOrDefault();
+        if (Asks.Count > 0) Asks[0].IsExpanded = true;
     }
 
     /// <summary>The markdown without its ▶ lines: the bar is where the asks show.</summary>
@@ -133,32 +132,23 @@ public sealed class OpenBlock : Bindable, ITabbedQuestions
     public IReadOnlyList<OpenAsk> Asks { get; }
     public bool CanSend => !IsClosed && Reply is not null;
 
-    /// <summary>The view's call: the asks stacked don't fit the window, so the bar shows one at a time as tabs.</summary>
-    public bool IsTabbed { get => _isTabbed; set => Set(ref _isTabbed, value); }
-
-    public OpenAsk? Current
-    {
-        get => _current;
-        set
-        {
-            if (_current == value) return;
-            if (_current is not null) _current.IsCurrent = false;
-            _current = value;
-            if (value is not null) value.IsCurrent = true;
-            Notify(nameof(Current));
-        }
-    }
-
-    /// <summary>After a pick answers an ask, a tabbed bar moves to the next one still unanswered.</summary>
+    /// <summary>A pick that answers an ask folds it and opens the next one still unanswered.</summary>
     internal void AdvanceFrom(OpenAsk picked)
     {
-        if (IsTabbed && picked.IsAnswered && Tabs.NextUnanswered(Asks, picked, a => a.IsAnswered) is { } next) Current = next;
+        if (picked.IsAnswered) Fold.Advance(Asks, picked);
     }
 
+    /// <summary>Closing folds every ask: the bar stays as one line per ask with what was answered.</summary>
     public bool IsClosed
     {
         get => _isClosed;
-        internal set { if (Set(ref _isClosed, value)) Notify(nameof(CanSend)); }
+        internal set
+        {
+            if (!Set(ref _isClosed, value)) return;
+            Notify(nameof(CanSend));
+            if (value)
+                foreach (var a in Asks) a.IsExpanded = false;
+        }
     }
 
     /// <summary>"1 yes, 2 drop it" over the asks with an answer; null while none has one.</summary>
@@ -203,11 +193,11 @@ public sealed class OpenBlock : Bindable, ITabbedQuestions
     }
 }
 
-public sealed class OpenAsk : Bindable
+public sealed class OpenAsk : Bindable, IFoldingQuestion
 {
     readonly OpenBlock _block;
     string _other = "";
-    bool _isCurrent;
+    bool _isExpanded;
 
     internal OpenAsk(OpenBlock block, string number, string text, IEnumerable<string> options)
     {
@@ -217,7 +207,6 @@ public sealed class OpenAsk : Bindable
         var q = text.IndexOf('?');
         Lead = q < 0 ? text : text[..(q + 1)];
         Rest = q < 0 ? "" : text[(q + 1)..].Trim();
-        Title = $"{number}  {(Lead.Length <= 28 ? Lead : Lead[..27].TrimEnd() + "…")}";
         Options = options.Select(o => new OptionPick(o, null, Choose)).ToList();
     }
 
@@ -226,13 +215,10 @@ public sealed class OpenAsk : Bindable
     /// <summary>Text through its first question mark, the ask itself; <see cref="Rest"/> is what follows, shown dimmer.</summary>
     public string Lead { get; }
     public string Rest { get; }
-    /// <summary>Its tab's name: the number and the ask, clipped.</summary>
-    public string Title { get; }
     public IReadOnlyList<OptionPick> Options { get; }
     public OptionPick? Picked => Options.FirstOrDefault(o => o.IsSelected);
     public bool IsAnswered => Answer is not null;
-    /// <summary>The tab showing while the bar is tabbed.</summary>
-    public bool IsCurrent { get => _isCurrent; internal set => Set(ref _isCurrent, value); }
+    public bool IsExpanded { get => _isExpanded; set => Set(ref _isExpanded, value); }
 
     /// <summary>A typed answer. It replaces the picked option, and picking one clears it.</summary>
     public string Other
@@ -261,6 +247,7 @@ public sealed class OpenAsk : Bindable
 
     void Answered()
     {
+        Notify(nameof(Answer));
         Notify(nameof(IsAnswered));
         _block.Changed();
     }

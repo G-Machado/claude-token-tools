@@ -30,6 +30,7 @@
     <FontFamily x:Key="Ui">Segoe UI</FontFamily>
     <FontFamily x:Key="Mono">Consolas</FontFamily>
     <FontFamily x:Key="Sym">Segoe UI Symbol</FontFamily>
+    <FontFamily x:Key="Icons">Segoe MDL2 Assets</FontFamily>
 
     <!-- A 6px thumb in the card's greys and nothing else, both ways (code blocks scroll sideways).
          MinWidth/MinHeight beat the theme style's 17px system width. -->
@@ -285,40 +286,25 @@
         </Setter>
     </Style>
 
-    <!-- A tabbed question list's tab: its Title, TabTint/TabInk while showing (the card's yellow here; the ▶ bar
-         re-declares them blue), ticked green once answered. DataContext is the QuestionPick or OpenAsk.
-         Plain brushes, not <StaticResource> aliases: an alias read through DynamicResource overflowed the stack. -->
-    <SolidColorBrush x:Key="TabTint" Color="#1AFACC15"/>
-    <SolidColorBrush x:Key="TabInk" Color="#FFFACC15"/>
-    <Style x:Key="QuestionTab" TargetType="Button">
-        <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+    <!-- A folding question's line: the whole of it opens or folds the question. The list's template lays out the
+         content (chevron, number or pill, the ask, the answer); the hover ground bleeds 6px past it either side. -->
+    <Style x:Key="QuestionFold" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
         <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
-        <Setter Property="FontSize" Value="11"/>
-        <Setter Property="Margin" Value="0,0,4,0"/>
+        <Setter Property="Margin" Value="-6,0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="B" Background="Transparent" CornerRadius="4" Padding="7,2,8,3" SnapsToDevicePixels="True">
-                        <TextBlock>
-                            <Run x:Name="Tick" Text="" FontFamily="{StaticResource Sym}" Foreground="{StaticResource Green}"/><Run
-                                 Text="{Binding Title, Mode=OneTime}"/>
-                        </TextBlock>
+                    <Border x:Name="B" Background="Transparent" CornerRadius="6" Padding="6,5" SnapsToDevicePixels="True">
+                        <ContentPresenter/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
-                            <Setter Property="Foreground" Value="{StaticResource Text}"/>
                         </Trigger>
-                        <DataTrigger Binding="{Binding IsAnswered}" Value="True">
-                            <Setter TargetName="Tick" Property="Text" Value="&#x2713; "/>
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="{DynamicResource TabTint}"/>
-                            <Setter Property="Foreground" Value="{DynamicResource TabInk}"/>
-                            <Setter Property="FontWeight" Value="SemiBold"/>
-                        </DataTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

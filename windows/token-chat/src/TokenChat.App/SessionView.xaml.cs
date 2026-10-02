@@ -179,14 +179,10 @@ public partial class SessionView : UserControl
         else if (Owner<QuestionPick>(sender) is { } pick) q.AdvanceFrom(pick);
     }
 
-    void OnQuestionTab(object sender, RoutedEventArgs e)
+    /// <summary>A question's line opens or folds it, whatever the others are doing.</summary>
+    void OnFoldQuestion(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is QuestionPick pick && Owner<QuestionItem>(sender) is { } q) q.Current = pick;
-    }
-
-    void OnOpenTab(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is OpenAsk ask && Owner<OpenBlock>(sender) is { } b) b.Current = ask;
+        if ((sender as FrameworkElement)?.DataContext is IFoldingQuestion q) q.IsExpanded = !q.IsExpanded;
     }
 
     void OnSubmitAnswer(object sender, RoutedEventArgs e)
@@ -199,12 +195,15 @@ public partial class SessionView : UserControl
         if (Owner<QuestionItem>(sender) is { } q) _ = Tab?.DeclineAsync(q);
     }
 
-    /// <summary>Enter in a typed answer submits the card once every question has an answer.</summary>
+    /// <summary>Enter in a typed answer submits the card once every question has an answer; before that it folds
+    /// its question, multi-select too, and opens the next unanswered.</summary>
     void OnOtherKey(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
         e.Handled = true;
-        if (Owner<QuestionItem>(sender) is { CanSubmit: true } q) _ = Tab?.AnswerAsync(q);
+        if (Owner<QuestionItem>(sender) is not { } q) return;
+        if (q.CanSubmit) _ = Tab?.AnswerAsync(q);
+        else if (Owner<QuestionPick>(sender) is { } pick) q.AdvanceFrom(pick, done: true);
     }
 
     void OnSendOpen(object sender, RoutedEventArgs e) => SendOpen((sender as FrameworkElement)?.DataContext as OpenBlock);

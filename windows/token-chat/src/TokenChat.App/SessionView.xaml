@@ -66,134 +66,114 @@
             </Border>
         </DataTemplate>
 
-        <!-- A reply ending in ▶ asks gets a bar under it: each ask numbered, its options as chips and a box
-             to type an answer instead, and a send that types "1 yes, 2 skip" for you. The ▶ lines are
-             cut from the markdown, so once
-             anything is sent the bar stays, dimmed, as their record. -->
+        <!-- A reply ending in ▶ asks gets a bar under it: each ask numbered, folding open on its options as
+             chips and a box to type an answer instead, and a send that types "1 yes, 2 skip" for you. The ▶
+             lines are cut from the markdown, so once anything is sent the bar stays, dimmed and folded to one
+             line per ask, as their record. -->
         <DataTemplate DataType="{x:Type t:AssistantTextItem}">
             <StackPanel>
                 <md:MarkdownScrollViewer Markdown="{Binding Body}" MarkdownStyle="{StaticResource Markdown}" Margin="0,4,0,2"
                                          VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"/>
-                <Border x:Name="OpenBar" DataContext="{Binding Open}" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}"
-                        BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,2,0,6" MaxWidth="760" HorizontalAlignment="Left">
-                    <Border.Resources>
-                        <!-- BlueTint and Blue: the tabs' current colours (Theme.xaml QuestionTab) -->
-                        <SolidColorBrush x:Key="TabTint" Color="#2460A5FA"/>
-                        <SolidColorBrush x:Key="TabInk" Color="#FF60A5FA"/>
-                    </Border.Resources>
-                    <StackPanel>
-                        <!-- shown when the asks don't fit stacked: the card's rule (QuestionStack decides) -->
-                        <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="0,0,0,8" Margin="0,0,0,10">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsTabbed}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
+                <!-- the card's yellow edge: this ground showing past the inner border's 3px left margin -->
+                <Border x:Name="OpenBar" DataContext="{Binding Open}" Background="{StaticResource Yellow}" CornerRadius="6,12,12,6"
+                        Margin="0,2,0,6" MaxWidth="760" HorizontalAlignment="Left">
+                    <Border Margin="3,0,0,0" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,1,1"
+                            CornerRadius="0,6,6,0" Padding="12,10">
+                        <StackPanel>
+                            <!-- one line per ask, folded to its answer or open on its chips; a pick folds it and opens the next -->
                             <ItemsControl ItemsSource="{Binding Asks, Mode=OneTime}" Focusable="False">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate DataType="{x:Type t:OpenAsk}">
-                                        <Button Style="{StaticResource QuestionTab}" Click="OnOpenTab"/>
+                                        <StackPanel Margin="0,0,0,2">
+                                            <Button Style="{StaticResource QuestionFold}" Click="OnFoldQuestion">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock x:Name="Chevron" Text="&#xE76C;" FontFamily="{StaticResource Icons}" FontSize="10" Width="14"
+                                                               Foreground="{StaticResource Dim}" VerticalAlignment="Top" Margin="0,4,0,0"/>
+                                                    <Border Grid.Column="1" MinWidth="18" Background="{StaticResource YellowTint}" CornerRadius="4" Padding="5,1,5,2"
+                                                            VerticalAlignment="Top" Margin="0,1,9,0">
+                                                        <TextBlock Text="{Binding Number, Mode=OneTime}" FontSize="10.5" FontWeight="SemiBold"
+                                                                   Foreground="{StaticResource Yellow}" HorizontalAlignment="Center"/>
+                                                    </Border>
+                                                    <TextBlock x:Name="Ask" Grid.Column="2" Text="{Binding Lead, Mode=OneTime}" FontSize="13"
+                                                               Foreground="{StaticResource Dim}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
+                                                    <TextBlock x:Name="Answer" Grid.Column="3" FontSize="12.5" MaxWidth="240" TextTrimming="CharacterEllipsis"
+                                                               Margin="14,1,0,0"><Run Text="&#x2713; " FontFamily="{StaticResource Sym}"
+                                                               Foreground="{StaticResource Green}"/><Run Text="{Binding Answer, Mode=OneWay}"
+                                                               Foreground="{StaticResource Text}"/></TextBlock>
+                                                </Grid>
+                                            </Button>
+                                            <!-- under the ask's text, past the chevron and badge -->
+                                            <local:Reveal IsOpen="{Binding IsExpanded}">
+                                                <StackPanel Margin="41,1,0,10">
+                                                    <TextBlock x:Name="Rest" Text="{Binding Rest, Mode=OneTime}" TextWrapping="Wrap" FontSize="12.5"
+                                                               Foreground="{StaticResource Dim}" Margin="0,0,0,2"/>
+                                                    <ItemsControl x:Name="Chips" ItemsSource="{Binding Options, Mode=OneTime}" Focusable="False" Margin="0,5,0,-6">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <WrapPanel/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate DataType="{x:Type t:OptionPick}">
+                                                                <Button Style="{StaticResource ChoiceChip}" Click="OnPickOption"/>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                    <!-- the typed answer: as wide as the column, up to 360 -->
+                                                    <Grid Margin="0,6,0,0">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition MaxWidth="360"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox Text="{Binding Other, UpdateSourceTrigger=PropertyChanged}" PreviewKeyDown="OnOpenOtherKey"
+                                                                 Background="{StaticResource Card}" BorderBrush="{StaticResource Track}" Foreground="{StaticResource Text}"
+                                                                 CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}" Padding="7,3" FontSize="12"/>
+                                                        <TextBlock x:Name="Hint" Text="or type an answer" FontSize="12" Foreground="{StaticResource Faint}"
+                                                                   Margin="10,4,0,0" IsHitTestVisible="False" Visibility="Collapsed"/>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </local:Reveal>
+                                        </StackPanel>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding Options.Count}" Value="0">
+                                                <Setter TargetName="Chips" Property="Visibility" Value="Collapsed"/>
+                                                <Setter TargetName="Hint" Property="Text" Value="type an answer"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Other}" Value="">
+                                                <Setter TargetName="Hint" Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Rest}" Value="">
+                                                <Setter TargetName="Rest" Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsAnswered}" Value="False">
+                                                <Setter TargetName="Answer" Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                            <!-- open: the whole ask, and its chips say the answer -->
+                                            <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                <Setter TargetName="Chevron" Property="Text" Value="&#xE70D;"/>
+                                                <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Text}"/>
+                                                <Setter TargetName="Ask" Property="TextWrapping" Value="Wrap"/>
+                                                <Setter TargetName="Ask" Property="TextTrimming" Value="None"/>
+                                                <Setter TargetName="Answer" Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </Border>
-                        <ItemsControl ItemsSource="{Binding Asks, Mode=OneTime}" Focusable="False">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <local:QuestionStack Slack="0"/>
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate DataType="{x:Type t:OpenAsk}">
-                                    <Grid x:Name="Row" Margin="0,0,0,10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition/>
-                                        </Grid.ColumnDefinitions>
-                                        <Border Width="18" Height="18" CornerRadius="9" Background="{StaticResource Blue}"
-                                                VerticalAlignment="Top" Margin="0,0,9,0">
-                                            <TextBlock Text="{Binding Number, Mode=OneTime}" FontFamily="{StaticResource Mono}" FontSize="10.5"
-                                                       FontWeight="Bold" Foreground="{StaticResource Card}"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
-                                        <StackPanel Grid.Column="1">
-                                            <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{StaticResource Text}"><Run
-                                                       Text="{Binding Lead, Mode=OneTime}"/><Run Text="{Binding Rest, Mode=OneTime, StringFormat=' {0}'}"
-                                                       Foreground="{StaticResource Dim}"/></TextBlock>
-                                            <ItemsControl x:Name="Chips" ItemsSource="{Binding Options, Mode=OneTime}" Focusable="False" Margin="0,7,0,-6">
-                                                <ItemsControl.ItemsPanel>
-                                                    <ItemsPanelTemplate>
-                                                        <WrapPanel/>
-                                                    </ItemsPanelTemplate>
-                                                </ItemsControl.ItemsPanel>
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate DataType="{x:Type t:OptionPick}">
-                                                        <Button Style="{StaticResource ChoiceChip}" Click="OnPickOption"/>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                            <!-- the typed answer: as wide as the column, up to 360 -->
-                                            <Grid x:Name="Typed" Margin="0,6,0,0">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition MaxWidth="360"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <TextBox x:Name="Box" Text="{Binding Other, UpdateSourceTrigger=PropertyChanged}" PreviewKeyDown="OnOpenOtherKey"
-                                                         Background="{StaticResource Card}" BorderBrush="{StaticResource Track}" Foreground="{StaticResource Text}"
-                                                         CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}" Padding="7,3" FontSize="12"/>
-                                                <TextBlock x:Name="Hint" Text="or type an answer" FontSize="12" Foreground="{StaticResource Faint}"
-                                                           Margin="10,4,0,0" IsHitTestVisible="False" Visibility="Collapsed"/>
-                                            </Grid>
-                                        </StackPanel>
-                                    </Grid>
-                                    <DataTemplate.Triggers>
-                                        <DataTrigger Binding="{Binding Options.Count}" Value="0">
-                                            <Setter TargetName="Chips" Property="Visibility" Value="Collapsed"/>
-                                            <Setter TargetName="Hint" Property="Text" Value="type an answer"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding Other}" Value="">
-                                            <Setter TargetName="Hint" Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                        <!-- sent: keep what was typed as the record, drop empty boxes; the nearest ItemsControl up is the block's ask list -->
-                                        <DataTrigger Binding="{Binding DataContext.IsClosed, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True">
-                                            <Setter TargetName="Box" Property="IsReadOnly" Value="True"/>
-                                        </DataTrigger>
-                                        <MultiDataTrigger>
-                                            <MultiDataTrigger.Conditions>
-                                                <Condition Binding="{Binding DataContext.IsClosed, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True"/>
-                                                <Condition Binding="{Binding Other}" Value=""/>
-                                            </MultiDataTrigger.Conditions>
-                                            <Setter TargetName="Typed" Property="Visibility" Value="Collapsed"/>
-                                        </MultiDataTrigger>
-                                        <!-- tabbed: only the current ask shows -->
-                                        <MultiDataTrigger>
-                                            <MultiDataTrigger.Conditions>
-                                                <Condition Binding="{Binding DataContext.IsTabbed, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True"/>
-                                                <Condition Binding="{Binding IsCurrent}" Value="False"/>
-                                            </MultiDataTrigger.Conditions>
-                                            <Setter TargetName="Row" Property="Visibility" Value="Hidden"/>
-                                        </MultiDataTrigger>
-                                    </DataTemplate.Triggers>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <!-- under the asks' text, past the badges -->
-                        <StackPanel x:Name="SendRow" Orientation="Horizontal" Margin="27,0,0,0">
-                            <Button Style="{StaticResource Filled}" Content="send" IsEnabled="{Binding CanSend}" Click="OnSendOpen"/>
-                            <TextBlock Text="{Binding Reply, Mode=OneWay}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
-                                       VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            <!-- under the asks' text, past the chevrons and badges -->
+                            <StackPanel x:Name="SendRow" Orientation="Horizontal" Margin="41,6,0,0">
+                                <Button Style="{StaticResource Filled}" Content="send" IsEnabled="{Binding CanSend}" Click="OnSendOpen"/>
+                                <TextBlock Text="{Binding Reply, Mode=OneWay}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
+                                           VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            </StackPanel>
                         </StackPanel>
-                    </StackPanel>
+                    </Border>
                 </Border>
             </StackPanel>
             <DataTemplate.Triggers>
@@ -203,6 +183,7 @@
                 <DataTrigger Binding="{Binding Open.IsClosed}" Value="True">
                     <Setter TargetName="OpenBar" Property="Opacity" Value="0.55"/>
                     <Setter TargetName="OpenBar" Property="IsHitTestVisible" Value="False"/>
+                    <Setter TargetName="OpenBar" Property="Background" Value="{StaticResource Line}"/>
                     <Setter TargetName="SendRow" Property="Visibility" Value="Collapsed"/>
                 </DataTrigger>
             </DataTemplate.Triggers>
@@ -354,7 +335,7 @@
             </DataTemplate.Triggers>
         </DataTemplate>
 
-        <!-- AskUserQuestion: a card with a yellow left edge, one block per question, an option per row.
+        <!-- AskUserQuestion: a card with a yellow left edge, one folding line per question, an option per row.
              A lone single-select question answers on the first click; typing replaces a single pick.
              Once settled it folds to one outcome line and the edge greys. -->
         <DataTemplate DataType="{x:Type t:QuestionItem}">
@@ -364,84 +345,79 @@
                 <Border Margin="3,0,0,0" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,1,1"
                         CornerRadius="0,6,6,0" Padding="14,11,14,12">
                     <StackPanel>
-                        <!-- shown when the questions don't fit stacked (QuestionStack decides) -->
-                        <Border x:Name="Tabs" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="0,0,0,8"
-                                Margin="0,0,0,12" Visibility="Collapsed">
-                            <ItemsControl ItemsSource="{Binding Questions, Mode=OneTime}" Focusable="False">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="{x:Type t:QuestionPick}">
-                                        <Button Style="{StaticResource QuestionTab}" Click="OnQuestionTab"/>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </Border>
+                        <!-- one line per question, folded to its answer or open on its options; a pick folds it and
+                             opens the next unanswered -->
                         <ItemsControl x:Name="List" ItemsSource="{Binding Questions, Mode=OneTime}" Focusable="False">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <local:QuestionStack/>
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate DataType="{x:Type t:QuestionPick}">
-                                    <StackPanel x:Name="Q" Margin="0,0,0,14">
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                            <Border x:Name="Pill" Background="{StaticResource YellowTint}" CornerRadius="4" Padding="6,1,6,2"
-                                                    Margin="0,0,8,0">
-                                                <TextBlock Text="{Binding Header, Mode=OneTime}" FontSize="10.5" FontWeight="SemiBold"
-                                                           Foreground="{StaticResource Yellow}"/>
-                                            </Border>
-                                            <TextBlock x:Name="Multi" Text="pick any" FontSize="10.5" Foreground="{StaticResource Faint}"
-                                                       VerticalAlignment="Center" Visibility="Collapsed"/>
-                                        </StackPanel>
-                                        <TextBlock Text="{Binding Text, Mode=OneTime}" TextWrapping="Wrap" FontSize="13.5"
-                                                   Foreground="{StaticResource Text}" Margin="0,0,0,8"/>
-                                        <ItemsControl ItemsSource="{Binding Options, Mode=OneTime}" Focusable="False">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate DataType="{x:Type t:OptionPick}">
-                                                    <Button Style="{StaticResource ChoiceRow}" Click="OnPickOption"/>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                        <Grid>
-                                            <TextBox Text="{Binding Other, UpdateSourceTrigger=PropertyChanged}" PreviewKeyDown="OnOtherKey"
-                                                     Background="{StaticResource Card}" BorderBrush="{StaticResource Track}" Foreground="{StaticResource Text}"
-                                                     CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}" Padding="8,5" FontSize="12.5"/>
-                                            <TextBlock x:Name="Hint" Text="or type an answer" FontSize="12.5" Foreground="{StaticResource Faint}"
-                                                       Margin="11,6,0,0" IsHitTestVisible="False" Visibility="Collapsed"/>
-                                        </Grid>
+                                    <StackPanel Margin="0,0,0,2">
+                                        <Button Style="{StaticResource QuestionFold}" Click="OnFoldQuestion">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="Chevron" Text="&#xE76C;" FontFamily="{StaticResource Icons}" FontSize="10" Width="14"
+                                                           Foreground="{StaticResource Dim}" VerticalAlignment="Top" Margin="0,5,0,0"/>
+                                                <Border Grid.Column="1" Background="{StaticResource YellowTint}" CornerRadius="4" Padding="6,1,6,2"
+                                                        Margin="0,1,8,0" VerticalAlignment="Top">
+                                                    <TextBlock Text="{Binding Title, Mode=OneTime}" FontSize="10.5" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource Yellow}"/>
+                                                </Border>
+                                                <TextBlock x:Name="Ask" Grid.Column="2" Text="{Binding Text, Mode=OneTime}" FontSize="13.5"
+                                                           Foreground="{StaticResource Dim}" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock x:Name="Answer" Grid.Column="3" FontSize="12.5" MaxWidth="260" TextTrimming="CharacterEllipsis"
+                                                           Margin="14,1,0,0"><Run Text="&#x2713; " FontFamily="{StaticResource Sym}"
+                                                           Foreground="{StaticResource Green}"/><Run Text="{Binding Answer, Mode=OneWay}"
+                                                           Foreground="{StaticResource Text}"/></TextBlock>
+                                            </Grid>
+                                        </Button>
+                                        <local:Reveal IsOpen="{Binding IsExpanded}">
+                                            <StackPanel Margin="14,6,0,12">
+                                                <TextBlock x:Name="Multi" Text="pick any" FontSize="10.5" Foreground="{StaticResource Faint}"
+                                                           Margin="0,0,0,5" Visibility="Collapsed"/>
+                                                <ItemsControl ItemsSource="{Binding Options, Mode=OneTime}" Focusable="False">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate DataType="{x:Type t:OptionPick}">
+                                                            <Button Style="{StaticResource ChoiceRow}" Click="OnPickOption"/>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <Grid>
+                                                    <TextBox Text="{Binding Other, UpdateSourceTrigger=PropertyChanged}" PreviewKeyDown="OnOtherKey"
+                                                             Background="{StaticResource Card}" BorderBrush="{StaticResource Track}" Foreground="{StaticResource Text}"
+                                                             CaretBrush="{StaticResource Blue}" SelectionBrush="{StaticResource Blue}" Padding="8,5" FontSize="12.5"/>
+                                                    <TextBlock x:Name="Hint" Text="or type an answer" FontSize="12.5" Foreground="{StaticResource Faint}"
+                                                               Margin="11,6,0,0" IsHitTestVisible="False" Visibility="Collapsed"/>
+                                                </Grid>
+                                            </StackPanel>
+                                        </local:Reveal>
                                     </StackPanel>
                                     <DataTemplate.Triggers>
                                         <DataTrigger Binding="{Binding MultiSelect}" Value="True">
                                             <Setter TargetName="Multi" Property="Visibility" Value="Visible"/>
                                         </DataTrigger>
-                                        <DataTrigger Binding="{Binding Header}" Value="{x:Null}">
-                                            <Setter TargetName="Pill" Property="Visibility" Value="Collapsed"/>
-                                        </DataTrigger>
                                         <DataTrigger Binding="{Binding Other}" Value="">
                                             <Setter TargetName="Hint" Property="Visibility" Value="Visible"/>
                                         </DataTrigger>
-                                        <!-- tabbed: the tab carries the header, and only the current question shows;
-                                             the nearest ItemsControl up is the card's question list -->
-                                        <DataTrigger Binding="{Binding DataContext.IsTabbed, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True">
-                                            <Setter TargetName="Pill" Property="Visibility" Value="Collapsed"/>
+                                        <DataTrigger Binding="{Binding IsAnswered}" Value="False">
+                                            <Setter TargetName="Answer" Property="Visibility" Value="Collapsed"/>
                                         </DataTrigger>
-                                        <MultiDataTrigger>
-                                            <MultiDataTrigger.Conditions>
-                                                <Condition Binding="{Binding DataContext.IsTabbed, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True"/>
-                                                <Condition Binding="{Binding IsCurrent}" Value="False"/>
-                                            </MultiDataTrigger.Conditions>
-                                            <Setter TargetName="Q" Property="Visibility" Value="Hidden"/>
-                                        </MultiDataTrigger>
+                                        <!-- open: the whole question, and its options say the answer -->
+                                        <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                            <Setter TargetName="Chevron" Property="Text" Value="&#xE70D;"/>
+                                            <Setter TargetName="Ask" Property="Foreground" Value="{StaticResource Text}"/>
+                                            <Setter TargetName="Ask" Property="TextWrapping" Value="Wrap"/>
+                                            <Setter TargetName="Ask" Property="TextTrimming" Value="None"/>
+                                            <Setter TargetName="Answer" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
                                     </DataTemplate.Triggers>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <StackPanel x:Name="Buttons" Orientation="Horizontal">
+                        <StackPanel x:Name="Buttons" Orientation="Horizontal" Margin="0,8,0,0">
                             <Button Content="Submit" Style="{StaticResource Filled}" Margin="0,0,6,0" IsEnabled="{Binding CanSubmit}" Click="OnSubmitAnswer"/>
                             <Button Content="Decline" Style="{StaticResource Quiet}" Click="OnDeclineQuestion"/>
                         </StackPanel>
@@ -451,18 +427,13 @@
                 </Border>
             </Border>
             <DataTemplate.Triggers>
-                <DataTrigger Binding="{Binding IsTabbed}" Value="True">
-                    <Setter TargetName="Tabs" Property="Visibility" Value="Visible"/>
-                </DataTrigger>
                 <DataTrigger Binding="{Binding State}" Value="Answered">
-                    <Setter TargetName="Tabs" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="List" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
                     <Setter TargetName="Accent" Property="Background" Value="{StaticResource Line}"/>
                 </DataTrigger>
                 <DataTrigger Binding="{Binding State}" Value="Declined">
-                    <Setter TargetName="Tabs" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="List" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>
@@ -470,7 +441,6 @@
                     <Setter TargetName="Accent" Property="Background" Value="{StaticResource Line}"/>
                 </DataTrigger>
                 <DataTrigger Binding="{Binding State}" Value="Cancelled">
-                    <Setter TargetName="Tabs" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="List" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Decided" Property="Visibility" Value="Visible"/>

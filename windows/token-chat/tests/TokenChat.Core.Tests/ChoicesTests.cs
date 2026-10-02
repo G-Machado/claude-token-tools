@@ -114,45 +114,46 @@ public class ChoicesTests
         Assert.Equal(("Pick a name", ""), (plain.Lead, plain.Rest));
     }
 
+    /// <summary>"+--": the first open, the others folded.</summary>
+    static string Open(IEnumerable<IFoldingQuestion> list) => string.Concat(list.Select(q => q.IsExpanded ? '+' : '-'));
+
     [Fact]
-    public void TabbedCardMovesToTheNextUnansweredQuestionAfterAPick()
+    public void CardFoldsAPickedQuestionAndOpensTheNextUnanswered()
     {
         var q = Ask(Q("Colour?", false, "Red", "Blue"), Q("Checks?", true, "test", "lint"), Q("Name?", false, "a", "b"));
-        Assert.Equal(("Q1", true), (q.Questions[0].Title, q.Questions[0].IsCurrent));
+        Assert.Equal("Q1", q.Questions[0].Title);
+        Assert.Equal("+--", Open(q.Questions));
         q.Questions[0].Options[0].Pick();
         q.AdvanceFrom(q.Questions[0]);
-        Assert.Same(q.Questions[0], q.Current); // stacked: nothing moves
-        q.IsTabbed = true;
-        q.AdvanceFrom(q.Questions[0]);
-        Assert.Same(q.Questions[1], q.Current);
-        Assert.False(q.Questions[0].IsCurrent);
+        Assert.Equal("-+-", Open(q.Questions));
         q.Questions[1].Options[0].Pick();
         q.AdvanceFrom(q.Questions[1]);
-        Assert.Same(q.Questions[1], q.Current); // multi-select waits for more picks
-        q.Current = q.Questions[2];
+        Assert.Equal("-+-", Open(q.Questions)); // multi-select waits for more picks
+        q.Questions[2].IsExpanded = true; // by hand: several may be open
         q.Questions[2].Options[1].Pick();
         q.AdvanceFrom(q.Questions[2]);
-        Assert.Same(q.Questions[2], q.Current); // all answered: stays for Submit
+        Assert.Equal("-+-", Open(q.Questions)); // the next unanswered: none, the multi has a pick
+        q.AdvanceFrom(q.Questions[1], done: true); // Enter in its box
+        Assert.Equal("---", Open(q.Questions)); // all answered: folded over the answers for Submit
     }
 
     [Fact]
-    public void TabbedBarMovesToTheNextUnansweredAskOnAPick()
+    public void BarFoldsAPickedAskAndOpensTheNextUnanswered()
     {
         var b = OpenBlock.Parse("▶ 1 Go? — go / stop\n▶ 2 Anything else?\n▶ 3 Commit now? — yes / hold")!;
-        Assert.Equal(("1  Go?", true), (b.Asks[0].Title, b.Asks[0].IsCurrent));
+        Assert.Equal("+--", Open(b.Asks));
+        var answers = new List<string?>();
+        b.Asks[0].PropertyChanged += (_, e) => { if (e.PropertyName == nameof(OpenAsk.Answer)) answers.Add(b.Asks[0].Answer); };
         b.Asks[0].Options[0].Pick();
-        Assert.Same(b.Asks[0], b.Current); // stacked: nothing moves
-        b.Asks[0].Options[0].Pick(); // a second click clears it
-        Assert.False(b.Asks[0].IsAnswered);
-        b.IsTabbed = true;
-        b.Asks[0].Options[1].Pick();
-        Assert.Same(b.Asks[1], b.Current);
+        Assert.Equal("-+-", Open(b.Asks));
+        b.Asks[0].IsExpanded = true;
+        b.Asks[0].Options[0].Pick(); // a second click clears it, and folds nothing
+        Assert.Equal("++-", Open(b.Asks));
+        Assert.Equal(new string?[] { "go", null }, answers); // the folded line shows the answer as it changes
         b.Asks[1].Other = "no";
-        Assert.Same(b.Asks[1], b.Current); // typing doesn't move: the box would lose focus mid-word
-        b.Current = b.Asks[2];
+        Assert.Equal("++-", Open(b.Asks)); // typing doesn't fold: the box would lose focus mid-word
         b.Asks[2].Options[0].Pick();
-        Assert.Same(b.Asks[2], b.Current); // all answered: stays for send
-        Assert.True(b.Asks[1].IsAnswered);
+        Assert.Equal("++-", Open(b.Asks)); // wraps round to the first unanswered, already open
     }
 
     [Fact]
@@ -191,8 +192,10 @@ public class ChoicesTests
         var block = Assert.Single(projector.Items.OfType<AssistantTextItem>()).Open!;
         block.Asks[0].Options[0].Pick();
         Assert.True(block.CanSend);
+        block.Asks[0].IsExpanded = true;
         projector.AddUser(block.Reply!);
         Assert.True(block.IsClosed);
+        Assert.False(block.Asks[0].IsExpanded); // folded: one line per ask is the record
         Assert.False(block.CanSend);
         block.Asks[0].Options[1].Pick();
         Assert.Equal("1 go", block.Reply); // closed blocks ignore picks

@@ -110,44 +110,27 @@ public sealed class PermissionItem(PermissionRequest request, string summary) : 
 public enum QuestionState { Pending, Answered, Declined, Cancelled }
 
 /// <summary>An AskUserQuestion: pick an option per question, or type an answer, then submit.</summary>
-public sealed class QuestionItem : TranscriptItem, ITabbedQuestions
+public sealed class QuestionItem : TranscriptItem
 {
     QuestionState _state;
-    QuestionPick? _current;
-    bool _isTabbed;
 
     public QuestionItem(QuestionRequest request)
     {
         Request = request;
         Questions = request.Questions.Select((q, i) => new QuestionPick(q, i + 1)).ToList();
         foreach (var q in Questions) q.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(QuestionPick.Answer)) Notify(nameof(CanSubmit)); };
-        Current = Questions.FirstOrDefault();
+        if (Questions.Count > 0) Questions[0].IsExpanded = true;
     }
 
     public QuestionRequest Request { get; }
     public IReadOnlyList<QuestionPick> Questions { get; }
 
-    /// <summary>The view's call: the questions stacked don't fit the window, so the card shows one at a time as tabs.</summary>
-    public bool IsTabbed { get => _isTabbed; set => Set(ref _isTabbed, value); }
-
-    public QuestionPick? Current
+    /// <summary>A pick that answers a single-select question folds it and opens the next one still unanswered. A
+    /// multi-select one stays open for more picks, until <paramref name="done"/> (Enter in its box) says it is finished.</summary>
+    public void AdvanceFrom(QuestionPick picked, bool done = false)
     {
-        get => _current;
-        set
-        {
-            if (_current == value) return;
-            if (_current is not null) _current.IsCurrent = false;
-            _current = value;
-            if (value is not null) value.IsCurrent = true;
-            Notify(nameof(Current));
-        }
-    }
-
-    /// <summary>After a pick answers a single-select question, a tabbed card moves to the next one still unanswered.</summary>
-    public void AdvanceFrom(QuestionPick picked)
-    {
-        if (!IsTabbed || picked.MultiSelect || !picked.IsAnswered) return;
-        if (Tabs.NextUnanswered(Questions, picked, q => q.IsAnswered) is { } next) Current = next;
+        if ((picked.MultiSelect && !done) || !picked.IsAnswered) return;
+        Fold.Advance(Questions, picked);
     }
     public bool CanSubmit => State == QuestionState.Pending && Questions.All(q => q.Answer is not null);
     /// <summary>A lone single-select question is answered by its first click.</summary>
