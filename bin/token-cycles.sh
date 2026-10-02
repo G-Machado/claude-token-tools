@@ -859,8 +859,14 @@ fi
 # ~29.5k cold start and were the entire "half-floor" minimum in --stats, and
 # every one counted as a one-cycle session. Same reasoning as TOKEN_RENEWAL:
 # keep them out of the history everything is measured from.
+#
+# Except TokenChat's: it is headless too, but it is where the work happens, and
+# dropping its rows left every chat tab at cycles 0 with no growth split. It
+# marks its claude.exe with TOKEN_CHAT=1 (ClaudeLauncher.Build), which the hook
+# inherits.
 ROWHIST="$HIST"
-if [ "$MODE" = "alert" ] && head -c 20000 "$F" 2>/dev/null | grep -q '"entrypoint":"sdk-cli"'; then
+if [ "$MODE" = "alert" ] && [ "${TOKEN_CHAT:-}" != 1 ] &&
+   head -c 20000 "$F" 2>/dev/null | grep -q '"entrypoint":"sdk-cli"'; then
   ROWHIST=""
 fi
 

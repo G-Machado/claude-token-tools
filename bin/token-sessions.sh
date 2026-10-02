@@ -1302,7 +1302,11 @@ prompt_of() {
     # it as a bare STRING. Matching only the array - which this did until
     # 2026-09-02 - meant every terminal session was named "new-session" and
     # titled "(no prompt yet)", silently, for as long as it lived.
-    /"origin":\{"kind":"human"\}/ {
+    #
+    # A third: a prompt sent over stream-json (TokenChat, claude -p) has no
+    # origin at all, it says promptSource sdk. Tool results and interrupts
+    # carry neither marker. Missing it titled every TokenChat tab the same way.
+    /"origin":\{"kind":"human"\}|"promptSource":"sdk"/ {
       if (match($0, /"content":\[\{"type":"text","text":"/)) { }
       else if (match($0, /"message":\{"role":"user","content":"/)) { }
       else next
