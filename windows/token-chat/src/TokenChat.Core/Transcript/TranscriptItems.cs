@@ -57,8 +57,13 @@ public sealed class AssistantTextItem : StreamedItem
 {
     OpenBlock? _open;
 
+    public AssistantTextItem() => PropertyChanged += (_, e) => { if (e.PropertyName == nameof(Text)) Notify(nameof(Body)); };
+
     /// <summary>The reply's ▶ asks as buttons; parsed once the text stops streaming, null if it has none.</summary>
-    public OpenBlock? Open { get => _open; internal set => Set(ref _open, value); }
+    public OpenBlock? Open { get => _open; internal set { if (Set(ref _open, value)) Notify(nameof(Body)); } }
+
+    /// <summary>What the markdown shows: the reply without its ▶ lines once the bar has them, so each ask shows once.</summary>
+    public string Body => _open?.Body ?? Text;
 }
 
 public sealed class ThinkingItem : StreamedItem;
@@ -108,22 +113,49 @@ public enum QuestionState { Pending, Answered, Declined, Cancelled }
 public sealed class QuestionItem : TranscriptItem
 {
     QuestionState _state;
+    QuestionPick? _current;
+    bool _isTabbed;
 
     public QuestionItem(QuestionRequest request)
     {
         Request = request;
-        Questions = request.Questions.Select(q => new QuestionPick(q)).ToList();
+        Questions = request.Questions.Select((q, i) => new QuestionPick(q, i + 1)).ToList();
         foreach (var q in Questions) q.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(QuestionPick.Answer)) Notify(nameof(CanSubmit)); };
+        Current = Questions.FirstOrDefault();
     }
 
     public QuestionRequest Request { get; }
     public IReadOnlyList<QuestionPick> Questions { get; }
+
+    /// <summary>The view's call: the questions stacked don't fit the window, so the card shows one at a time as tabs.</summary>
+    public bool IsTabbed { get => _isTabbed; set => Set(ref _isTabbed, value); }
+
+    public QuestionPick? Current
+    {
+        get => _current;
+        set
+        {
+            if (_current == value) return;
+            if (_current is not null) _current.IsCurrent = false;
+            _current = value;
+            if (value is not null) value.IsCurrent = true;
+            Notify(nameof(Current));
+        }
+    }
+
+    /// <summary>After a pick answers a single-select question, a tabbed card moves to the next one still unanswered.</summary>
+    public void AdvanceFrom(QuestionPick picked)
+    {
+        if (!IsTabbed || picked.MultiSelect || !picked.IsAnswered) return;
+        var at = Questions.ToList().IndexOf(picked);
+        if (Questions.Skip(at + 1).Concat(Questions.Take(at)).FirstOrDefault(q => !q.IsAnswered) is { } next) Current = next;
+    }
     public bool CanSubmit => State == QuestionState.Pending && Questions.All(q => q.Answer is not null);
     /// <summary>A lone single-select question is answered by its first click.</summary>
     public bool AnswersOnPick => Questions is [{ MultiSelect: false }];
     public string? Outcome => State switch
     {
-        QuestionState.Answered => "answered · " + string.Join(" · ", Questions.Select(q => q.Answer)),
+        QuestionState.Answered => "✓ " + string.Join("  ·  ", Questions.Select(q => q.Header is { Length: > 0 } h ? $"{h}: {q.Answer}" : q.Answer)),
         QuestionState.Declined => "declined",
         QuestionState.Cancelled => "cancelled",
         _ => null,

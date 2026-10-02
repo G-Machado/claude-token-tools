@@ -174,7 +174,14 @@ public partial class SessionView : UserControl
     {
         if ((sender as FrameworkElement)?.DataContext is not OptionPick o) return;
         o.Pick();
-        if (Owner<QuestionItem>(sender) is { AnswersOnPick: true, CanSubmit: true } q) _ = Tab?.AnswerAsync(q);
+        if (Owner<QuestionItem>(sender) is not { } q) return;
+        if (q is { AnswersOnPick: true, CanSubmit: true }) _ = Tab?.AnswerAsync(q);
+        else if (Owner<QuestionPick>(sender) is { } pick) q.AdvanceFrom(pick);
+    }
+
+    void OnQuestionTab(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is QuestionPick pick && Owner<QuestionItem>(sender) is { } q) q.Current = pick;
     }
 
     void OnSubmitAnswer(object sender, RoutedEventArgs e)
@@ -195,9 +202,19 @@ public partial class SessionView : UserControl
         if (Owner<QuestionItem>(sender) is { CanSubmit: true } q) _ = Tab?.AnswerAsync(q);
     }
 
-    void OnSendOpen(object sender, RoutedEventArgs e)
+    void OnSendOpen(object sender, RoutedEventArgs e) => SendOpen((sender as FrameworkElement)?.DataContext as OpenBlock);
+
+    /// <summary>Enter in a ▶ ask's typed answer sends the bar, as its send button would.</summary>
+    void OnOpenOtherKey(object sender, KeyEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not OpenBlock { CanSend: true, Reply: { } reply } || Tab is not { IsReady: true } tab) return;
+        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
+        e.Handled = true;
+        SendOpen(Owner<OpenBlock>(sender));
+    }
+
+    void SendOpen(OpenBlock? block)
+    {
+        if (block is not { CanSend: true, Reply: { } reply } || Tab is not { IsReady: true } tab) return;
         _stick = true;
         _ = tab.SendAsync(reply);
     }
