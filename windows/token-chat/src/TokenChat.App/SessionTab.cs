@@ -27,12 +27,15 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     bool _isReady, _exitNoted, _disposed;
     volatile bool _readerDone;
     string? _firstPrompt;
+    readonly IClaudeTransport? _replay;
 
-    /// <summary>firstPrompt goes out as the first message once claude is up: the Parked tab's /unpark.</summary>
-    public SessionTab(LaunchOptions options, string? firstPrompt = null)
+    /// <summary>firstPrompt goes out as the first message once claude is up: the Parked tab's /unpark. replay stands in
+    /// for claude (--preview).</summary>
+    public SessionTab(LaunchOptions options, string? firstPrompt = null, IClaudeTransport? replay = null)
     {
         Options = options;
         _firstPrompt = firstPrompt;
+        _replay = replay;
         var name = Path.GetFileName(options.WorkingDirectory.TrimEnd('\\', '/'));
         Title = options.Profile == Profile.Lite ? name + " · lite" : name;
         _render = new DispatcherTimer(RenderInterval, DispatcherPriority.Normal, (_, _) => Drain(), Dispatcher.CurrentDispatcher);
@@ -62,7 +65,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     {
         try
         {
-            var session = await ClaudeSession.StartAsync(Options);
+            var session = await (_replay is { } replay ? ClaudeSession.StartAsync(replay) : ClaudeSession.StartAsync(Options));
             if (_disposed)
             {
                 await session.DisposeAsync();

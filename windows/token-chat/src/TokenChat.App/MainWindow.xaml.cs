@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using TokenChat.Core;
 
@@ -57,21 +58,25 @@ public partial class MainWindow : Window
             Start.Visibility = Visibility.Collapsed;
             return;
         }
-        if (r.Directory is { } directory) Open(directory, r.ResumeSessionId, r.Lite, r.Model, r.Effort, r.Prompt);
+        if (r.Preview is { } fixture) Show(new SessionTab(new LaunchOptions { WorkingDirectory = Path.GetDirectoryName(fixture)! },
+            replay: new ReplayTransport(File.ReadLines(fixture).Where(l => l.Length > 0).ToList(), holdOpen: true)));
+        else if (r.Directory is { } directory) Open(directory, r.ResumeSessionId, r.Lite, r.Model, r.Effort, r.Prompt);
     }
 
     public void Open(string directory) => Open(directory, null, false, null, null, null);
 
-    void Open(string directory, string? resume, bool lite, string? model, string? effort, string? prompt)
-    {
-        var tab = new SessionTab(new LaunchOptions
+    void Open(string directory, string? resume, bool lite, string? model, string? effort, string? prompt) =>
+        Show(new SessionTab(new LaunchOptions
         {
             WorkingDirectory = directory,
             Profile = lite || LiteBox.IsChecked == true ? Profile.Lite : Profile.Full,
             Model = model ?? Model,
             Effort = effort,
             ResumeSessionId = resume,
-        }, prompt);
+        }, prompt));
+
+    void Show(SessionTab tab)
+    {
         _tabs.Add(tab);
         Tabs.SelectedItem = tab;
         Start.Visibility = Visibility.Collapsed;

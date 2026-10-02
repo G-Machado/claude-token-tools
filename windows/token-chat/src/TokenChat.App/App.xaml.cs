@@ -6,16 +6,17 @@ using TokenChat.Core;
 
 namespace TokenChat.App;
 
-/// <summary>TokenChat.App [--lite] [--model name] [--effort level] [--resume sid] [--prompt text] [directory]: opens a tab
-/// in directory (resuming sid, sending text first), else the start screen. With TokenChat already running, the request goes to that window and this process exits.</summary>
+/// <summary>TokenChat.App [--lite] [--model name] [--effort level] [--resume sid] [--prompt text] [--preview fixture.jsonl]
+/// [directory]: opens a tab in directory (resuming sid, sending text first), or a replay of fixture, else the start screen. With TokenChat already running, the request goes to that window and this process exits.</summary>
 public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         var request = LaunchRequest.Parse(e.Args);
-        var first = SingleInstance.Claim();
-        if (!first && SingleInstance.Forward(request))
+        // --preview runs beside a live TokenChat: it neither claims the instance nor forwards to it.
+        var first = request.Preview is null && SingleInstance.Claim();
+        if (request.Preview is null && !first && SingleInstance.Forward(request))
         {
             Shutdown();
             return;

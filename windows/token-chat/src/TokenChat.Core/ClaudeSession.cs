@@ -39,9 +39,13 @@ public sealed class ClaudeSession : IAsyncDisposable
     /// <summary>No turn running and no permission or question waiting: safe to hand off, compact or park.</summary>
     public bool AtCleanPoint => Volatile.Read(ref _turnsInFlight) == 0 && _openPrompts.IsEmpty;
 
-    public static async Task<ClaudeSession> StartAsync(LaunchOptions options, TimeSpan? handshakeTimeout = null, CancellationToken ct = default)
+    public static Task<ClaudeSession> StartAsync(LaunchOptions options, TimeSpan? handshakeTimeout = null, CancellationToken ct = default) =>
+        StartAsync(new ProcessTransport(ClaudeLauncher.Build(options)), handshakeTimeout, ct);
+
+    /// <summary>Over any transport: a <see cref="ReplayTransport"/> for --preview.</summary>
+    public static async Task<ClaudeSession> StartAsync(IClaudeTransport transport, TimeSpan? handshakeTimeout = null, CancellationToken ct = default)
     {
-        var session = new ClaudeSession(new ProcessTransport(ClaudeLauncher.Build(options)));
+        var session = new ClaudeSession(transport);
         try
         {
             await session.HandshakeAsync(handshakeTimeout ?? TimeSpan.FromSeconds(60), ct);

@@ -10,7 +10,7 @@ public class SessionTests
     [Fact]
     public async Task HandshakeIsSentFirstAndExposesAccount()
     {
-        var transport = ReplayTransport.FromFixture("perm");
+        var transport = Fixture.Replay("perm");
         await using var session = new ClaudeSession(transport);
         await session.HandshakeAsync(Timeout);
 
@@ -23,7 +23,7 @@ public class SessionTests
     [Fact]
     public async Task PermissionAndQuestionAreAnsweredAndCleanPointFollows()
     {
-        var transport = ReplayTransport.FromFixture("perm");
+        var transport = Fixture.Replay("perm");
         await using var session = new ClaudeSession(transport);
         await session.HandshakeAsync(Timeout);
 
@@ -58,7 +58,7 @@ public class SessionTests
     [Fact]
     public async Task InterruptCompletesOnControlResponse()
     {
-        var transport = ReplayTransport.FromFixture("full");
+        var transport = Fixture.Replay("full");
         await using var session = new ClaudeSession(transport);
         session.Start();
         await session.InterruptAsync().WaitAsync(Timeout);
