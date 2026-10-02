@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using TokenChat.Core;
 
 namespace TokenChat.App;
@@ -13,11 +14,14 @@ namespace TokenChat.App;
 public partial class MainWindow : Window
 {
     readonly ObservableCollection<SessionTab> _tabs = [];
-    // Drag to reorder: past the system threshold the pressed tab trades places with a neighbour once the pointer crosses
-    // that neighbour's midpoint, so the tab itself marks where it will land. Esc puts it back.
+    // Drag to reorder: past the system threshold the pressed tab follows the pointer along the strip and trades places
+    // with a neighbour once the pointer crosses that neighbour's midpoint; the tabs it passes slide to their new places,
+    // and on release it settles into its own. Esc puts it back.
+    static readonly Duration Slide = TimeSpan.FromMilliseconds(150);
     SessionTab? _pressed;
     Point _pressedAt;
     int _pressedFrom;
+    double _grab;
     bool _dragging;
 
     public MainWindow()
@@ -35,7 +39,7 @@ public partial class MainWindow : Window
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key != Key.Escape || !_dragging || _pressed is not { } tab) return;
-            _tabs.Move(_tabs.IndexOf(tab), _pressedFrom);
+            MoveTab(_tabs.IndexOf(tab), _pressedFrom, held: null);
             EndDrag();
             e.Handled = true;
         };
@@ -144,29 +148,73 @@ public partial class MainWindow : Window
             EndDrag();
             return;
         }
-        var at = e.GetPosition(Tabs);
+        if (Container(tab) is not { } dragged || VisualTreeHelper.GetParent(dragged) is not Panel strip) return;
+        var at = e.GetPosition(strip);
         if (!_dragging)
         {
-            if (Math.Abs(at.X - _pressedAt.X) < SystemParameters.MinimumHorizontalDragDistance
-                && Math.Abs(at.Y - _pressedAt.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+            var moved = e.GetPosition(Tabs) - _pressedAt;
+            if (Math.Abs(moved.X) < SystemParameters.MinimumHorizontalDragDistance
+                && Math.Abs(moved.Y) < SystemParameters.MinimumVerticalDragDistance) return;
             if (!(_dragging = Tabs.CaptureMouse())) return;
+            _grab = Tabs.TranslatePoint(_pressedAt, strip).X - Slot(dragged).Left;
+            Panel.SetZIndex(dragged, 1);
         }
-        // The tab under the pointer's x, in the row nearest its y: off the strip still drags, a wrapped strip picks a row.
+        // The tab laid out under the pointer's x, in the row nearest its y: off the strip still drags, a wrapped strip
+        // picks a row. Layout slots, not drawn positions, so tabs mid-slide do not shift the target.
         var from = _tabs.IndexOf(tab);
         var (over, overBox, gap) = (-1, Rect.Empty, double.MaxValue);
         for (var i = 0; i < _tabs.Count; i++)
         {
-            if (Tabs.ItemContainerGenerator.ContainerFromIndex(i) is not TabItem { IsVisible: true } item) continue;
-            var box = item.TransformToAncestor(Tabs).TransformBounds(new Rect(item.RenderSize));
+            if (Container(_tabs[i]) is not { IsVisible: true } item) continue;
+            var box = Slot(item);
             var dy = Math.Abs(at.Y - (box.Top + box.Height / 2));
             if (at.X >= box.Left && at.X < box.Right && dy < gap) (over, overBox, gap) = (i, box, dy);
         }
-        if (over < 0 || over == from) return;
         var mid = overBox.Left + overBox.Width / 2;
-        if (over > from ? at.X <= mid : at.X >= mid) return;
-        _tabs.Move(from, over);
-        Tabs.UpdateLayout(); // the next move measures against the new order
+        if (over >= 0 && over != from && (over > from ? at.X > mid : at.X < mid)) MoveTab(from, over, held: tab);
+        Follow(tab, at.X);
     }
+
+    /// <summary>The dragged tab drawn under the pointer, held between the strip's first and last tab.</summary>
+    void Follow(SessionTab tab, double x)
+    {
+        if (Container(tab) is not { } item || Container(_tabs[0]) is not { } first || Container(_tabs[^1]) is not { } last) return;
+        var slot = Slot(item);
+        var left = Math.Clamp(x - _grab, Slot(first).Left, Math.Max(Slot(first).Left, Slot(last).Right - slot.Width));
+        var shift = Shift(item);
+        shift.BeginAnimation(TranslateTransform.XProperty, null);
+        shift.X = left - slot.Left;
+    }
+
+    /// <summary>Moves a tab; every tab whose place changed, but the one held under the pointer, slides there from where it
+    /// was drawn.</summary>
+    void MoveTab(int from, int to, SessionTab? held)
+    {
+        var drawn = _tabs.Select(Container).OfType<TabItem>().ToDictionary(t => t, t => Slot(t).Left + Shift(t).X);
+        _tabs.Move(from, to);
+        Tabs.UpdateLayout(); // the next move measures against the new order
+        foreach (var (item, was) in drawn)
+            if (item.DataContext != held && Math.Abs(was - Slot(item).Left) > 0.5) SlideHome(item, was - Slot(item).Left);
+    }
+
+    static void SlideHome(UIElement item, double from)
+    {
+        var shift = Shift(item);
+        shift.X = 0;
+        shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(from, 0, Slide)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.Stop,
+        });
+    }
+
+    static TranslateTransform Shift(UIElement e) =>
+        e.RenderTransform as TranslateTransform ?? (TranslateTransform)(e.RenderTransform = new TranslateTransform());
+
+    /// <summary>Where layout put the tab in the strip, whatever it is drawn shifted by.</summary>
+    static Rect Slot(TabItem t) => new((Point)VisualTreeHelper.GetOffset(t), t.RenderSize);
+
+    TabItem? Container(SessionTab t) => Tabs.ItemContainerGenerator.ContainerFromItem(t) as TabItem;
 
     void OnTabRelease(object sender, MouseButtonEventArgs e)
     {
@@ -176,10 +224,14 @@ public partial class MainWindow : Window
 
     void EndDrag()
     {
+        var tab = _pressed;
         _pressed = null;
         if (!_dragging) return;
         _dragging = false;
         Tabs.ReleaseMouseCapture();
+        if (tab is null || Container(tab) is not { } item) return;
+        item.ClearValue(Panel.ZIndexProperty);
+        SlideHome(item, Shift(item).X);
     }
 
     async void OnCloseTab(object sender, RoutedEventArgs e)
