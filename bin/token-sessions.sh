@@ -153,13 +153,13 @@
 #            column means the same thing on every row: how much NEW material
 #            that cycle pulled in. Red over the growth budget, amber over the
 #            output budget. Select the row for med / last / peak.
-#   grade    spend / churn / control for that session, against what this
-#            machine actually does. Spend is measured ABOVE the ~63k cold floor,
-#            because that write is not a choice - undiscounted it ran 254k per
-#            cycle at cycle 1 and decayed to 168k by cycle 8 on identical work,
-#            which was a whole letter of penalty for being young. The same
-#            three, aggregated over the last seven days, sit under the summary
-#            box as OVERALL - that line is the one to watch across weeks.
+#   grade    held / short / churn / control for that session, on per-session
+#            ladders fitted 2026-10-01: held is the share of its spend paid past
+#            the cut bar, short the share that went on the cold floor write,
+#            churn the share that rewrote a lapsed window, control over-budget
+#            prompts per cycle. The same four, aggregated over the last seven
+#            days, sit under the summary box as OVERALL - that line is the one
+#            to watch across weeks.
 #   cache    minutes of prompt-cache life left, and nothing else. It used to
 #            draw a bar beside the number, which is two renderings of one
 #            scalar taking the width of a real column; the number is the half
@@ -2777,7 +2777,7 @@ emit_json() {
   # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
     return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
-  # Held and short grade the aggregates only (7d, per day), never one session:
+  # The aggregate ladders (7d, per day; one session gets sheldgrade for held):
   # the share of spend past the cut bar, and the share spent in sessions that
   # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
   # on C (held 45 percent, short 12.5).
@@ -3259,6 +3259,16 @@ emit_json() {
   printf '}\n'
 }
 
+# Per-session held for the listing, as "sid=pct" pairs. The JSON pass makes the
+# same row test over $HF; render has no history of its own, so it gets this.
+sess_held() {
+  hist_rows 2>/dev/null | awk -F, -v rpc="$RPC" -v cut="$CUT_K" '
+    NR > 1 && $2 != "" && $8 != "renew" && $8 != "park" {
+      w = $4 * 5 + $5 * 2 + $6 * (rpc + 0 > 0 ? rpc : 2.3) * 0.1
+      pw[$2] += w; if ($6 + 0 > cut * 1000) hb[$2] += w }
+    END { for (k in pw) if (pw[k] > 0) printf "%s=%.1f ", k, hb[k] * 100 / pw[k] }'
+}
+
 render() {
   local snap="$1" sel="$2" cols="$COLS"
 
@@ -3293,7 +3303,7 @@ render() {
     -v OLL_CALLS="$OLL_CALLS" -v CL_OUT_7D="$CL_OUT_7D" \
     -v hud="$HUD" -v filt="${FILTER:-}" -v srtname="${SORTNAME:-}" \
     -v keytab="$KEYTAB" -v flash="${FLASH:-}" -v ollrows="$OLL_SESSIONS" \
-    -v upd="${UPDNEW:-}" -v tsver="$TSVER" '
+    -v upd="${UPDNEW:-}" -v tsver="$TSVER" -v sheld="$(sess_held)" '
   function rep(s, n,   i, o) { for (i = 0; i < n; i++) o = o s; return o }
   # Letter-spaced, for the panel titles only. A readout names itself with
   # room around its letters; a paragraph does not. length() stays honest
@@ -3446,7 +3456,9 @@ render() {
 
   BEGIN {
     split(sparks, SP, " ")
-    STOP = " the and are was were being does did done get got has had have this" \
+    nsh = split(sheld, SHP, " ")
+    for (j = 1; j <= nsh; j++) { split(SHP[j], kv, "="); HELD[kv[1]] = kv[2] + 0 }
+    STOP =" the and are was were being does did done get got has had have this" \
            " that these those you your our their its lets let not now new old" \
            " for from with into over under about again still just very much more" \
            " most some any all what which who how why when where want need please" \
@@ -3490,11 +3502,11 @@ render() {
     # Heat is the newest column and the first to go, because it is the only one
     # here that is also stated in words on the line underneath every row.
     HW = (avail >= 88) ? 6 : 0
-    # Three letters and a gutter, and only where there is room that the name
+    # Four letters and a gutter, and only where there is room that the name
     # column was not going to use anyway. On a narrow terminal the grades stay
     # in the detail panel rather than squeezing every other column - a summary
     # is the first thing that should give way, not the thing being summarised.
-    GW = (avail >= 90) ? 6 : 0        # three letters, and room for the header
+    GW = (avail >= 90) ? 6 : 0        # four letters, and room for the header
     # The cost column gives way in two steps rather than one: the split bar
     # first, then the figure. The figure is the part that survives, because
     # "1.4M" is the whole point and the bar is the gloss on it.
@@ -4405,7 +4417,7 @@ render() {
   # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
     return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
-  # Held and short grade the aggregates only (7d, per day), never one session:
+  # The aggregate ladders (7d, per day; one session gets sheldgrade for held):
   # the share of spend past the cut bar, and the share spent in sessions that
   # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
   # on C (held 45 percent, short 12.5).
@@ -4413,28 +4425,24 @@ render() {
     return (v <= 10) ? "A" : (v <= 25) ? "B" : (v <= 45) ? "C" : (v <= 65) ? "D" : "E" }
   function shortgrade(v) {
     return (v <= 5) ? "A" : (v <= 10) ? "B" : (v <= 20) ? "C" : (v <= 35) ? "D" : "E" }
+  # Per session, the same ladder the JSON pass uses - see the note there.
+  function sheldgrade(v) {
+    return (v <= 10) ? "A" : (v <= 40) ? "B" : (v <= 65) ? "C" : (v <= 80) ? "D" : "E" }
 
   function gcol(g) {
     return (g == "A") ? GRN : (g == "B") ? GRN : (g == "C") ? BLU : (g == "D") ? YEL : RED }
 
-  # Fills g[1..3] with the letters and g[4..6] with the figures behind them, so
-  # the table cell and the panel line can never disagree about a session.
-  function gvals(i, g,   wtd, ctl, dis, chn) {
+  # Fills g[1..4] with the letters - held, short, churn, control - and g[5..7]
+  # with the figures behind the first three, so the table cell and the panel
+  # line can never disagree about a session.
+  function gvals(i, g,   wtd, ctl, chn) {
     if (cy[i] < 2) return 0
     wtd = ot[i] * 5 + rt[i] * 2 + cx[i] * RPC * 0.1 * cy[i]
     if (wtd <= 0) return 0
-    # Spend is graded ABOVE the floor. The ~FLOOR of cache write every session
-    # pays before it has done anything is not a choice, and dividing that
-    # one-off by a small cycle count is why a young session graded a letter
-    # worse than identical work later on: measured across 91 sessions the raw
-    # figure ran 254k/cycle at cycle 1 and settled at 168k by cycle 8, purely
-    # from the amortisation. Discounted it sits at 135-150k throughout, so the
-    # letter now says how the session was DRIVEN rather than how old it is.
-    # Production is deliberately NOT rebased - it measured flat (35% at cycle 1,
-    # 35% at cycle 8), so there was nothing there to correct.
-    dis = wtd - FLOOR * 2000
-    if (dis < wtd * 0.15) dis = wtd * 0.15
-    g[4] = dis / cy[i] / 1000
+    g[5] = HELD[sid[i]] + 0
+    # Short: the cold floor write as a share of the session - the one cost a
+    # session pays for being opened, which only more cycles amortise.
+    g[6] = FLOOR * 2000 * 100 / wtd; if (g[6] > 100) g[6] = 100
     # Churn share: of everything this session paid, the part that went on
     # rewriting a window rather than on new material or on output. gt[] is the
     # growth already accumulated per session, so the rest of the re-cache is
@@ -4442,31 +4450,33 @@ render() {
     # because cycle 1 is defined to have zero growth and would otherwise land
     # the entire opening window in churn.
     chn = rt[i] - gt[i] - FLOOR * 1000; if (chn < 0) chn = 0
-    g[5] = chn * 2 * 100 / wtd
+    g[7] = chn * 2 * 100 / wtd
     ctl  = fb[i] / cy[i]
-    g[1] = grade(g[4], p_wpc, 1)
-    g[2] = churngrade(g[5])
-    g[3] = ctlgrade(ctl)
+    g[1] = sheldgrade(g[5])
+    g[2] = shortgrade(g[6])
+    g[3] = churngrade(g[7])
+    g[4] = ctlgrade(ctl)
     return 1 }
 
-  # The table cell: three letters, spend / churn / control, in that order.
+  # The table cell: four letters, held / short / churn / control, in that order.
   function gcell(i,   g) {
     if (GW == 0) return ""
     if (!gvals(i, g)) return rep(" ", GW)
     # Padded by glyph count, like the sparkline: the colour escapes are bytes
     # the terminal never shows, so anything downstream that counts them lands
     # the rest of the row in the wrong column.
-    if (al[i] == 0) return sprintf("%s%s%s%s%s", GRY, g[1] g[2] g[3], R, "", rep(" ", GW - 3))
-    return sprintf("%s%s%s%s%s%s%s%s", gcol(g[1]), g[1], gcol(g[2]), g[2], gcol(g[3]), g[3], R, rep(" ", GW - 3)) }
+    if (al[i] == 0) return sprintf("%s%s%s%s", GRY, g[1] g[2] g[3] g[4], R, rep(" ", GW - 4))
+    return sprintf("%s%s%s%s%s%s%s%s%s%s", gcol(g[1]), g[1], gcol(g[2]), g[2], gcol(g[3]), g[3], \
+                   gcol(g[4]), g[4], R, rep(" ", GW - 4)) }
 
-  function scorecard(i,   g, wpc, prod, g1, g2, g3, s) {
+  function scorecard(i,   g, s) {
     if (!gvals(i, g)) return ""
-    wpc = g[4]; prod = g[5]; g1 = g[1]; g2 = g[2]; g3 = g[3]
     # Kept short on purpose - this line sits inside a panel 74 columns wide on
-    # a default terminal, and it is the only one here carrying three figures.
-    s = sprintf("%s%s%s spend %s%.0fk%s%s/cyc (med %.0f)%s  ", gcol(g1), g1, R, B, wpc, R, D, p_wpc, R)
-    s = s sprintf("%s%s%s churn %s%.0f%%%s%s (med %.0f)%s  ", gcol(g2), g2, R, B, prod, R, D, p_churn, R)
-    s = s sprintf("%s%s%s control %s%db %dgap%s", gcol(g3), g3, R, B, fb[i], gp[i], R)
+    # a default terminal, and it is the only one here carrying four figures.
+    s = sprintf("%s%s%s held %s%.0f%%%s  ", gcol(g[1]), g[1], R, B, g[5], R)
+    s = s sprintf("%s%s%s short %s%.0f%%%s  ", gcol(g[2]), g[2], R, B, g[6], R)
+    s = s sprintf("%s%s%s churn %s%.0f%%%s  ", gcol(g[3]), g[3], R, B, g[7], R)
+    s = s sprintf("%s%s%s control %s%db %dgap%s", gcol(g[4]), g[4], R, B, fb[i], gp[i], R)
     return s }
 
   # cmp: the short-window panel. The three-row header box becomes one row and
@@ -4972,7 +4982,7 @@ analytics() {
   # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
     return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
-  # Held and short grade the aggregates only (7d, per day), never one session:
+  # The aggregate ladders (7d, per day; one session gets sheldgrade for held):
   # the share of spend past the cut bar, and the share spent in sessions that
   # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
   # on C (held 45 percent, short 12.5).
