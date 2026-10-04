@@ -731,7 +731,21 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="{Binding Mark}" Foreground="{Binding MarkBrush}" Style="{StaticResource Fig}" FontSize="9"/>
                         <StackPanel Grid.Column="1" Orientation="Horizontal">
-                            <Border Style="{StaticResource Pill}" Padding="6,1,6,2" Margin="0,0,10,0">
+                            <!-- click for the effort menu: /effort for this session only -->
+                            <Border Style="{StaticResource Pill}" Padding="6,1,6,2" Margin="0,0,10,0" Cursor="Hand"
+                                    ToolTip="Effort for this session - click to change" MouseLeftButtonUp="OnEffortMenu">
+                                <Border.ContextMenu>
+                                    <ContextMenu Opened="OnEffortMenuOpened" Background="{StaticResource Card}"
+                                                 Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}">
+                                        <MenuItem Header="low" Click="OnEffortPick"/>
+                                        <MenuItem Header="medium" Click="OnEffortPick"/>
+                                        <MenuItem Header="high" Click="OnEffortPick"/>
+                                        <MenuItem Header="xhigh" Click="OnEffortPick"/>
+                                        <MenuItem Header="max" Click="OnEffortPick"/>
+                                        <Separator/>
+                                        <MenuItem Header="auto" Click="OnEffortPick"/>
+                                    </ContextMenu>
+                                </Border.ContextMenu>
                                 <TextBlock Style="{StaticResource Fig}" FontSize="9.5">
                                     <Run Text="{Binding Model, Mode=OneWay}" Foreground="{StaticResource Faint}"/><Run
                                          Text="{Binding Effort, Mode=OneWay}" Foreground="{Binding EffortBrush, Mode=OneWay}"/>

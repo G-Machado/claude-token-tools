@@ -140,4 +140,22 @@ public class TranscriptTests
 
         Assert.Equal([true, true, true, false], projector.Items.Select(i => i.IsRenewal));
     }
+
+    [Fact]
+    public void ALocalCommandShowsItsResultOnce()
+    {
+        // stream-json /effort: no request, nothing streamed, the answer only in the result
+        const string result = """{"type":"result","subtype":"success","is_error":false,"num_turns":0,"result":"Set effort level to medium (this session only)","usage":{"input_tokens":0,"output_tokens":0}}""";
+        var projector = new TranscriptProjector();
+        projector.AddUser("/effort medium");
+        projector.Apply(EventParser.Parse(result));
+        // the same answer already shown from local-command-stdout is not repeated
+        projector.Apply(EventParser.Parse("""{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set effort level to medium (this session only)</local-command-stdout>"}}"""));
+        projector.Apply(EventParser.Parse(result));
+
+        var notes = projector.Items.OfType<NoteItem>().ToList();
+        Assert.Equal(2, notes.Count);
+        Assert.All(notes, n => Assert.Equal(NoteKind.Command, n.Kind));
+        Assert.Equal("Set effort level to medium (this session only)", notes[0].Text);
+    }
 }

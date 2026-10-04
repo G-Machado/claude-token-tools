@@ -22,6 +22,7 @@ public sealed class TranscriptProjector
     long? _lastPrompt;
     long _lastOutput;
     bool _interrupted; // the running turn saw the CLI's interrupt marker
+    bool _commandShown; // the running turn's slash command output already came as local-command-stdout
     bool _renewal; // the running turn is a poke's renewal: every row it adds, its own message to its summary, is IsRenewal
 
     public TranscriptProjector() => Items.CollectionChanged += (_, e) =>
@@ -258,7 +259,10 @@ public sealed class TranscriptProjector
             AddNote(NoteKind.Warning, "Interrupted");
         }
         else if (text.StartsWith(stdout, StringComparison.Ordinal))
+        {
+            _commandShown = true;
             AddNote(NoteKind.Command, text[stdout.Length..].Replace("</local-command-stdout>", "").Trim());
+        }
         else
             AddNote(NoteKind.Info, OneLine(text, 120), text);
     }
@@ -280,6 +284,10 @@ public sealed class TranscriptProjector
         CancelPrompts(null);
         var stopped = _interrupted || r.TerminalReason?.StartsWith("aborted", StringComparison.Ordinal) == true;
         _interrupted = false;
+        // A local command (/effort, /context) over stream-json answers in the result alone: a <synthetic> assistant
+        // message the projector does not render, no request, nothing streamed.
+        if (r is { NumTurns: 0, IsError: false, Text: { Length: > 0 } said } && !_commandShown) AddNote(NoteKind.Command, said);
+        _commandShown = false;
         Items.Add(new TurnItem(r) { IsStopped = stopped });
         _renewal = false;
     }

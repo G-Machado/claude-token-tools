@@ -290,6 +290,28 @@ public partial class SessionView : UserControl
         else if (Owner<QuestionPick>(sender) is { } pick) q.AdvanceFrom(pick, done: true);
     }
 
+    /// <summary>The model pill opens its effort menu on a left click as well as a right one.</summary>
+    void OnEffortMenu(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { ContextMenu: { } menu } pill) return;
+        menu.PlacementTarget = pill;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    /// <summary>Ticks the level the last reply ran at.</summary>
+    void OnEffortMenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu { PlacementTarget: FrameworkElement { DataContext: FooterRow row } } menu) return;
+        foreach (var item in menu.Items.OfType<MenuItem>()) item.IsChecked = (string)item.Header == row.Effort.Trim();
+    }
+
+    void OnEffortPick(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Header: string level }) Tab?.SetEffort(level);
+    }
+
     void OnSendOpen(object sender, RoutedEventArgs e) => SendOpen((sender as FrameworkElement)?.DataContext as OpenBlock);
 
     /// <summary>Enter in a ▶ ask's typed answer sends the bar, as its send button would.</summary>

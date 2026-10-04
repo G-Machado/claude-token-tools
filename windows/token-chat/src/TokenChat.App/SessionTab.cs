@@ -162,6 +162,14 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         return "ok";
     }
 
+    /// <summary>The footer's effort menu: /effort for this session only (settings.json untouched), sent the way a poke is.
+    /// Local, so no request and no tokens; the footer label follows on the next reply.</summary>
+    public void SetEffort(string level)
+    {
+        if (Poke("/effort " + level) == "busy")
+            Transcript.AddNote(NoteKind.Info, $"Effort unchanged: a turn is open. Pick {level} again once it ends.");
+    }
+
     async Task PokeNowAsync(ClaudeSession s, string text)
     {
         try { await s.SendAsync(text); }
