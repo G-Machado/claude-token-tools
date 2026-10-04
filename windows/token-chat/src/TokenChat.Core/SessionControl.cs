@@ -54,6 +54,16 @@ public static class SessionControl
         return code == 0 && output.Trim().Length > 0 ? output : null;
     }
 
+    /// <summary>Every project's checkpoints, newest first: a directory listing (~1.5s), not a collect, so it is run on
+    /// demand rather than kept fresh. Null when it failed.</summary>
+    public static async Task<IReadOnlyList<Checkpoint>?> CheckpointsAsync()
+    {
+        if (FindBash() is not { } bash) return null;
+        var (code, output) = await RunAsync(bash,
+            ["-lc", "\"$HOME/.claude/token-sessions.sh\" --checkpoints all --json --no-update-check 2>/dev/null"]);
+        return code == 0 ? Checkpoint.Parse(output) : null;
+    }
+
     static DateTime _pokeDueCheckedAt = DateTime.MinValue;
 
     /// <summary>The widget's Ensure-PokeDue, once an hour: re-arm the ClaudeTokenPokeDue task when it has gone missing,

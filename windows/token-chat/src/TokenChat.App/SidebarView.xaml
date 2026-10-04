@@ -54,6 +54,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <!-- in the caption band, so it drags the window as the strip beside the tabs does -->
         <Grid>
@@ -314,5 +315,58 @@
                 </DataTemplate>
             </ListBox.ItemTemplate>
         </ListBox>
+        <!-- every project's checkpoints, newest first; enter or a double click opens one as a tab on /unpark <topic> -->
+        <StackPanel x:Name="ParkedPane" Grid.Row="4">
+            <Border Height="1" Background="{StaticResource Line}"/>
+            <CheckBox x:Name="ParkedBox" Style="{StaticResource TextToggle}" Margin="8,6,0,6" HorizontalAlignment="Left"
+                      ToolTip="checkpoints written by /park; open one to resume it in a new tab">
+                <TextBlock>
+                    <Run Text="parked"/><Run Text=" · "/><Run Text="{Binding Parked.Count, Mode=OneWay}"/>
+                </TextBlock>
+            </CheckBox>
+            <ListBox x:Name="ParkedList" ItemsSource="{Binding Parked}" MaxHeight="300" Background="Transparent" BorderThickness="0"
+                     Padding="0,0,0,6" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     Visibility="{Binding IsChecked, ElementName=ParkedBox, Converter={StaticResource Shown}}">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                        <Setter Property="ToolTip" Value="{Binding Task}"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <Border x:Name="B" Margin="6,0" Padding="9,3,10,4" CornerRadius="5" Background="Transparent" Cursor="Hand">
+                                        <ContentPresenter/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger SourceName="B" Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock TextTrimming="CharacterEllipsis" FontSize="11.5">
+                                <Run Text="{Binding Topic, Mode=OneWay}"/><Run Text="  "/><Run
+                                     Text="{Binding Project, Mode=OneWay}" Foreground="{StaticResource Faint}" FontSize="10.5"/>
+                            </TextBlock>
+                            <TextBlock Grid.Column="1" Text="{Binding Age}" Style="{StaticResource Fig}" FontSize="9.5"
+                                       Foreground="{StaticResource Faint}" Margin="8,0,0,0"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </StackPanel>
     </Grid>
 </UserControl>

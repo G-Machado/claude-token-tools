@@ -57,6 +57,9 @@ public sealed class Sidebar
 
     public ObservableCollection<SidebarItem> Items { get; } = [];
     public UsageHeader Usage { get; } = new();
+    /// <summary>Every project's checkpoints, newest first; replaced whole by RefreshParkedAsync.</summary>
+    public ObservableCollection<Checkpoint> Parked { get; } = [];
+    bool _listingParked;
     /// <summary>After every rebuild, on the UI thread.</summary>
     public event Action? Refreshed;
 
@@ -68,7 +71,24 @@ public sealed class Sidebar
         SessionTab.Feed.Value.Changed += Schedule;
         // a running timer is held by its dispatcher
         _ = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) => Schedule(), _ui);
+        // the widget re-lists its Parked tab every five minutes and on opening it; the view asks for the second
+        _ = new DispatcherTimer(TimeSpan.FromMinutes(5), DispatcherPriority.Background, (_, _) => _ = RefreshParkedAsync(), _ui);
         Refresh();
+        _ = RefreshParkedAsync();
+    }
+
+    /// <summary>One listing at a time. A failed one keeps the last list. UI thread.</summary>
+    public async Task RefreshParkedAsync()
+    {
+        if (_listingParked) return;
+        _listingParked = true;
+        try
+        {
+            if (await SessionControl.CheckpointsAsync() is not { } list) return;
+            Parked.Clear();
+            foreach (var c in list) Parked.Add(c);
+        }
+        finally { _listingParked = false; }
     }
 
     void OnTabs(object? sender, NotifyCollectionChangedEventArgs e)

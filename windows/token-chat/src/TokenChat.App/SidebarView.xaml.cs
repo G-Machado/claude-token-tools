@@ -22,7 +22,23 @@ public partial class SidebarView : UserControl
         _flash.Tick += (_, _) => { _flash.Stop(); Note.Text = "sessions"; Note.Foreground = (Brush)FindResource("Faint"); };
         List.PreviewKeyDown += OnKey;
         List.MouseDoubleClick += (_, _) => { if (List.SelectedItem is SidebarItem item) Open(item); };
+        ParkedList.MouseDoubleClick += (_, _) => { if (ParkedList.SelectedItem is Checkpoint c) Unpark?.Invoke(c); };
+        ParkedList.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter || ParkedList.SelectedItem is not Checkpoint c) return;
+            Unpark?.Invoke(c);
+            e.Handled = true;
+        };
+        ParkedBox.Checked += (_, _) => OpenedParked?.Invoke();
     }
+
+    /// <summary>A checkpoint's enter: MainWindow resumes it, or brings forward the window still holding it.</summary>
+    public event Action<Checkpoint>? Unpark;
+    /// <summary>The section opened: re-list, as the widget does on opening its Parked tab.</summary>
+    public event Action? OpenedParked;
+
+    /// <summary>The header's line, for what MainWindow's unpark has to say.</summary>
+    public void Say(string text) => Flash(text);
 
     /// <summary>The widget's flash: a line in the header for a few seconds, then the label again.</summary>
     void Flash(string text)

@@ -23,6 +23,9 @@ public partial class MainWindow : Window
         _sidebar.Refreshed += SyncSidebar;
         Side.List.ItemsSource = _sidebar.Items;
         Side.Usage.DataContext = _sidebar.Usage;
+        Side.ParkedPane.DataContext = _sidebar;
+        Side.OpenedParked += () => _ = _sidebar.RefreshParkedAsync();
+        Side.Unpark += Unpark;
         // a row of this window shows its chat; a row elsewhere only opens to its controls
         Side.List.SelectionChanged += (_, _) =>
         {
@@ -109,6 +112,26 @@ public partial class MainWindow : Window
     }
 
     public void Open(string directory) => Open(directory, null, false, null, null, null);
+
+    /// <summary>The widget's Parked enter, in this window: a new tab in the checkpoint's folder, on the model and effort
+    /// it was parked on, whose first message is the /unpark. A window still holding the strand is brought forward
+    /// instead: unparking beside it would make two windows on one strand.</summary>
+    async void Unpark(Checkpoint c)
+    {
+        var here = c.Sid.Length > 0
+            ? _tabs.FirstOrDefault(t => string.Equals(t.SessionId, c.Sid, StringComparison.OrdinalIgnoreCase)) : null;
+        if (here is not null) { Select(here); Side.Say($"{c.Topic} is still open here"); return; }
+        if (c.Alive && SessionTab.Feed.Value.Session(c.Sid) is { } s)
+        {
+            Side.Say($"{c.Topic} is still open elsewhere - bringing it forward");
+            Side.Say(await SessionControl.OpenAsync(c.Sid, c.Cwd, (int)SidebarItem.Num(s, "pid")));
+            return;
+        }
+        if (!Directory.Exists(c.Cwd)) { Side.Say($"{c.Topic}: the folder is gone"); return; }
+        Open(c.Cwd, null, false, c.Model.Length > 0 ? c.Model : null, c.Effort.Length > 0 ? c.Effort : null, c.UnparkPrompt);
+        Side.Say(c.BehindMin > 0 ? $"unparking {c.Topic} - its window worked {c.BehindMin}m past the checkpoint"
+            : $"unparking {c.Topic}");
+    }
 
     void Open(string directory, string? resume, bool lite, string? model, string? effort, string? prompt) =>
         Show(new SessionTab(new LaunchOptions
