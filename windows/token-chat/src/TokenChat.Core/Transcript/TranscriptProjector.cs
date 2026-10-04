@@ -102,24 +102,43 @@ public sealed class TranscriptProjector
         else Place(tool, ToolText.IsLook(tool.ToolName, null));
     }
 
-    /// <summary>A call that only looks joins the run of them just before it, taking the thinking before it along, and a
-    /// new run takes its caption from that thinking. Any other call goes on the transcript as is.</summary>
+    /// <summary>A call that only looks joins the run of them just before it, taking the thinking before it along. A lone
+    /// one stays a plain row until a second arrives; then both fold into a run, captioned by the thinking before it, or
+    /// by its shape alone when reply text right above it already says why. Any other call goes on the transcript as is.</summary>
     void Place(ToolUseItem tool, bool looks)
     {
-        if (!looks)
+        tool.Looks = looks;
+        var thought = looks && Items.Count > 0 ? Items[^1] as ThinkingItem : null;
+        var before = Items.Count - (thought is null ? 1 : 2);
+        var prev = looks && before >= 0 ? Items[before] : null;
+        if (prev is ToolUseItem { Looks: true } lone)
+        {
+            var run = new ToolGroupItem();
+            var first = before;
+            if (first > 0 && Items[first - 1] is ThinkingItem led)
+            {
+                first--;
+                run.Add(led);
+                run.Caption = ToolText.Intent(led.Text);
+            }
+            run.Add(lone);
+            run.Narrated = first > 0 && Items[first - 1] is AssistantTextItem said && said.Text.Trim().Length > 0;
+            if (first < before) Items.RemoveAt(before);
+            Items[first] = run;
+            prev = run;
+        }
+        if (prev is not ToolGroupItem group)
         {
             Items.Add(tool);
             return;
         }
-        var thought = Items.Count > 0 ? Items[^1] as ThinkingItem : null;
-        if (thought is not null) Items.RemoveAt(Items.Count - 1);
-        if ((Items.Count > 0 ? Items[^1] : null) is not ToolGroupItem run) Items.Add(run = new ToolGroupItem());
         if (thought is not null)
         {
-            run.Add(thought);
-            run.Caption ??= ToolText.Intent(thought.Text);
+            Items.RemoveAt(Items.Count - 1);
+            group.Add(thought);
+            group.Caption ??= ToolText.Intent(thought.Text);
         }
-        run.Add(tool);
+        group.Add(tool);
     }
 
     void PlaceUnplaced()
@@ -173,6 +192,7 @@ public sealed class TranscriptProjector
                 s.Flush();
                 _dirty.Remove(s);
                 EndStream(s);
+                if (s is ThinkingItem && s.Text.Trim().Length == 0) Items.Remove(s); // redacted: a row with nothing in it
                 break;
             case ToolUseItem t:
                 var json = t.InputJson.ToString();

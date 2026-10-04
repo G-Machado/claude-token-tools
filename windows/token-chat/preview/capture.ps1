@@ -1,6 +1,7 @@
 # Dev loop for --preview: launch TokenChat on a fixture, PrintWindow the window to a PNG, kill it.
 # powershell -File preview/capture.ps1 -Exe <abs TokenChat.App.exe> -Fixture <abs preview/asks.jsonl> -Out <png>
 # -Fixture a.jsonl,b.jsonl opens a tab per fixture (split here: -File passes the list as one string).
+# The first launch of a fresh build can take 20 s+ (the PNG shows the start page): use -Settle 25000 for that one.
 param([string]$Exe, [string]$Fixture, [string]$Out, [int]$Settle = 6000)
 Add-Type -AssemblyName System.Drawing
 Add-Type @'

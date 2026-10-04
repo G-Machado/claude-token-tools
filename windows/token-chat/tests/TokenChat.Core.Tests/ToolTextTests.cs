@@ -14,7 +14,7 @@ public class ToolTextTests
     public void ReadNamesTheFileAndItsFolderRelativeToTheSession()
     {
         var line = ToolText.Describe("Read", In("""{"file_path":"C:\\work\\repo\\src\\Core\\Projector.cs","offset":95,"limit":36}"""), Cwd);
-        Assert.Equal(new ToolHeadline("Read", "Projector.cs", "src/Core"), line);
+        Assert.Equal(new ToolHeadline("Read", "Projector.cs"), line);
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public class ToolTextTests
     [Fact]
     public void EditOutcomeIsItsDiffSizeAndErrorsSayWhy()
     {
-        Assert.Equal("+2 −1", ToolText.Outcome("Edit", In("""{"old_string":"a\nb","new_string":"a\nc\nd"}"""), "ok", false));
+        Assert.Equal("+2 −1 lines", ToolText.Outcome("Edit", In("""{"old_string":"a\nb","new_string":"a\nc\nd"}"""), "ok", false));
         Assert.Equal("failed: File does not exist.", ToolText.Outcome("Read", null, "<tool_use_error>File does not exist.</tool_use_error>", true));
     }
 
@@ -107,7 +107,29 @@ public class ToolTextTests
         Assert.Equal("1 read · 1 search · 1 command", run.Counts);
         Assert.Equal(5, run.Children.Count);
         Assert.Equal("Build", Assert.IsType<ToolUseItem>(p.Items[1]).Line.Subject);
-        Assert.Equal("b.cs", Assert.IsType<ToolGroupItem>(p.Items[2]).Title);
+        Assert.Equal("b.cs", Assert.IsType<ToolUseItem>(p.Items[2]).Line.Subject); // a lone look stays a plain row
+    }
+
+    [Fact]
+    public void ReplyTextAboveARunTitlesItByShapeAndBlankThinkingLeavesNoRow()
+    {
+        var p = new TranscriptProjector();
+        p.Apply(new MessageStartEvent("m1", null, new TokenUsage(), null));
+        p.Apply(new BlockStartEvent(0, "text", null, null, null));
+        p.Apply(new DeltaEvent(0, DeltaKind.Text, "Checking the template first:", null));
+        p.Apply(new BlockStopEvent(0, null));
+        Think(p, 1, "");
+        var lone = Call(p, 2, "Read", "t1", """{"file_path":"a.cs"}""");
+        Assert.Same(lone, p.Items[1]);
+        Think(p, 3, "");
+        Call(p, 4, "Grep", "t2", """{"pattern":"Row"}""");
+
+        Assert.Equal(2, p.Items.Count);
+        var run = Assert.IsType<ToolGroupItem>(p.Items[1]);
+        Assert.True(run.Narrated);
+        Assert.Equal("1 read · 1 search", run.Title);
+        Assert.Equal("", run.CountsAside);
+        Assert.Equal(2, run.Children.Count);
     }
 
     [Fact]
@@ -118,10 +140,10 @@ public class ToolTextTests
         var read = Call(p, 0, "Read", "t1", """{"file_path":"a.cs"}""");
         p.Apply(new MessageDeltaEvent("tool_use", new TokenUsage(0, 0, 0, 200), null));
         Result(p, "t1", new string('x', 2500));
-        Assert.Equal("≈1k", read.TokensText);
+        Assert.Equal("≈1k tok", read.TokensText);
 
         p.Apply(new MessageStartEvent("m2", null, new TokenUsage(0, 1100, 1200, 1), null));
-        Assert.Equal("+1.1k", read.TokensText);
+        Assert.Equal("+1.1k tok", read.TokensText);
 
         var a = Call(p, 0, "Read", "t2", """{"file_path":"b.cs"}""");
         var b = Call(p, 1, "Read", "t3", """{"file_path":"c.cs"}""");
@@ -131,6 +153,6 @@ public class ToolTextTests
         p.Apply(new MessageStartEvent("m3", null, new TokenUsage(0, 0, 3200, 1), null));
         Assert.Equal((600L, false), (a.Tokens!.Value, a.TokensExact));
         Assert.Equal(200L, b.Tokens);
-        Assert.Equal("≈1.9k", Assert.IsType<ToolGroupItem>(Assert.Single(p.Items)).TokensText); // one run across requests
+        Assert.Equal("≈1.9k tok", Assert.IsType<ToolGroupItem>(Assert.Single(p.Items)).TokensText); // one run across requests
     }
 }

@@ -70,14 +70,14 @@ public static partial class ToolText
         switch (tool)
         {
             case "Read" or "NotebookRead" when (S("file_path") ?? S("notebook_path")) is { } path:
-                return new("Read", Path.GetFileName(path), Folder(path, cwd));
+                return new("Read", Path.GetFileName(path));
             case "Grep" when S("pattern") is { } pattern:
                 return new("Search", "\"" + TranscriptProjector.OneLine(pattern, 80) + "\"",
                     Join(Place(S("path"), cwd), S("glob") ?? S("type"), S("output_mode") is { } mode and not "content" ? mode.Replace('_', ' ') : null));
             case "Glob" when S("pattern") is { } pattern:
                 return new("Find", pattern, Place(S("path"), cwd));
             case "Edit" or "MultiEdit" or "Write" or "NotebookEdit" when (S("file_path") ?? S("notebook_path")) is { } path:
-                return new(tool == "Write" ? "Write" : "Edit", Path.GetFileName(path), Folder(path, cwd));
+                return new(tool == "Write" ? "Write" : "Edit", Path.GetFileName(path));
             case "Bash" or "PowerShell" when S("command") is { } command:
                 return S("description") is { } why
                     ? new(tool, TranscriptProjector.OneLine(why, 120), null, TranscriptProjector.OneLine(command, 200))
@@ -154,7 +154,7 @@ public static partial class ToolText
     }
 
     /// <summary>A result's growth: "+1.2k" measured, "≈1.2k" estimated.</summary>
-    public static string Cost(long tokens, bool exact) => (exact ? "+" : "≈") + Tokens.K(tokens);
+    public static string Cost(long tokens, bool exact) => (exact ? "+" : "≈") + Tokens.K(tokens) + " tok";
 
     public static long Estimate(int resultChars) => (long)Math.Ceiling(resultChars / CharsPerToken);
 
@@ -166,9 +166,6 @@ public static partial class ToolText
     /// <summary>What a run touched, when no thinking says why: its files, patterns and command descriptions.</summary>
     public static string Subjects(IEnumerable<ToolUseItem> tools) =>
         TranscriptProjector.OneLine(string.Join(", ", tools.Select(t => t.Line.Subject).Where(s => s.Length > 0).Distinct()), 110);
-
-    /// <summary>A file's folder, relative to the session's directory when inside it, else ~-shortened.</summary>
-    static string? Folder(string path, string? cwd) => Place(Path.GetDirectoryName(path), cwd) is { Length: > 0 } dir ? dir : null;
 
     static string? Place(string? path, string? cwd)
     {
@@ -190,7 +187,7 @@ public static partial class ToolText
     static string Churn(IEnumerable<DiffLine> diff)
     {
         var lines = diff.ToList();
-        return $"+{lines.Count(l => l.Kind == DiffKind.Added)} −{lines.Count(l => l.Kind == DiffKind.Removed)}";
+        return $"+{lines.Count(l => l.Kind == DiffKind.Added)} −{lines.Count(l => l.Kind == DiffKind.Removed)} lines";
     }
 
     static string Lines(string s) => Count(s.TrimEnd('\n').Split('\n').Length, "line");

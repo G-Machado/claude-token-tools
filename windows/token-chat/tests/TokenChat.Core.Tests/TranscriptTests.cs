@@ -126,7 +126,7 @@ public class TranscriptTests
         var turn = projector.Items.OfType<TurnItem>().Single();
         Assert.True(turn.IsStopped);
         Assert.False(turn.IsError);
-        Assert.StartsWith("stopped ·", turn.Summary);
+        Assert.StartsWith("stopped in 0.0s · 1 step · Claude wrote 0 tokens", turn.Summary);
     }
 
     [Fact]

@@ -201,11 +201,11 @@
 
         <!-- A tool call is one line with a stripe down its left edge: blue while it runs, the card's hairline once
              it is done, red if it failed. The line says what it did to what, where, what came back, and what that
-             added to the window (≈ until the next request measures it, yellow when big); a shell call's command sits
-             under its description. The fold opens the result. -->
+             added to the window (≈ until the next request measures it, yellow when big). Opening the fold shows a
+             shell call's command under its description, and the result below. -->
         <DataTemplate DataType="{x:Type t:ToolUseItem}">
             <Border x:Name="Bar" BorderBrush="{StaticResource Track}" BorderThickness="2,0,0,0" Padding="10,2,0,2" Margin="0,3">
-                <Expander>
+                <Expander x:Name="Fold">
                     <Expander.Header>
                         <StackPanel>
                             <TextBlock TextWrapping="Wrap" FontFamily="{StaticResource Mono}" FontSize="12">
@@ -215,7 +215,7 @@
                                 <Run x:Name="Outcome" Text="{Binding Outcome, Mode=OneWay}" Foreground="{StaticResource Dim}"/>
                                 <Run x:Name="Cost" Text="{Binding TokensText, Mode=OneWay}" Foreground="{StaticResource Faint}"/>
                             </TextBlock>
-                            <TextBlock x:Name="Command" Text="{Binding Line.Command, Mode=OneWay}" TextWrapping="Wrap"
+                            <TextBlock x:Name="Command" Text="{Binding Line.Command, Mode=OneWay}" TextWrapping="Wrap" Visibility="Collapsed"
                                        FontFamily="{StaticResource Mono}" FontSize="11.5" Foreground="{StaticResource Faint}"/>
                         </StackPanel>
                     </Expander.Header>
@@ -227,6 +227,9 @@
                 </Expander>
             </Border>
             <DataTemplate.Triggers>
+                <Trigger SourceName="Fold" Property="IsExpanded" Value="True">
+                    <Setter TargetName="Command" Property="Visibility" Value="Visible"/>
+                </Trigger>
                 <DataTrigger Binding="{Binding Line.Command}" Value="{x:Null}">
                     <Setter TargetName="Command" Property="Visibility" Value="Collapsed"/>
                 </DataTrigger>
@@ -251,15 +254,16 @@
             </DataTemplate.Triggers>
         </DataTemplate>
 
-        <!-- A run of calls that only looked, folded to one line: why (the thinking before it) or else what it touched,
-             its shape, its cost. Same stripe colours as a single call; the fold opens the calls and the thinking. -->
+        <!-- Two or more calls that only looked, folded to one line: why (the thinking before it) or else what it touched,
+             its shape, its cost; just the shape when reply text above already says why. Same stripe colours as a
+             single call; the fold opens the calls and the thinking. -->
         <DataTemplate DataType="{x:Type t:ToolGroupItem}">
             <Border x:Name="Bar" BorderBrush="{StaticResource Track}" BorderThickness="2,0,0,0" Padding="10,2,0,2" Margin="0,3">
                 <Expander>
                     <Expander.Header>
                         <TextBlock TextWrapping="Wrap" FontSize="12">
                             <Run Text="{Binding Title, Mode=OneWay}" Foreground="{StaticResource Text}"/>
-                            <Run Text="{Binding Counts, Mode=OneWay}" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Dim}"/>
+                            <Run Text="{Binding CountsAside, Mode=OneWay}" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Dim}"/>
                             <Run x:Name="Cost" Text="{Binding TokensText, Mode=OneWay}" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}"/>
                             <Run x:Name="State" Text="{Binding State, Mode=OneWay}" Foreground="{StaticResource Red}"/>
                         </TextBlock>

@@ -69,8 +69,9 @@ public sealed class AssistantTextItem : StreamedItem
     /// <summary>The reply's ▶ asks as buttons; parsed once the text stops streaming, null if it has none.</summary>
     public OpenBlock? Open { get => _open; internal set { if (Set(ref _open, value)) Notify(nameof(Body)); } }
 
-    /// <summary>What the markdown shows: the reply without its ▶ lines once the bar has them, so each ask shows once.</summary>
-    public string Body => _open?.Body ?? Text;
+    /// <summary>What the markdown shows: the reply without its ▶ lines once the bar has them, so each ask shows once,
+    /// tidied for MdXaml (<see cref="ReplyText.Tidy"/>).</summary>
+    public string Body => ReplyText.Tidy(_open?.Body ?? Text);
 }
 
 public sealed class ThinkingItem : StreamedItem;
@@ -102,6 +103,8 @@ public sealed class ToolUseItem(string toolName, string? toolUseId) : Transcript
     public bool IsBig => _tokens >= ToolText.BigCall;
     internal int ResultChars;
     internal System.Text.Json.Nodes.JsonObject? Input;
+    /// <summary>Only looks (read, search, read-only shell): a second one next to it folds both into a run.</summary>
+    internal bool Looks;
     /// <summary>The first lines of the tool result; null until it arrives.</summary>
     public string? Result { get => _result; internal set => Set(ref _result, value); }
     public int ResultLines { get => _resultLines; internal set => Set(ref _resultLines, value); }
@@ -114,15 +117,20 @@ public sealed class ToolUseItem(string toolName, string? toolUseId) : Transcript
 /// thinking between them. Anything else, an edit, text, a prompt, ends the run.</summary>
 public sealed class ToolGroupItem : TranscriptItem
 {
-    static readonly string[] Derived = [nameof(Title), nameof(Counts), nameof(TokensText), nameof(IsBig), nameof(IsRunning), nameof(HasFailed), nameof(State)];
+    static readonly string[] Derived = [nameof(Title), nameof(Counts), nameof(CountsAside), nameof(TokensText), nameof(IsBig), nameof(IsRunning), nameof(HasFailed), nameof(State)];
     string? _caption;
+    bool _narrated;
 
     public ObservableCollection<TranscriptItem> Children { get; } = [];
     public IEnumerable<ToolUseItem> Tools => Children.OfType<ToolUseItem>();
     /// <summary>Why the run happened, from the thinking before it; null when there was none to read.</summary>
     public string? Caption { get => _caption; internal set { if (Set(ref _caption, value)) Notify(nameof(Title)); } }
-    public string Title => Caption ?? ToolText.Subjects(Tools);
+    /// <summary>Reply text sits right above the run and already says why, so the run is titled by its shape alone.</summary>
+    public bool Narrated { get => _narrated; internal set { if (Set(ref _narrated, value)) Changed(); } }
+    public string Title => Narrated ? Counts : Caption ?? ToolText.Subjects(Tools);
     public string Counts => ToolText.Counts(Tools);
+    /// <summary>The shape beside the title; empty when the title already is the shape.</summary>
+    public string CountsAside => Narrated ? "" : Counts;
     public string TokensText => Tools.Where(t => t.Tokens is not null).ToList() is { Count: > 0 } priced
         ? ToolText.Cost(priced.Sum(t => t.Tokens!.Value), priced.All(t => t.TokensExact)) : "";
     public bool IsBig => Tools.Sum(t => t.Tokens ?? 0) >= ToolText.BigRun || Tools.Any(t => t.IsBig);
@@ -233,14 +241,19 @@ public sealed class TurnItem(ResultEvent result) : TranscriptItem
     public bool IsError => Result.IsError && !IsStopped;
     public string? Detail => IsError ? Result.Text : null;
 
+    /// <summary>The turn in plain words: "done in 3m 38s · 24 steps · Claude wrote 15.1k tokens · re-read 1.46M from
+    /// cache · added 76.2k · ≈$1.20". Added is what the window grew by this turn: cache writes plus uncached input.</summary>
     public string Summary
     {
         get
         {
             var u = Result.Usage;
             var head = IsStopped ? "stopped" : Result.IsError ? Result.Subtype : "done";
+            var s = Result.DurationMs / 1000.0;
+            var took = s < 60 ? s.ToString("0.0", CultureInfo.InvariantCulture) + "s" : $"{(int)s / 60}m {(int)s % 60}s";
+            var steps = Result.NumTurns == 1 ? "1 step" : $"{Result.NumTurns} steps";
             return string.Create(CultureInfo.InvariantCulture,
-                $"{head} · {Result.DurationMs / 1000.0:0.0}s · {Result.NumTurns} steps · in {Tokens.K(u.Input)} · cache r {Tokens.K(u.CacheRead)} w {Tokens.K(u.CacheWrite)} · out {Tokens.K(u.Output)} · ≈${Result.TotalCostUsd:0.00}");
+                $"{head} in {took} · {steps} · Claude wrote {Tokens.Km(u.Output)} tokens · re-read {Tokens.Km(u.CacheRead)} from cache · added {Tokens.Km(u.CacheWrite + u.Input)} · ≈${Result.TotalCostUsd:0.00}");
         }
     }
 }
@@ -251,4 +264,9 @@ public static class Tokens
     public static string K(long n) => n >= 1000
         ? (n / 1000.0).ToString(n >= 100_000 ? "0" : "0.#", CultureInfo.InvariantCulture) + "k"
         : n.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary><see cref="K"/>, but millions as "1.46M".</summary>
+    public static string Km(long n) => n >= 1_000_000
+        ? (n / 1_000_000.0).ToString("0.##", CultureInfo.InvariantCulture) + "M"
+        : K(n);
 }
