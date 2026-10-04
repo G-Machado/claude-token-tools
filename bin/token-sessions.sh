@@ -551,12 +551,14 @@ CUT_K=$(cut_bar_k)
 # estimate charges cycle 1 for the window cycle 40 ended up with.
 measure_overall() {
   O_WPC=0; O_PROD=0; O_CTL=0; O_N=0; P_WPC=0; P_PROD=0; P_CTL=0; P_N=0
-  O_5H=0; O_7D=0; O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
+  O_5H=0; O_7D=0; O_DAY=0; O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
   [ -r "$HIST" ] || return 0
   read -r O_WPC O_PROD O_CTL O_N P_WPC P_PROD P_CTL P_N O_5H O_7D O_CHURN P_CHURN \
-          O_HELD P_HELD O_SHORT P_SHORT <<< "$(awk -F, \
+          O_HELD P_HELD O_SHORT P_SHORT O_DAY <<< "$(awk -F, \
     -v now="${EPOCHSECONDS:-$(date +%s)}" -v rpc="$RPC" -v floor="$M_FLOOR" -v cut="$CUT_K" '
     function ep(t,   s) { s = t; gsub(/[-:]/, " ", s); return mktime(s " 00") }
+    # Today from local midnight, the day TOKEN_DAY_CAP budgets.
+    BEGIN { mid = mktime(strftime("%Y %m %d 00 00 00", now)) }
     NR > 1 && $2 != "" {
       e = ep($1); if (e <= 0) next
       g = (($2 in pv) ? $6 - pv[$2] : 0); if (g < 0) g = 0
@@ -593,7 +595,8 @@ measure_overall() {
       if (!hl) scy[$2]++
       slast[$2] = e
       if (age <= 604800) s7 += w
-      if (age <= 18000)  s5 += w }
+      if (age <= 18000)  s5 += w
+      if (e >= mid)      sd += w }
     END {
       for (k in slast) if (scy[k] <= 2 && now - slast[k] > 3600) { rs += sr7[k]; qs += srq[k]; xs += srx[k] }
       # A quiet fortnight leaves the prior week too thin to compare against, so
@@ -606,14 +609,15 @@ measure_overall() {
       # work. Rebasing the second measured flat across cycle index (35% at cycle
       # 1, 35% at cycle 8), so there was nothing there to correct and correcting
       # it anyway would just have inflated the number.
-      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f %.1f %.1f %.1f %.1f %.1f %.1f\n", \
+      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f %.1f %.1f %.1f %.1f %.1f %.1f %.0f\n", \
         (rn ? rw / rn / 1000 : 0), (ru ? ro * 100 / ru : 0), (rn ? rc / rn : 0), rn, \
         (qn ? qw / qn / 1000 : 0), (qu ? qo * 100 / qu : 0), (qn ? qc / qn : 0), qn, \
         s5 / 1000, s7 / 1000, (ru ? rh * 100 / ru : 0), (qu ? qh * 100 / qu : 0), \
-        (rp ? rhd * 100 / rp : 0), (qp ? qhd * 100 / qp : 0), (rp ? rs * 100 / rp : 0), (qp ? qs * 100 / qp : 0) }' <(hist_rows) 2>/dev/null)"
+        (rp ? rhd * 100 / rp : 0), (qp ? qhd * 100 / qp : 0), (rp ? rs * 100 / rp : 0), (qp ? qs * 100 / qp : 0), sd / 1000 }' <(hist_rows) 2>/dev/null)"
   : "${O_WPC:=0}" "${O_PROD:=0}" "${O_CTL:=0}" "${O_N:=0}"
   : "${P_WPC:=0}" "${P_PROD:=0}" "${P_CTL:=0}" "${P_N:=0}" "${O_5H:=0}" "${O_7D:=0}"
   : "${O_CHURN:=0}" "${P_CHURN:=0}" "${O_HELD:=0}" "${P_HELD:=0}" "${O_SHORT:=0}" "${P_SHORT:=0}"
+  : "${O_DAY:=0}"
 }
 # This one used to run whatever the mode was, so --extend and --block paid for a
 # 7d aggregate they then exited without printing. The zeros are the same ones
@@ -621,7 +625,7 @@ measure_overall() {
 # can tell the difference between "skipped" and "nothing to measure".
 zero_overall() {
   O_WPC=0; O_PROD=0; O_CTL=0; O_N=0
-  P_WPC=0; P_PROD=0; P_CTL=0; P_N=0; O_5H=0; O_7D=0; O_CHURN=0; P_CHURN=0
+  P_WPC=0; P_PROD=0; P_CTL=0; P_N=0; O_5H=0; O_7D=0; O_DAY=0; O_CHURN=0; P_CHURN=0
   O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
 }
 if [ "${TS_NOSTATS:-0}" = 1 ]; then zero_overall; else measure_overall; fi
@@ -2718,10 +2722,10 @@ emit_json() {
       -v o_wpc="$O_WPC" -v o_prod="$O_PROD" -v o_ctl="$O_CTL" -v o_n="$O_N" -v o_churn="$O_CHURN" \
       -v q_wpc="$P_WPC" -v q_prod="$P_PROD" -v q_ctl="$P_CTL" -v q_n="$P_N" -v q_churn="$P_CHURN" \
       -v o_held="$O_HELD" -v q_held="$P_HELD" -v o_short="$O_SHORT" -v q_short="$P_SHORT" -v cutk="$CUT_K" \
-      -v o5h="$O_5H" -v o7d="$O_7D" -v ttl="$TTL" -v ctxmax="$CTXMAX" \
+      -v o5h="$O_5H" -v o7d="$O_7D" -v oday="$O_DAY" -v ttl="$TTL" -v ctxmax="$CTXMAX" \
       -v s7o="$S7O" -v s7w="$S7W" -v s7r="$S7R" \
       -v hf="$HF" \
-      -v obud="$OBUD" -v gbud="$GBUD" -v price="$PRICE_IN" -v nicks="$NICKS" \
+      -v obud="$OBUD" -v gbud="$GBUD" -v price="$PRICE_IN" -v daycap="$DAYCAP" -v nicks="$NICKS" \
       -v extf="$EXTF" -v extdef="$EXT_DEFAULT" -v extmax="$EXT_MAX" \
       -v blocked="$(blocks_list)" \
       -v limf="$LIMF" -v acctmap="$ACCTMAP" \
@@ -3019,7 +3023,7 @@ emit_json() {
     printf "\"floor\":%.1f,\"rd_no\":%.1f,\"rd_park\":%.1f,\"restart_no\":%.1f,\"restart_park\":%.1f,", FLOOR, RD_NO, RD_PARK, RESTART_NO, RESTART_PARK
     printf "\"rem\":%.1f,\"cps\":%.2f,\"rpc\":%.2f,", REM, CPS, RPC
     printf "\"park_at\":%.1f,\"clear_pk\":%.1f,\"clear_no\":%.1f,\"cut_pk\":%.1f,\"cut_no\":%.1f,\"overheat\":%.1f,\"max_at\":%.1f,\"ext_max\":%d,", PARK_AT, CLEAR_PK, CLEAR_NO, CUT_PK, CUT_NO, OVERHEAT, MAX_AT, extmax + 0
-    printf "\"ttl\":%d,\"ctxmax\":%d,\"obud\":%d,\"gbud\":%d,\"price_in\":%s", ttl, ctxmax, obud, gbud, price
+    printf "\"ttl\":%d,\"ctxmax\":%d,\"obud\":%d,\"gbud\":%d,\"price_in\":%s,\"day_cap\":%d", ttl, ctxmax, obud, gbud, price, daycap + 0
     printf "},\n"
 
     printf "  \"overall\": {"
@@ -3036,7 +3040,7 @@ emit_json() {
       heldgrade(q_held), shortgrade(q_short), churngrade(q_churn), ctlgrade(q_ctl)
     printf "\"median\":{\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f},", p_wpc, p_prod, p_churn
     printf "\"split_7d\":{\"output\":%.0f,\"cache_write\":%.0f,\"cache_read\":%.0f},", s7o, s7w, s7r
-    printf "\"spend_5h\":%.0f,\"spend_7d\":%.0f", o5h, o7d
+    printf "\"spend_5h\":%.0f,\"spend_7d\":%.0f,\"spend_day\":%.0f", o5h, o7d, oday
     printf "},\n"
     # Account-wide usage, which is a different question from every other number
     # here: those are about what a WINDOW costs, this is about what is left to
