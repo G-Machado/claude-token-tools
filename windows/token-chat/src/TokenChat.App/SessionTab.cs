@@ -20,7 +20,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 
     /// <summary>Project colours: hues no state uses (the dot's green, blue and red; the question card's yellow).
     /// violet, pink, teal, lime, fuchsia, sand.</summary>
-    static readonly Brush[] ProjectBrushes =
+    internal static readonly Brush[] ProjectBrushes =
         [.. new[] { "#A78BFA", "#F472B6", "#2DD4BF", "#A3E635", "#D946EF", "#CBB994" }.Select(Frozen)];
 
     static Brush Frozen(string hex)
@@ -32,7 +32,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 
     readonly ConcurrentQueue<ClaudeEvent> _inbox = new();
     /// <summary>The widget's collect, one watcher for every tab.</summary>
-    static readonly Lazy<SessionFeed> Feed = new(() => new SessionFeed());
+    internal static readonly Lazy<SessionFeed> Feed = new(() => new SessionFeed());
 
     readonly DispatcherTimer _render;
     readonly DispatcherTimer _clock;

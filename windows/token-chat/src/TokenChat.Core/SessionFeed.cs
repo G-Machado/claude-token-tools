@@ -7,17 +7,21 @@ namespace TokenChat.Core;
 public sealed record FeedSnapshot(DateTimeOffset Generated, JsonObject Constants, JsonObject? Limits,
     IReadOnlyDictionary<string, JsonObject> Sessions)
 {
+    /// <summary>The sessions in the collector's order, which the widget draws its rows in.</summary>
+    public IReadOnlyList<JsonObject> Ordered { get; init; } = [];
+
     public static FeedSnapshot? Parse(string json)
     {
         try
         {
             if (JsonNode.Parse(json) is not JsonObject root || root["sessions"] is not JsonArray list) return null;
             var sessions = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+            var ordered = new List<JsonObject>();
             foreach (var s in list.OfType<JsonObject>())
-                if (s["sid"] is JsonValue v && v.TryGetValue(out string? sid)) sessions[sid] = s;
+                if (s["sid"] is JsonValue v && v.TryGetValue(out string? sid) && sessions.TryAdd(sid, s)) ordered.Add(s);
             var generated = root["generated"] is JsonValue g && g.TryGetValue(out long unix) ? unix : 0;
             return new FeedSnapshot(DateTimeOffset.FromUnixTimeSeconds(generated), root["constants"] as JsonObject ?? [],
-                root["limits"] as JsonObject, sessions);
+                root["limits"] as JsonObject, sessions) { Ordered = ordered };
         }
         catch (JsonException) { return null; }
     }

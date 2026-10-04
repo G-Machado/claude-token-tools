@@ -21,6 +21,14 @@ public class SessionFeedTests
     }
 
     [Fact]
+    public void KeepsTheCollectorsOrder()
+    {
+        var s = FeedSnapshot.Parse("""{"sessions":[{"sid":"c"},{"sid":"a"},{"nick":"no sid"},{"sid":"b"},{"sid":"A"}]}""")!;
+        // the sidebar draws rows in this order; a repeated id keeps its first place
+        Assert.Equal(["c", "a", "b"], s.Ordered.Select(o => (string)o["sid"]!));
+    }
+
+    [Fact]
     public async Task PicksUpTheFileTheWidgetSwapsIn()
     {
         var dir = Directory.CreateTempSubdirectory("feed-").FullName;

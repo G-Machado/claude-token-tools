@@ -14,6 +14,10 @@ namespace TokenChat.App;
 public partial class MainWindow : Window
 {
     readonly ObservableCollection<SessionTab> _tabs = [];
+    readonly Sidebar _sidebar;
+    // the tab whose row the sidebar should select once its rebuild has the row (a new tab is selected before that)
+    SessionTab? _syncTo;
+    bool _syncing;
     // Drag to reorder: past the system threshold the pressed tab follows the pointer along the strip and trades places
     // with a neighbour once the pointer crosses that neighbour's midpoint; the tabs it passes slide to their new places,
     // and on release it settles into its own. Esc puts it back.
@@ -30,7 +34,20 @@ public partial class MainWindow : Window
         Tabs.ItemsSource = _tabs;
         Tabs.SelectionChanged += (_, e) =>
         {
-            if (e.OriginalSource == Tabs && _tabs.Count > 0) Start.Visibility = Visibility.Collapsed;
+            if (e.OriginalSource != Tabs) return;
+            if (_tabs.Count > 0) Start.Visibility = Visibility.Collapsed;
+            _syncTo = Tabs.SelectedItem as SessionTab;
+            SyncSidebar();
+        };
+        _sidebar = new Sidebar(_tabs);
+        _sidebar.Refreshed += SyncSidebar;
+        Side.List.ItemsSource = _sidebar.Items;
+        // a row of this window shows its tab; a row elsewhere only opens to its detail
+        Side.List.SelectionChanged += (_, _) =>
+        {
+            if (_syncing || Side.List.SelectedItem is not SidebarItem { Tab: { } tab }) return;
+            Tabs.SelectedItem = tab;
+            Start.Visibility = Visibility.Collapsed;
         };
         Tabs.PreviewMouseLeftButtonDown += OnTabPress;
         Tabs.PreviewMouseMove += OnTabDrag;
@@ -52,6 +69,15 @@ public partial class MainWindow : Window
             MaxGlyph.ToolTip = max ? "restore" : "maximise";
         };
         ShowStart();
+    }
+
+    void SyncSidebar()
+    {
+        if (_syncTo is not { } tab || _sidebar?.Items.FirstOrDefault(i => i.Tab == tab) is not { } item) return;
+        _syncTo = null;
+        _syncing = true;
+        Side.List.SelectedItem = item;
+        _syncing = false;
     }
 
     /// <summary>--model from the command line, for every tab this window opens.</summary>

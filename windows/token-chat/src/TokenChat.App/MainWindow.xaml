@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:TokenChat.App"
-        Title="token-chat" Width="1000" Height="800" UseLayoutRounding="True"
+        Title="token-chat" Width="1290" Height="800" UseLayoutRounding="True"
         Background="{StaticResource Card}" Foreground="{StaticResource Text}"
         FontFamily="{StaticResource Ui}" FontSize="13">
     <!-- The widget's chrome: no system title bar, the tabs are the caption. The strip between and
@@ -80,7 +80,16 @@
             </Style>
         </Border.Style>
         <Grid>
-            <TabControl x:Name="Tabs" BorderThickness="0" Background="Transparent">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="290"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition/>
+            </Grid.ColumnDefinitions>
+            <!-- every session, this window first; the tabs stay until the sidebar takes over switching (phase 3) -->
+            <local:SidebarView x:Name="Side"/>
+            <Border Grid.Column="1" Width="1" Background="{StaticResource Line}"/>
+
+            <TabControl x:Name="Tabs" Grid.Column="2" BorderThickness="0" Background="Transparent">
                 <TabControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type local:SessionTab}">
                         <StackPanel Orientation="Horizontal" ToolTip="{Binding Options.WorkingDirectory}">
@@ -112,9 +121,9 @@
             </TabControl>
 
             <!-- no tab open, or "+": recent folders over the content area, below the caption -->
-            <local:StartView x:Name="Start" Margin="0,35,0,0" Visibility="Collapsed"/>
+            <local:StartView x:Name="Start" Grid.Column="2" Margin="0,35,0,0" Visibility="Collapsed"/>
 
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
+            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
                         Height="34" Margin="0,0,4,0">
                 <CheckBox x:Name="LiteBox" Content="lite" Style="{StaticResource TextToggle}" Margin="0,1,2,0"
                           ToolTip="new tabs start Lite: Read, Edit, Write, Bash, Grep, Glob, AskUserQuestion; no MCP (about 16.9k floor)"/>
