@@ -184,6 +184,10 @@ set -u
 # no LANG at all, so the pane worked; the desktop shortcut runs a LOGIN shell,
 # the profile sets one, and the program died before it could paint anything.
 export LC_ALL=C
+# Cache-read weight against an uncached input token: opus-5-5 measured 0.05x
+# (pricing-reference.md), older models 0.1x. Every rent, heat and cut bar below
+# reads it from the environment (ENVIRON in awk), so one knob moves them all.
+export TS_RW="${TOKEN_W_CACHE_READ:-0.05}"
 # The renderers are single-quoted awk programs, so an apostrophe ANYWHERE inside
 # one - in a comment as readily as in a string - closes the quote and hands the
 # rest of the program to bash. It fails as a shell syntax error hundreds of
@@ -473,13 +477,13 @@ measure_constants() {
       for (b = int(f / 25000) + 1; b <= 40; b++) {
         if (hn[b] < 5 || hw[b] <= 0) continue
         # Rent above the floor, as in hot(): f is the measured floor in tokens.
-        rr = (hc[b] - hn[b] * f) * rpc * 0.1; if (rr < 0) rr = 0
+        rr = (hc[b] - hn[b] * f) * rpc * ENVIRON["TS_RW"]; if (rr < 0) rr = 0
         rr = rr / hw[b]; mid = (b + 0.5) * 25
         if (pm2 > 0 && pr2 < 1 && rr >= 1) { heat = pm2 + (mid - pm2) * (1 - pr2) / (rr - pr2); break }
         pm2 = mid; pr2 = rr }
       for (k in sn) {
         if (sn[k] < 2) continue
-        w = so[k] * 5 + sr[k] * 2 + sc[k] * rpc * 0.1 * sn[k]
+        w = so[k] * 5 + sr[k] * 2 + sc[k] * rpc * ENVIRON["TS_RW"] * sn[k]
         if (w <= 0) continue
         # Above the floor, not from zero. Every session pays ~f of cache write
         # before it has done anything, and dividing that one-off by a small
@@ -532,7 +536,7 @@ cut_bar_k() {
   awk -v f="$M_FLOOR" -v rd="$M_RD" -v rem="$M_REM" -v rpc="$RPC" 'BEGIN {
     F = (f > 0 ? f : 63); D = (rd > 0 ? rd : 34); M = (rem + 0 > 0.5 ? rem : 4)
     P = (rpc + 0 > 0 ? rpc : 2.3)
-    printf "%.1f\n", F + D + (F + D) * 2 / (M * P * 0.1) }'
+    printf "%.1f\n", F + D + (F + D) * 2 / (M * P * ENVIRON["TS_RW"]) }'
 }
 CUT_K=$(cut_bar_k)
 
@@ -558,7 +562,7 @@ measure_overall() {
       g = (($2 in pv) ? $6 - pv[$2] : 0); if (g < 0) g = 0
       ch = $5 - g; if (ch < 0) ch = 0
       pv[$2] = $6
-      w = $4 * 5 + $5 * 2 + $6 * rpc * 0.1
+      w = $4 * 5 + $5 * 2 + $6 * rpc * ENVIRON["TS_RW"]
       # The floor lands entirely on cycle 1, so that is the only row it is
       # discounted off - see the note in measure_constants. Graded on the same
       # basis as a single session, or the OVERALL line and a row cell would be
@@ -1533,7 +1537,7 @@ $b	${AMETA[$b]:-}
 EOF
     # The same weights the rest of this file prices a window with: output 5x,
     # cache write 2x, cache read 0.1x, all in input-equivalents.
-    wt=$(awk -v o="${to:-0}" -v w="${tw:-0}" -v r="${tr:-0}" 'BEGIN{printf "%.0f", o*5 + w*2 + r*0.1}')
+    wt=$(awk -v o="${to:-0}" -v w="${tw:-0}" -v r="${tr:-0}" 'BEGIN{printf "%.0f", o*5 + w*2 + r*ENVIRON["TS_RW"]}')
     age=$(( now_agent - mt )); [ "$age" -ge 0 ] || age=0
     run=0; [ "$age" -le "$AG_LIVE" ] && run=1
     AGN[$sid]=$(( ${AGN[$sid]:-0} + 1 ))
@@ -2693,7 +2697,7 @@ emit_json() {
     function ep(t,   x) { x = t; gsub(/[-:]/, " ", x); return mktime(x " 00") }
     NR > 1 && $2 != "" {
       e = ep($1); if (e <= 0 || now - e > 604800) next
-      o += $4 * 5; w += $5 * 2; r += $6 * rpc * 0.1 }
+      o += $4 * 5; w += $5 * 2; r += $6 * rpc * ENVIRON["TS_RW"] }
     END { printf "%.0f %.0f %.0f\n", o, w, r }' <(hist_rows) 2>/dev/null)"
   : "${S7O:=0}" "${S7W:=0}" "${S7R:=0}"
   # The per-session cycle series behind the growth sparkline. hist_rows is a
@@ -2814,8 +2818,8 @@ emit_json() {
     PARK_AT  = (RESTART_PARK + 23) / 2
     CLEAR_PK = RESTART_PARK / 2
     CLEAR_NO = RESTART_NO / 2
-    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * 0.1)
-    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * 0.1)
+    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * ENVIRON["TS_RW"])
+    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * ENVIRON["TS_RW"])
     if (OVERHEAT <= PARK_AT) OVERHEAT = PARK_AT + 1
     if (OVERHEAT >= CUT_PK)  OVERHEAT = CUT_PK - 1
 
@@ -2907,7 +2911,7 @@ emit_json() {
         # Held, per session: the same row test the 7d line uses, real cycles
         # only, so a card and the week cannot disagree on what "past" means.
         if (hr[8] != "renew" && hr[8] != "park") {
-          hw = hr[4] * 5 + hr[5] * 2 + hr[6] * RPC * 0.1
+          hw = hr[4] * 5 + hr[5] * 2 + hr[6] * RPC * ENVIRON["TS_RW"]
           HPW[hs] += hw; if (hr[6] + 0 > cutk * 1000) HHB[hs] += hw } }
       close(hf) } }
 
@@ -2922,7 +2926,7 @@ emit_json() {
     if (R[i,11] + 0 < 3 || R[i,12] + 0 <= 0 || R[i,5] / 1000 < FLOOR) return 0
     work = R[i,12] / R[i,11] * 5
     if (work <= 0) return 0
-    return (R[i,5] - FLOOR * 1000) * RPC * 0.1 / work }
+    return (R[i,5] - FLOOR * 1000) * RPC * ENVIRON["TS_RW"] / work }
 
   function urank(i,   c) {
     if (R[i,2] + 0 != 1) return -1
@@ -2949,7 +2953,7 @@ emit_json() {
 
   function tip(i, slot,   c, carry, be, lf, pk) {
     c = R[i,5] / 1000; lf = R[i,4] + 0; pk = R[i,19] + 0
-    carry = (c - FLOOR - RD_NO) * RPC * 0.1; if (carry < 0.05) carry = 0.05
+    carry = (c - FLOOR - RD_NO) * RPC * ENVIRON["TS_RW"]; if (carry < 0.05) carry = 0.05
     be = int(RESTART_NO / carry + 0.5)
     if (R[i,2] + 0 != 1)
       return (slot == 1) ? "the process is gone - nothing here is being paid for any more." : ""
@@ -3104,14 +3108,14 @@ emit_json() {
       lvq = R[i,31] + 0; lvo = R[i,32] + 0; lvw = R[i,33] + 0
       lvr = R[i,34] + 0; lvx = R[i,35] + 0
       if (lvx <= cx) { lvq = 0; lvo = 0; lvw = 0; lvr = 0; lvx = cx }
-      lvcost = lvo * 5 + lvw * 2 + lvr * 0.1
+      lvcost = lvo * 5 + lvw * 2 + lvr * ENVIRON["TS_RW"]
       lvgro  = lvx - cx; if (lvgro < 0) lvgro = 0
       # Context is the live reading wherever there is one. Everything priced off
       # it - the extension marks, the lapse cost, the bands - is answering "what
       # would this window cost right now", and right now is not last cycle.
       cxl = (lvx > cx) ? lvx : cx
-      wtd = ot * 5 + rt * 2 + cx * RPC * 0.1 * cy + lvcost
-      cread = cx * RPC * 0.1 * cy + lvr * 0.1; cout = (ot + lvo) * 5; cwrite = (rt + lvw) * 2
+      wtd = ot * 5 + rt * 2 + cx * RPC * ENVIRON["TS_RW"] * cy + lvcost
+      cread = cx * RPC * ENVIRON["TS_RW"] * cy + lvr * ENVIRON["TS_RW"]; cout = (ot + lvo) * 5; cwrite = (rt + lvw) * 2
       dis = wtd - FLOOR * 2000; if (dis < wtd * 0.15) dis = wtd * 0.15
       spend = (cy > 0) ? dis / cy / 1000 : 0
       prod  = (wtd > 0) ? cout * 100 / wtd : 0
@@ -3232,7 +3236,7 @@ emit_json() {
       exo = exu - exa; if (exo < 0) exo = 0
       printf "\"ext_allowed\":%d,\"ext_used\":%d,\"ext_over\":%d,\"ext_left\":%d,", \
         exa, (exu > exa ? exa : exu), exo, (exa - exu < 0 ? 0 : exa - exu)
-      printf "\"ext_cost\":%.0f,\"lapse_cost\":%.0f,", cx * 0.1, cx * 2
+      printf "\"ext_cost\":%.0f,\"lapse_cost\":%.0f,", cx * ENVIRON["TS_RW"], cx * 2
       # Whether the input block is armed on this window. A membership test on a
       # space-padded list rather than a stat per session: the answer is the same
       # and the whole list was one directory read.
@@ -3268,7 +3272,7 @@ emit_json() {
 sess_held() {
   hist_rows 2>/dev/null | awk -F, -v rpc="$RPC" -v cut="$CUT_K" '
     NR > 1 && $2 != "" && $8 != "renew" && $8 != "park" {
-      w = $4 * 5 + $5 * 2 + $6 * (rpc + 0 > 0 ? rpc : 2.3) * 0.1
+      w = $4 * 5 + $5 * 2 + $6 * (rpc + 0 > 0 ? rpc : 2.3) * ENVIRON["TS_RW"]
       pw[$2] += w; if ($6 + 0 > cut * 1000) hb[$2] += w }
     END { for (k in pw) if (pw[k] > 0) printf "%s=%.1f ", k, hb[k] * 100 / pw[k] }'
 }
@@ -3581,8 +3585,8 @@ render() {
     PARK_AT  = (RESTART_PARK + 23) / 2
     CLEAR_PK = RESTART_PARK / 2
     CLEAR_NO = RESTART_NO / 2
-    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * 0.1)
-    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * 0.1)
+    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * ENVIRON["TS_RW"])
+    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * ENVIRON["TS_RW"])
     # The ceiling, same rule as the --json block: ctxcol() paints it red.
     MAX_AT = (m_max + 0 > 0) ? m_max + 0 : ctxmax * 0.85
     if (MAX_AT >= ctxmax) MAX_AT = ctxmax - 1
@@ -3967,7 +3971,7 @@ render() {
   # MODELLED (this window x requests per cycle) because nothing on disk records
   # them per cycle. That is also why the column is deliberately coarse.
   function cparts(i, p) {
-    p[1] = ot[i] * 5; p[2] = rt[i] * 2; p[3] = cx[i] * RPC * 0.1 * cy[i]
+    p[1] = ot[i] * 5; p[2] = rt[i] * 2; p[3] = cx[i] * RPC * ENVIRON["TS_RW"] * cy[i]
     p[0] = p[1] + p[2] + p[3]
     return (cy[i] > 0 && p[0] > 0) }
 
@@ -4032,7 +4036,7 @@ render() {
     if (cy[i] < 3 || ot[i] <= 0 || cx[i] / 1000 < FLOOR) return 0
     work = ot[i] / cy[i] * 5
     if (work <= 0) return 0
-    return (cx[i] - FLOOR * 1000) * RPC * 0.1 / work }
+    return (cx[i] - FLOOR * 1000) * RPC * ENVIRON["TS_RW"] / work }
   function hotcol(h) {
     return (h >= 1.5) ? RED : (h >= 1.0) ? ORG : (h >= 0.7) ? YEL : GRN }
   function hcell(i,   h) {
@@ -4336,7 +4340,7 @@ render() {
   # number that was true at one review and never again.
   function tip(i, slot,   c, carry, be) {
     c = cx[i] / 1000
-    carry = (c - FLOOR - RD_NO) * RPC * 0.1; if (carry < 0.05) carry = 0.05
+    carry = (c - FLOOR - RD_NO) * RPC * ENVIRON["TS_RW"]; if (carry < 0.05) carry = 0.05
     be = int(RESTART_NO / carry + 0.5)
     if (al[i] != 1)
       return (slot == 1) ? "the process is gone - nothing here is being paid for any more." : ""
@@ -4441,7 +4445,7 @@ render() {
   # line can never disagree about a session.
   function gvals(i, g,   wtd, ctl, chn) {
     if (cy[i] < 2) return 0
-    wtd = ot[i] * 5 + rt[i] * 2 + cx[i] * RPC * 0.1 * cy[i]
+    wtd = ot[i] * 5 + rt[i] * 2 + cx[i] * RPC * ENVIRON["TS_RW"] * cy[i]
     if (wtd <= 0) return 0
     g[5] = HELD[sid[i]] + 0
     # Short: the cold floor write as a share of the session - the one cost a
@@ -5071,7 +5075,7 @@ analytics() {
     g = (($2 in pv) ? $6 - pv[$2] : 0); if (g < 0) g = 0
     ch = $5 - g; if (ch < 0) ch = 0
     pv[$2] = $6
-    w = $4 * 5 + $5 * 2 + $6 * rpc * 0.1
+    w = $4 * 5 + $5 * 2 + $6 * rpc * ENVIRON["TS_RW"]
     # Two weights, deliberately. w is what the cycle actually cost and is what
     # every total and every dollar figure below is built from. wg is the same
     # number with the cold floor taken off cycle 1, and it is what the GRADES
@@ -5091,7 +5095,7 @@ analytics() {
     hld = ($8 == "renew" || $8 == "park") ? 1 : 0
     N++
     if (hld) { HN++; HW += w; HK[$8]++ }
-    TW += w; TO += $4 * 5; TWR += $5 * 2; TRD += $6 * rpc * 0.1
+    TW += w; TO += $4 * 5; TWR += $5 * 2; TRD += $6 * rpc * ENVIRON["TS_RW"]
     if (!hld) { NP++; WV[NP] = w; OV[NP] = $4; GV[NP] = g }
     # A running top-8 by weighted cost, kept here rather than sorted at the end
     # so the whole history never has to be held twice. Only 5 are printed; the
@@ -5125,7 +5129,7 @@ analytics() {
     # one that admits it cannot place it.
     pj = ($2 in PJ) ? PJ[$2] : "(unplaced)"
     PJW[pj] += w; PJN[pj]++; PJO[pj] += $4 * 5; PJR[pj] += $5 * 2
-    PJD[pj] += $6 * rpc * 0.1
+    PJD[pj] += $6 * rpc * ENVIRON["TS_RW"]
     if (!(($2 SUBSEP pj) in PJSEEN)) { PJSEEN[$2 SUBSEP pj] = 1; PJS[pj]++ }
     if (age <= 604800) PJ7[pj] += w
     dk = substr($1, 1, 10); if (!(dk in dayseen)) { dayseen[dk] = 1; NDAYS++ }
@@ -6762,6 +6766,7 @@ parked_json() {
         if (index(ln, "\"display\":\"/unpark ") == 0) continue
         if (!match(ln, /"display":"\/unpark [^"]*"/)) continue
         a = tolower(trim(substr(ln, RSTART + 19, RLENGTH - 20)))
+        sub(/ +--handoff$/, "", a)
         if (a == "" || !match(ln, /"timestamp":[0-9]+/)) continue
         ts = int(substr(ln, RSTART + 12, RLENGTH - 12) / 1000)
         if (!match(ln, /"sessionId":"[^"]*"/)) continue
@@ -6992,7 +6997,7 @@ arrange() {
         if (index(hay, tolower(f)) == 0) next }
       k = 0
       if      (s == 1) k = 99999999 - $5
-      else if (s == 2) k = 99999999 - ($12 * 5 + $25 * 2 + $5 * rpc * 0.1 * $11)
+      else if (s == 2) k = 99999999 - ($12 * 5 + $25 * 2 + $5 * rpc * ENVIRON["TS_RW"] * $11)
       else if (s == 3) k = $3
       if (k < 0) k = 0
       # Closed sessions stay under the live ones whatever the key is. They are a

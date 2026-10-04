@@ -1,5 +1,5 @@
 // SessionStart hook: after a /compact (source=compact), re-inject the standing rules of this
-// session's checkpoint - Goal, "Decided - do not reopen", "Verified vs assumed". Compaction is
+// session's checkpoint - Next, Goal, Facts, "Decided - do not reopen", "Verified vs assumed". Compaction is
 // known to drop side constraints; the checkpoint file is the invariant store.
 // Checkpoint lookup: one stamped with this session id, else the last checkpoint path the
 // transcript mentions (an /unpark'd one carries the old session's stamp).
@@ -35,13 +35,13 @@ process.stdin.on('data', d => inp += d).on('end', () => {
   if (!file) { log(`${sid} MISS no checkpoint for this session`); return; }
 
   const txt = fs.readFileSync(file, 'utf8');
-  const want = /^## (Goal|Decided|Verified)/;
+  const want = /^## (Next|Goal|Facts|Decided|Verified)/;
   const out = []; let on = false;
   for (const line of txt.split(/\r?\n/)) {
     if (line.startsWith('## ')) on = want.test(line);
     if (on) out.push(line);
   }
-  if (!out.length) { log(`${sid} EMPTY ${path.basename(file)} has no Goal/Decided/Verified`); return; }
+  if (!out.length) { log(`${sid} EMPTY ${path.basename(file)} has no Next/Goal/Facts/Decided/Verified`); return; }
   log(`${sid} OK ${how} ${path.basename(file)} ${out.length} lines`);
   const ctx = `[post-compact] Standing rules from checkpoint ${path.basename(file)} ` +
     `(compaction may have dropped these; treat Decided as settled):\n\n` + out.join('\n');

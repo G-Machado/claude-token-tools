@@ -25,40 +25,65 @@ One checkpoint per **topic** (existing ones are listed above), at
 
 Everything is already in the window; do not read files to write this. If something needed is not
 in the window, write "unknown" rather than reading. Pointers (`file:line`, commands, fileIDs), not
-prose about code. **Under ~40 lines.** Omit any section that would be empty.
+prose about code. **Under ~50 lines.** Omit any section that would be empty.
+
+The reader is a cold session that will act on it. Measured over 85 unparks (2026-10-04): reading the
+checkpoint costs ~2.5k, but getting from there to the first edit costs a median 33.6k growth, 14.5k
+output and 13 lookups, 58% of them on files the parked session had already read. Next, Map and Facts
+exist to cut that: hand over the plan, the exact ranges and the facts, not a summary.
 
 ```markdown
 <!-- park: session=<session id above> topic=<slug> cwd=<cwd above> -->
 # <project> — <topic> — <YYYY-MM-DD HH:MM>
 
-## Goal
-<1-3 lines: what done looks like, and why>
+## Next
+1. <first action: file:line or command, and the edit or answer it leads to>
+2. <...the plan as far as this window already knows it>
+Stop after: <the point where the cold session reports back>
 
-## State
-- <file:line / asset / command> — what changed; done | partial | broken
-- git: <branch @ short HEAD, dirty?>   (omit outside a repo)
+## Goal
+<1-2 lines: what done looks like, and why>
+
+## Map — read these ranges, nothing else
+- <file:start-end> — <what is there: symbol, its role in Next>
+- not here: <places already searched that do not hold it>
+
+## Facts
+- <signature / return contract / constant / exact command the Next steps need>
 
 ## Decided — do not reopen
-- <decision> — <the reason, or the evidence that settled it>
+- <decision> — <the evidence that settled it> · assumes <premise>
 - ruled out: <approach> — <why it failed>
 
 ## Verified vs assumed
 - verified (<command / file:line>): ...
 - assumed: ...
+- open: <unknown> — check: `<the one command that settles it>`
 
-## Next
-<the single next action, concrete enough to start cold — which file, which command>
+## State
+- <file:line / asset / command> — what changed; done | partial | broken
+- git: <branch @ short HEAD, dirty?>   (omit outside a repo)
 
 ## Waiting on the user
 <questions or tests only the user can do; omit if none>
 ```
 
+- **Next** is the plan, not a hint: the steps this window would take next, in order, each concrete
+  enough to start cold. After a `/handoff` the cold session runs them unasked unless Waiting on the
+  user has items, so a step that needs the user's say belongs there, not in Next.
+- **Map**: only what the Next steps touch, as line ranges seen in this window, at most 8 rows.
+  `not here:` saves the cold session from searching the same places again.
+- **Facts**: at most 10 lines, copied from the window, never recalled.
+- **assumes**: name the premise a decision rests on when there is one (a price, a measured constant,
+  a version). A later session may reopen the decision only if that premise has changed.
+- **open**: an unknown without its one-command check is a search the cold session has to design.
+
 The `<!-- park: -->` line must be exact: `token-sessions.sh` matches it to the window, and the
 parked widget resumes in its `cwd=` (copy the path verbatim, spaces and all; it runs to ` -->`).
 
-**Decided — do not reopen** is the section that pays for the checkpoint. Catching up costs only ~7k
-of tokens either way; what a cold session actually loses is *why* things are the way they are, and
-it will reopen settled questions. That is rework, the top cost.
+**Decided — do not reopen** is the section that guards against rework, the top cost: what a cold
+session loses is *why* things are the way they are, and it will reopen settled questions. Next, Map
+and Facts are what make catching up cheap.
 
 ## 3. Recommend (one line)
 

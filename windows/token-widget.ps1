@@ -1263,7 +1263,7 @@ function New-CtxBar {
 #     Opposite actions, and the row could not tell them apart.
 function Cache-Tip($S) {
   $ctx  = [double]$S.context
-  $warm = $ctx * 0.1
+  $warm = $ctx * $(if ($env:TOKEN_W_CACHE_READ) { [double]$env:TOKEN_W_CACHE_READ } else { 0.05 })
   $cold = $ctx * 2
   $lf   = [int]$S.cache_left_min
   $gm   = [int]$S.gap_med_min

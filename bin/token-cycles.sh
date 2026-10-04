@@ -201,7 +201,7 @@ REDERIVE="${TOKEN_REDERIVE_COST:-6700}"   # was 34,000 (n=29, 2026-08-24); 15,00
 # sessions run on; set W_WRITE=1.25 for a 5-minute TTL.
 W_OUT="${TOKEN_W_OUTPUT:-5}"
 W_WRITE="${TOKEN_W_CACHE_WRITE:-2}"
-W_READ="${TOKEN_W_CACHE_READ:-0.1}"
+W_READ="${TOKEN_W_CACHE_READ:-0.05}"   # opus-5-5 measured 0.05x; older models 0.1x
 
 # Full-window reads per cycle: the carry multiplier. Scales the weighted
 # break-even linearly. It was a 2.3 requests/cycle guess from one session; the
@@ -952,6 +952,9 @@ END {
   for (i = 1; i <= cycle; i++) {
     ov = o[i] + 0; cv = c[i] + 0
     o[i] = ov; c[i] = cv; r[i] = r[i] + 0; q[i] = q[i] + 0; nq[i] = nq[i] + 0
+    # A cycle with no request (interrupted before any reply) left the window as it was: carry the
+    # previous context forward, or the next cycle would count the whole window as growth.
+    if (i > 1 && r[i] == 0) r[i] = r[i-1]
     outTotal += ov; newTotal += cv; readTotal += q[i]
     if (cv > maxNew) maxNew = cv
     if (ov > budget) over++

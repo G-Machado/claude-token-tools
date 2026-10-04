@@ -21,7 +21,7 @@ if (-not (Test-Path $Cwd)) { Log "no dir $Cwd - abort"; Write-Output "no dir $Cw
 # (Open-Unpark): a running instance takes it as a new tab. The terminal is only
 # the fallback for a machine with no TokenChat build to find.
 . (Join-Path $cl 'token-open.ps1')
-$why = Open-Unpark $Cwd "/unpark $Topic" $Model $Effort
+$why = Open-Unpark $Cwd "/unpark $Topic --handoff" $Model $Effort
 if ($null -eq $why) {
   $where = 'a new TokenChat tab'
 } else {
@@ -29,7 +29,7 @@ if ($null -eq $why) {
   if ($Model)  { $flags += " --model $Model" }
   if ($Effort) { $flags += " --effort $Effort" }
   $shim  = Join-Path $cl 'token-unpark-launch.cmd'
-  $inner = if (Test-Path $shim) { '"{0}"{1} "/unpark {2}"' -f $shim, $flags, $Topic } else { 'claude{0} "/unpark {1}"' -f $flags, $Topic }
+  $inner = if (Test-Path $shim) { '"{0}"{1} "/unpark {2} --handoff"' -f $shim, $flags, $Topic } else { 'claude{0} "/unpark {1} --handoff"' -f $flags, $Topic }
 
   $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
   if ($wt) { Start-Process -FilePath $wt.Source -ArgumentList @('-d', $Cwd, 'cmd.exe', '/k', $inner) | Out-Null }

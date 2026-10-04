@@ -8,6 +8,9 @@ allowed-tools: Bash(bash:*), Bash(git:*), Read, Grep, Glob
 Resume the work a previous session parked. The checkpoints for this project are listed above, newest
 first, with topic slug, age, and full path. The user typed: **$ARGUMENTS**
 
+A trailing `--handoff` is not part of the topic: drop it before matching. It means `/handoff` opened
+this window mid-flow; nobody cleared to go elsewhere.
+
 **Pick one, in this order.**
 
 1. **An argument was given** — match it case-insensitively against the topic slugs as a substring
@@ -32,13 +35,23 @@ session, another developer, or the user's own hands.
   anything else — it is describing a state that no longer exists.
 - Keep its **verified** claims verified and its **assumed** claims assumed. Do not promote one to the
   other by re-reading.
-- If it names a file, function or flag, confirm that still exists before recommending it.
+- If it names a file, function or flag, confirm that still exists before recommending it — one `ls`
+  or `grep -n` over the Map rows, not a read.
 
-**Then report, in three lines, and stop.**
+**Then report and stop — or, after a handoff, carry on.**
 
-Where the work stands, what the next step was, and anything flagged blocked or open. Do not begin
-that step until the user says to — they cleared for a reason and may want to go elsewhere.
+- **Plain `/unpark`:** report in three lines — where the work stands, the first Next step, anything
+  blocked or open — and stop. Do not begin until the user says to: they cleared for a reason and may
+  want to go elsewhere.
+- **`--handoff`, Waiting on the user empty or absent, the checks above clean:** one line on where it
+  stands, then run the Next steps in order up to its `Stop after:` point, and report there.
+- **`--handoff` with anything waiting on the user, or a check failed:** report in three lines and
+  stop, with the waiting items as the `▶` block.
 
-Do not re-read the files the checkpoint summarises. Treat its **Decided — do not reopen** section as
-settled: reopening those is the rework the checkpoint exists to prevent. Re-read only to confirm
-something still exists, per the check above.
+**Working from it.** Read the Map ranges only when a Next step needs them, as ranged reads; skip the
+`not here:` places and use Facts instead of reading. An `open:` line comes with its check: run that
+command rather than searching. Do not re-read the files the checkpoint summarises.
+
+Treat **Decided — do not reopen** as settled: reopening is the rework the checkpoint exists to
+prevent. The one exception is a decision whose `assumes` premise has visibly changed — say so first,
+naming the premise and what it is now, before acting on it.
