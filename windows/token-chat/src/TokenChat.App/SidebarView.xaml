@@ -14,6 +14,24 @@
             <Setter Property="Padding" Value="6,1,6,2"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
+        <!-- one limit window: label, bar, percentage and the time to its reset; the label rides in on Tag -->
+        <DataTemplate DataType="{x:Type local:LimitGauge}">
+            <StackPanel Orientation="Horizontal" Margin="0,0,8,0">
+                <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=ContentControl}}"
+                           Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,0,5,0"/>
+                <Grid Width="40" Height="4" Margin="0,0,5,0" VerticalAlignment="Center">
+                    <Border Background="{StaticResource Track}" CornerRadius="2"/>
+                    <Border Background="{Binding Brush}" CornerRadius="2" RenderTransformOrigin="0,0.5">
+                        <Border.RenderTransform>
+                            <ScaleTransform ScaleX="{Binding Fill}"/>
+                        </Border.RenderTransform>
+                    </Border>
+                </Grid>
+                <TextBlock Text="{Binding Pct}" Style="{StaticResource Fig}" FontSize="9.5" FontWeight="SemiBold"
+                           Foreground="{Binding Brush}" Margin="0,0,4,0"/>
+                <TextBlock Text="{Binding ResetsIn}" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"/>
+            </StackPanel>
+        </DataTemplate>
         <!-- the widget's keys for a row, as a menu; they work as keys while the list has focus -->
         <ContextMenu x:Key="RowMenu" x:Shared="False" Background="{StaticResource Card}" Foreground="{StaticResource Text}"
                      BorderBrush="{StaticResource Line}">
@@ -34,6 +52,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="34"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition/>
         </Grid.RowDefinitions>
         <!-- in the caption band, so it drags the window as the strip beside the tabs does -->
@@ -51,9 +70,56 @@
                         Padding="7,0,7,2" ToolTip="new session…" Click="OnNew"/>
             </StackPanel>
         </Grid>
-        <Border Grid.Row="1" Height="1" Background="{StaticResource Line}"/>
+        <!-- the widget's limits block: a row per plan account, then today's spend against TOKEN_DAY_CAP -->
+        <StackPanel x:Name="Usage" Grid.Row="1" Margin="14,0,10,8">
+            <ItemsControl ItemsSource="{Binding Accounts}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3" ToolTip="{Binding Email}">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Opacity" Value="0.62"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Active}" Value="True">
+                                            <Setter Property="Opacity" Value="1"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="{Binding N}" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"
+                                       MinWidth="7" Margin="0,0,8,0"/>
+                            <ContentControl Content="{Binding FiveHour}" Tag="5h" Focusable="False"/>
+                            <ContentControl Content="{Binding SevenDay}" Tag="7d" Focusable="False"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Grid Margin="0,2,0,0" Visibility="{Binding HasDay, Converter={StaticResource Shown}}" ToolTip="{Binding DayTip}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="today" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,0,6,0"/>
+                <Grid Grid.Column="1" Width="66" Height="5" Margin="0,0,6,0" VerticalAlignment="Center">
+                    <Border Background="{StaticResource Track}" CornerRadius="2.5"/>
+                    <Border Background="{Binding DayBrush}" CornerRadius="2.5" RenderTransformOrigin="0,0.5">
+                        <Border.RenderTransform>
+                            <ScaleTransform ScaleX="{Binding DayFill}"/>
+                        </Border.RenderTransform>
+                    </Border>
+                </Grid>
+                <TextBlock Grid.Column="2" Text="{Binding DayText}" Style="{StaticResource Fig}" FontSize="9.5"
+                           Foreground="{StaticResource Dim}"/>
+                <TextBlock Grid.Column="3" Text="{Binding Account}" Style="{StaticResource Fig}" FontSize="9.5"
+                           Foreground="{StaticResource Faint}" HorizontalAlignment="Right" Margin="8,0,0,0"
+                           TextTrimming="CharacterEllipsis"/>
+            </Grid>
+        </StackPanel>
+        <Border Grid.Row="2" Height="1" Background="{StaticResource Line}"/>
 
-        <ListBox x:Name="List" Grid.Row="2" Background="Transparent" BorderThickness="0" Padding="0,4,0,8"
+        <ListBox x:Name="List" Grid.Row="3" Background="Transparent" BorderThickness="0" Padding="0,4,0,8"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
             <ListBox.ItemContainerStyle>
                 <Style TargetType="ListBoxItem">

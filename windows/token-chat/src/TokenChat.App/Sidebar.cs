@@ -56,6 +56,7 @@ public sealed class Sidebar
     bool _queued;
 
     public ObservableCollection<SidebarItem> Items { get; } = [];
+    public UsageHeader Usage { get; } = new();
     /// <summary>After every rebuild, on the UI thread.</summary>
     public event Action? Refreshed;
 
@@ -93,6 +94,7 @@ public sealed class Sidebar
     void Refresh()
     {
         var feed = SessionTab.Feed.Value.Snapshot;
+        Usage.Set(feed);
         var want = new List<(object Key, string Name, string Project, Brush? Brush, string State, FooterRow? Row, JsonObject? Session)>();
         var here = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in _tabs)

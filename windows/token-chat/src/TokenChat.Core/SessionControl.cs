@@ -44,6 +44,37 @@ public static class SessionControl
             ? null : "token-sessions.sh " + args[0] + " failed";
     }
 
+    /// <summary>The widget's collect: token-sessions.sh --json, or null when it failed or said nothing. Checks the
+    /// poke-due task on the way, as the widget does on every collect.</summary>
+    public static async Task<string?> CollectAsync()
+    {
+        if (FindBash() is not { } bash) return null;
+        await EnsurePokeDueAsync();
+        var (code, output) = await RunAsync(bash, ["-lc", "\"$HOME/.claude/token-sessions.sh\" --json --no-update-check 2>/dev/null"]);
+        return code == 0 && output.Trim().Length > 0 ? output : null;
+    }
+
+    static DateTime _pokeDueCheckedAt = DateTime.MinValue;
+
+    /// <summary>The widget's Ensure-PokeDue, once an hour: re-arm the ClaudeTokenPokeDue task when it has gone missing,
+    /// unless token-pokedue.off says it was turned off on purpose. Never fatal.</summary>
+    static async Task EnsurePokeDueAsync()
+    {
+        if (DateTime.UtcNow - _pokeDueCheckedAt < TimeSpan.FromMinutes(60)) return;
+        _pokeDueCheckedAt = DateTime.UtcNow;
+        try
+        {
+            if (File.Exists(Path.Combine(Claude, "token-pokedue.off"))) return;
+            if (await RunAsync("schtasks.exe", ["/Query", "/TN", "ClaudeTokenPokeDue"]) is (0, _)) return;
+            var install = Path.Combine(Claude, "token-pokedue-install.ps1");
+            if (!File.Exists(install)) return;
+            await RunAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", install]);
+            File.AppendAllText(Path.Combine(Claude, "token-pokedue.log"),
+                $"{DateTime.Now:yyyy-MM-ddTHH:mm:ss}\tre-armed by TokenChat - the task was missing\n");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
     /// <summary>token-open.ps1's Open-Session: focus the window holding a live session (a terminal, an IDE, TokenChat).
     /// Returns its one-line answer.</summary>
     public static async Task<string> OpenAsync(string sid, string cwd, int pid)

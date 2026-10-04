@@ -22,6 +22,7 @@ public partial class MainWindow : Window
         _sidebar = new Sidebar(_tabs);
         _sidebar.Refreshed += SyncSidebar;
         Side.List.ItemsSource = _sidebar.Items;
+        Side.Usage.DataContext = _sidebar.Usage;
         // a row of this window shows its chat; a row elsewhere only opens to its controls
         Side.List.SelectionChanged += (_, _) =>
         {

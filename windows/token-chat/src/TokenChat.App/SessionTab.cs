@@ -31,8 +31,8 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     }
 
     readonly ConcurrentQueue<ClaudeEvent> _inbox = new();
-    /// <summary>The widget's collect, one watcher for every tab.</summary>
-    internal static readonly Lazy<SessionFeed> Feed = new(() => new SessionFeed());
+    /// <summary>The widget's collect, one watcher for every tab; the app collects itself when the widget is not running.</summary>
+    internal static readonly Lazy<SessionFeed> Feed = new(() => new SessionFeed(collect: SessionControl.CollectAsync));
 
     readonly DispatcherTimer _render;
     readonly DispatcherTimer _clock;
