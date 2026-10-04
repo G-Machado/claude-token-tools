@@ -692,8 +692,8 @@
             </Grid>
         </Border>
 
-        <!-- the widget's compact row for this session (FooterRow: its rules, its colours), then what the row doesn't
-             carry, the mode and the keys. Card ground so the Inset pills read as they do on the widget. -->
+        <!-- the session's status line; its figures are on its sidebar row (FooterRow: the widget's rules and colours).
+             Card ground so the Inset pills read as they do on the widget. -->
         <Border Grid.Row="3" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
                 Padding="14,6,14,7">
             <StackPanel>
@@ -710,170 +710,50 @@
                         <Setter Property="VerticalAlignment" Value="Center"/>
                     </Style>
                 </StackPanel.Resources>
-                <StackPanel DataContext="{Binding Row}" Margin="0,0,0,6">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Style.Triggers>
-                                <Trigger Property="DataContext" Value="{x:Null}">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <!-- one line, the window is wide enough: verdict, model, growth, cycles, heat, then parked, marks,
-                         ctx and the hour, spend and the grades -->
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="20"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="{Binding Mark}" Foreground="{Binding MarkBrush}" Style="{StaticResource Fig}" FontSize="9"/>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal">
-                            <!-- click for the effort menu: /effort for this session only -->
-                            <Border Style="{StaticResource Pill}" Padding="6,1,6,2" Margin="0,0,10,0" Cursor="Hand"
-                                    ToolTip="Effort for this session - click to change" MouseLeftButtonUp="OnEffortMenu">
-                                <Border.ContextMenu>
-                                    <ContextMenu Opened="OnEffortMenuOpened" Background="{StaticResource Card}"
-                                                 Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}">
-                                        <MenuItem Header="low" Click="OnEffortPick"/>
-                                        <MenuItem Header="medium" Click="OnEffortPick"/>
-                                        <MenuItem Header="high" Click="OnEffortPick"/>
-                                        <MenuItem Header="xhigh" Click="OnEffortPick"/>
-                                        <MenuItem Header="max" Click="OnEffortPick"/>
-                                        <Separator/>
-                                        <MenuItem Header="auto" Click="OnEffortPick"/>
-                                    </ContextMenu>
-                                </Border.ContextMenu>
-                                <TextBlock Style="{StaticResource Fig}" FontSize="9.5">
-                                    <Run Text="{Binding Model, Mode=OneWay}" Foreground="{StaticResource Faint}"/><Run
-                                         Text="{Binding Effort, Mode=OneWay}" Foreground="{Binding EffortBrush, Mode=OneWay}"/>
-                                </TextBlock>
-                            </Border>
-                            <Grid VerticalAlignment="Center">
-                                <TextBlock Text="  -" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="9"
-                                           Visibility="{Binding SparkEmpty, Converter={StaticResource Shown}}"/>
-                                <ItemsControl ItemsSource="{Binding Spark}" Height="13">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Width="{Binding Width}" Height="{Binding Height}" Background="{Binding Fill}" CornerRadius="1"
-                                                    VerticalAlignment="Bottom" Margin="0,0,2,0">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding Live}" Value="True">
-                                                                <DataTrigger.EnterActions>
-                                                                    <BeginStoryboard>
-                                                                        <Storyboard>
-                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.35"
-                                                                                             Duration="0:0:0.9" AutoReverse="True" RepeatBehavior="Forever"/>
-                                                                        </Storyboard>
-                                                                    </BeginStoryboard>
-                                                                </DataTrigger.EnterActions>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </Grid>
-                            <TextBlock Text="{Binding Growth}" Foreground="{Binding GrowthBrush}" Style="{StaticResource Fig}"
-                                       FontSize="9.5" Margin="2,0,8,0"/>
-                            <Border Style="{StaticResource Pill}" Margin="0,0,10,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="cycles" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="8" Margin="0,1,6,0"/>
-                                    <TextBlock Text="{Binding Cycles}" Foreground="{StaticResource Dim}" Style="{StaticResource Fig}" FontSize="10.5"/>
-                                    <TextBlock Text="{Binding Pokes}" Foreground="{StaticResource Blue}" Style="{StaticResource Fig}" FontSize="9.5" Margin="5,0,0,0"/>
-                                </StackPanel>
-                            </Border>
-                            <TextBlock Text="{Binding Heat}" Foreground="{Binding HeatBrush}" Style="{StaticResource Fig}"
-                                       FontSize="9.5" FontWeight="SemiBold"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="3" Orientation="Horizontal">
-                            <TextBlock Text="PARKED" Foreground="{Binding ParkedBrush}" Style="{StaticResource Fig}" FontSize="9"
-                                       FontWeight="Bold" Margin="7,0,0,0" Visibility="{Binding Parked, Converter={StaticResource Shown}}"/>
-                            <Border Style="{StaticResource Pill}" Margin="7,0,0,0" Visibility="{Binding HasState, Converter={StaticResource Shown}}">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding MarksLeft}" Foreground="{StaticResource Blue}" Style="{StaticResource Fig}" FontSize="11"/>
-                                    <TextBlock Text="{Binding MarksSpent}" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="11"/>
-                                    <TextBlock Text="B" Foreground="{StaticResource Red}" Style="{StaticResource Fig}" FontSize="11.5" FontWeight="Bold"
-                                               Margin="5,0,0,0" Visibility="{Binding Blocked, Converter={StaticResource Shown}}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Pill}" Margin="7,0,0,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="ctx" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="8" Margin="0,1,5,0"/>
-                                    <TextBlock Text="{Binding Ctx}" Foreground="{Binding CtxBrush}" Style="{StaticResource Fig}" FontSize="11.5" Margin="0,0,8,0"/>
-                                    <TextBlock Text="⏱" Foreground="{StaticResource Faint}" FontFamily="Segoe UI Symbol, Segoe UI, Consolas" FontSize="10"
-                                               VerticalAlignment="Center" Margin="0,1,6,0"/>
-                                    <TextBlock Text="{Binding Clock}" Foreground="{Binding ClockBrush}" FontSize="11.5"
-                                               MinWidth="30" TextAlignment="Right">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Fig}">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Cold}" Value="True">
-                                                        <Setter Property="FontWeight" Value="Bold"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Pill}" Margin="7,0,0,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="spend" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="8" Margin="0,1,7,0"/>
-                                    <Grid Width="66" Height="6" Margin="0,0,7,0" VerticalAlignment="Center">
-                                        <Border Background="{StaticResource Track}" CornerRadius="3"/>
-                                        <Border Background="{Binding SpendBrush}" CornerRadius="3" RenderTransformOrigin="0,0.5">
-                                            <Border.RenderTransform>
-                                                <ScaleTransform ScaleX="{Binding SpendFill}"/>
-                                            </Border.RenderTransform>
-                                        </Border>
-                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Yellow}"
-                                                Margin="{x:Static local:FooterRow.TickOkAt}" Opacity="{Binding TickOk}"/>
-                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Orange}"
-                                                Margin="{x:Static local:FooterRow.TickWatchAt}" Opacity="{Binding TickWatch}"/>
-                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Red}"
-                                                Margin="{x:Static local:FooterRow.TickHeavyAt}" Opacity="{Binding TickHeavy}"/>
-                                    </Grid>
-                                    <TextBlock Text="{Binding Spend}" Foreground="{StaticResource Dim}" Style="{StaticResource Fig}" FontSize="10.5"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Pill}" Padding="7,0,7,1" Margin="7,0,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1">
-                                <ItemsControl ItemsSource="{Binding Grades}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Letter}" Foreground="{Binding Fill}" FontFamily="Consolas" FontSize="10.5"
-                                                       FontWeight="SemiBold" Margin="0,0,5,0"/>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </Border>
-                        </StackPanel>
-                    </Grid>
-                </StackPanel>
-                <!-- line 2: what the row doesn't carry, the mode, the keys -->
+                <!-- the session's model and effort (click for the effort menu), what the sidebar row doesn't carry, the mode, the keys -->
                 <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="{Binding Status}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
+                    <StackPanel DataContext="{Binding Row}" VerticalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Style.Triggers>
+                                    <Trigger Property="DataContext" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <!-- click for the effort menu: /effort for this session only -->
+                        <Border Style="{StaticResource Pill}" Padding="6,1,6,2" Margin="0,0,12,0" Cursor="Hand"
+                                ToolTip="Effort for this session - click to change" MouseLeftButtonUp="OnEffortMenu">
+                            <Border.ContextMenu>
+                                <ContextMenu Opened="OnEffortMenuOpened" Background="{StaticResource Card}"
+                                             Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}">
+                                    <MenuItem Header="low" Click="OnEffortPick"/>
+                                    <MenuItem Header="medium" Click="OnEffortPick"/>
+                                    <MenuItem Header="high" Click="OnEffortPick"/>
+                                    <MenuItem Header="xhigh" Click="OnEffortPick"/>
+                                    <MenuItem Header="max" Click="OnEffortPick"/>
+                                    <Separator/>
+                                    <MenuItem Header="auto" Click="OnEffortPick"/>
+                                </ContextMenu>
+                            </Border.ContextMenu>
+                            <TextBlock Style="{StaticResource Fig}" FontSize="9.5">
+                                <Run Text="{Binding Model, Mode=OneWay}" Foreground="{StaticResource Faint}"/><Run
+                                     Text="{Binding Effort, Mode=OneWay}" Foreground="{Binding EffortBrush, Mode=OneWay}"/>
+                            </TextBlock>
+                        </Border>
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding Status}" Style="{StaticResource Meta}" Foreground="{StaticResource Dim}"
                                TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Grid.Column="1" Text="{Binding Mode}" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
+                    <TextBlock Grid.Column="2" Text="{Binding Mode}" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
                                Margin="14,0,0,0" TextWrapping="NoWrap"/>
-                    <TextBlock Grid.Column="2" Style="{StaticResource Meta}" FontSize="9.5" Margin="14,1,0,0" TextWrapping="NoWrap"
+                    <TextBlock Grid.Column="3" Style="{StaticResource Meta}" FontSize="9.5" Margin="14,1,0,0" TextWrapping="NoWrap"
                                Text="enter send · shift+enter newline · shift+tab mode · esc stop"/>
                 </Grid>
             </StackPanel>

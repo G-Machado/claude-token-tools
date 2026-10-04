@@ -33,7 +33,27 @@ public partial class SidebarView : UserControl
         _flash.Start();
     }
 
+    /// <summary>"+": the start page, to open a session in a folder.</summary>
+    public event Action? NewSession;
+    /// <summary>A row's close: MainWindow ends the session and moves the chat on.</summary>
+    public event Action<SessionTab>? CloseSession;
+
     static SidebarItem? ItemOf(object sender) => (sender as FrameworkElement)?.DataContext as SidebarItem;
+
+    void OnNew(object sender, RoutedEventArgs e) => NewSession?.Invoke();
+    void OnCloseRow(object sender, RoutedEventArgs e) { if (ItemOf(sender)?.Tab is { } tab) CloseSession?.Invoke(tab); }
+
+    /// <summary>/park as a poke: the composer's text and attachments stay, and a session mid-turn says so.</summary>
+    void OnPark(object sender, RoutedEventArgs e)
+    {
+        if (ItemOf(sender) is not { Tab: { } tab } item) return;
+        Flash(tab.Poke("/park") switch
+        {
+            "ok" => $"{item.Name}: /park sent",
+            "busy" => $"{item.Name} is mid-turn - park it once the turn ends",
+            _ => $"{item.Name} has exited",
+        });
+    }
 
     void OnMarkUp(object sender, RoutedEventArgs e) { if (ItemOf(sender) is { } item) Mark(item, 1); }
     void OnMarkDown(object sender, RoutedEventArgs e) { if (ItemOf(sender) is { } item) Mark(item, -1); }

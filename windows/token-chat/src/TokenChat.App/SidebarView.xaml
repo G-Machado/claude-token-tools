@@ -24,6 +24,9 @@
             <MenuItem Header="open its window" InputGestureText="enter" IsEnabled="{Binding CanOpen}" Click="OnOpen"/>
             <MenuItem Header="copy the resume command" InputGestureText="y" Click="OnCopy"/>
             <MenuItem Header="open the folder" InputGestureText="o" Click="OnFolder"/>
+            <Separator/>
+            <MenuItem Header="park the session" IsEnabled="{Binding Here}" Click="OnPark"/>
+            <MenuItem Header="close the session" IsEnabled="{Binding Here}" Click="OnCloseRow"/>
         </ContextMenu>
     </UserControl.Resources>
 
@@ -34,8 +37,20 @@
             <RowDefinition/>
         </Grid.RowDefinitions>
         <!-- in the caption band, so it drags the window as the strip beside the tabs does -->
-        <TextBlock x:Name="Note" Text="sessions" Foreground="{StaticResource Faint}" FontSize="10.5" VerticalAlignment="Bottom"
-                   Margin="14,0,10,9" TextTrimming="CharacterEllipsis"/>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="Note" Text="sessions" Foreground="{StaticResource Faint}" FontSize="10.5" VerticalAlignment="Bottom"
+                       Margin="14,0,10,9" TextTrimming="CharacterEllipsis"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,6,0">
+                <CheckBox x:Name="LiteBox" Content="lite" Style="{StaticResource TextToggle}" Margin="0,1,2,0"
+                          ToolTip="new sessions start Lite: Read, Edit, Write, Bash, Grep, Glob, AskUserQuestion; no MCP (about 16.9k floor)"/>
+                <Button Content="+" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="16"
+                        Padding="7,0,7,2" ToolTip="new session…" Click="OnNew"/>
+            </StackPanel>
+        </Grid>
         <Border Grid.Row="1" Height="1" Background="{StaticResource Line}"/>
 
         <ListBox x:Name="List" Grid.Row="2" Background="Transparent" BorderThickness="0" Padding="0,4,0,8"
@@ -84,7 +99,12 @@
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
+                                <!-- a session of this window closes from its row, as it did from its tab -->
+                                <Button Grid.Column="3" Content="&#10005;" Style="{StaticResource GlyphClose}" FontSize="9" Padding="7,0,0,0"
+                                        ToolTip="close the session" Click="OnCloseRow"
+                                        Visibility="{Binding Here, Converter={StaticResource Shown}}"/>
                                 <TextBlock x:Name="Dot" Text="&#9679;" FontSize="9" Margin="0,1,7,0" Foreground="{StaticResource Faint}"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
