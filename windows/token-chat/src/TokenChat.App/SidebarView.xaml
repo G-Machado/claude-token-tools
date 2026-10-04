@@ -14,6 +14,17 @@
             <Setter Property="Padding" Value="6,1,6,2"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
+        <!-- the widget's keys for a row, as a menu; they work as keys while the list has focus -->
+        <ContextMenu x:Key="RowMenu" x:Shared="False" Background="{StaticResource Card}" Foreground="{StaticResource Text}"
+                     BorderBrush="{StaticResource Line}">
+            <MenuItem Header="add an extension mark" InputGestureText="e" IsEnabled="{Binding HasSession}" Click="OnMarkUp"/>
+            <MenuItem Header="remove an extension mark" InputGestureText="shift+e" IsEnabled="{Binding HasSession}" Click="OnMarkDown"/>
+            <MenuItem Header="lift the input block" InputGestureText="u" IsEnabled="{Binding Blocked}" Click="OnUnblock"/>
+            <Separator/>
+            <MenuItem Header="open its window" InputGestureText="enter" IsEnabled="{Binding CanOpen}" Click="OnOpen"/>
+            <MenuItem Header="copy the resume command" InputGestureText="y" Click="OnCopy"/>
+            <MenuItem Header="open the folder" InputGestureText="o" Click="OnFolder"/>
+        </ContextMenu>
     </UserControl.Resources>
 
     <Grid>
@@ -23,7 +34,8 @@
             <RowDefinition/>
         </Grid.RowDefinitions>
         <!-- in the caption band, so it drags the window as the strip beside the tabs does -->
-        <TextBlock Text="sessions" Foreground="{StaticResource Faint}" FontSize="10.5" VerticalAlignment="Bottom" Margin="14,0,0,9"/>
+        <TextBlock x:Name="Note" Text="sessions" Foreground="{StaticResource Faint}" FontSize="10.5" VerticalAlignment="Bottom"
+                   Margin="14,0,10,9" TextTrimming="CharacterEllipsis"/>
         <Border Grid.Row="1" Height="1" Background="{StaticResource Line}"/>
 
         <ListBox x:Name="List" Grid.Row="2" Background="Transparent" BorderThickness="0" Padding="0,4,0,8"
@@ -31,6 +43,7 @@
             <ListBox.ItemContainerStyle>
                 <Style TargetType="ListBoxItem">
                     <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                    <Setter Property="ContextMenu" Value="{StaticResource RowMenu}"/>
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="ListBoxItem">
@@ -94,71 +107,104 @@
                                 </StackPanel>
                             </Grid>
 
-                            <!-- line 2: the widget's verdict, growth, heat and state marks -->
-                            <StackPanel x:Name="Figures" Orientation="Horizontal" DataContext="{Binding Row}" Margin="0,4,0,0">
-                                <TextBlock Text="{Binding Mark}" Foreground="{Binding MarkBrush}" Style="{StaticResource Fig}" FontSize="9" Width="16"/>
-                                <Grid VerticalAlignment="Center">
-                                    <TextBlock Text="-" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="9"
-                                               Visibility="{Binding SparkEmpty, Converter={StaticResource Shown}}"/>
-                                    <ItemsControl ItemsSource="{Binding Spark}" Height="13">
+                            <!-- line 2: the widget's verdict, growth, heat and cycles; parked and the marks on the right -->
+                            <Grid x:Name="Figures" DataContext="{Binding Row}" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Mark}" Foreground="{Binding MarkBrush}" Style="{StaticResource Fig}" FontSize="9" Width="16"/>
+                                    <Grid VerticalAlignment="Center">
+                                        <TextBlock Text="-" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="9"
+                                                   Visibility="{Binding SparkEmpty, Converter={StaticResource Shown}}"/>
+                                        <ItemsControl ItemsSource="{Binding Spark}" Height="13">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Width="{Binding Width}" Height="{Binding Height}" Background="{Binding Fill}" CornerRadius="1"
+                                                            VerticalAlignment="Bottom" Margin="0,0,2,0"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Grid>
+                                    <TextBlock Text="{Binding Growth}" Foreground="{Binding GrowthBrush}" Style="{StaticResource Fig}" FontSize="9.5" Margin="2,0,8,0"/>
+                                    <TextBlock Text="{Binding Heat}" Foreground="{Binding HeatBrush}" Style="{StaticResource Fig}" FontSize="9.5"
+                                               FontWeight="SemiBold" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource Fig}" FontSize="9.5">
+                                        <Run Text="{Binding Cycles, Mode=OneWay}" Foreground="{StaticResource Dim}"/><Run
+                                             Text=" cyc" Foreground="{StaticResource Faint}"/><Run
+                                             Text="{Binding Pokes, Mode=OneWay}" Foreground="{StaticResource Blue}"/>
+                                    </TextBlock>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <TextBlock Text="PARKED" Foreground="{Binding ParkedBrush}" Style="{StaticResource Fig}" FontSize="9"
+                                               FontWeight="Bold" Margin="6,0,0,0" Visibility="{Binding Parked, Converter={StaticResource Shown}}"/>
+                                    <Border Style="{StaticResource Pill}" Margin="6,0,0,0" Visibility="{Binding HasState, Converter={StaticResource Shown}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding MarksLeft}" Foreground="{StaticResource Blue}" Style="{StaticResource Fig}" FontSize="10.5"/>
+                                            <TextBlock Text="{Binding MarksSpent}" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="10.5"/>
+                                            <TextBlock Text="B" Foreground="{StaticResource Red}" Style="{StaticResource Fig}" FontSize="11" FontWeight="Bold"
+                                                       Margin="5,0,0,0" Visibility="{Binding Blocked, Converter={StaticResource Shown}}"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- line 3: model and effort; spend against the day's bands and the grades on the right -->
+                            <Grid x:Name="Detail" DataContext="{Binding Row}" Margin="16,5,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource Fig}" FontSize="9.5" TextTrimming="CharacterEllipsis">
+                                    <Run Text="{Binding Model, Mode=OneWay}" Foreground="{StaticResource Faint}"/><Run
+                                         Text="{Binding Effort, Mode=OneWay}" Foreground="{Binding EffortBrush, Mode=OneWay}"/>
+                                </TextBlock>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Grid Width="66" Height="5" Margin="8,0,6,0" VerticalAlignment="Center">
+                                        <Border Background="{StaticResource Track}" CornerRadius="2.5"/>
+                                        <Border Background="{Binding SpendBrush}" CornerRadius="2.5" RenderTransformOrigin="0,0.5">
+                                            <Border.RenderTransform>
+                                                <ScaleTransform ScaleX="{Binding SpendFill}"/>
+                                            </Border.RenderTransform>
+                                        </Border>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Yellow}"
+                                                Margin="{x:Static local:FooterRow.TickOkAt}" Opacity="{Binding TickOk}"/>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Orange}"
+                                                Margin="{x:Static local:FooterRow.TickWatchAt}" Opacity="{Binding TickWatch}"/>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Red}"
+                                                Margin="{x:Static local:FooterRow.TickHeavyAt}" Opacity="{Binding TickHeavy}"/>
+                                    </Grid>
+                                    <TextBlock Text="{Binding Spend}" Foreground="{StaticResource Dim}" Style="{StaticResource Fig}" FontSize="9.5"
+                                               MinWidth="34" Margin="0,0,8,0"/>
+                                    <ItemsControl ItemsSource="{Binding Grades}" VerticalAlignment="Center">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Width="{Binding Width}" Height="{Binding Height}" Background="{Binding Fill}" CornerRadius="1"
-                                                        VerticalAlignment="Bottom" Margin="0,0,2,0"/>
+                                                <TextBlock Text="{Binding Letter}" Foreground="{Binding Fill}" FontFamily="Consolas" FontSize="10"
+                                                           FontWeight="SemiBold" Margin="3,0,0,0"/>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
-                                </Grid>
-                                <TextBlock Text="{Binding Growth}" Foreground="{Binding GrowthBrush}" Style="{StaticResource Fig}" FontSize="9.5" Margin="2,0,8,0"/>
-                                <TextBlock Text="{Binding Heat}" Foreground="{Binding HeatBrush}" Style="{StaticResource Fig}" FontSize="9.5"
-                                           FontWeight="SemiBold" Margin="0,0,8,0"/>
-                                <TextBlock Text="PARKED" Foreground="{Binding ParkedBrush}" Style="{StaticResource Fig}" FontSize="9"
-                                           FontWeight="Bold" Margin="0,0,8,0" Visibility="{Binding Parked, Converter={StaticResource Shown}}"/>
-                                <Border Style="{StaticResource Pill}" Visibility="{Binding HasState, Converter={StaticResource Shown}}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding MarksLeft}" Foreground="{StaticResource Blue}" Style="{StaticResource Fig}" FontSize="10.5"/>
-                                        <TextBlock Text="{Binding MarksSpent}" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="10.5"/>
-                                        <TextBlock Text="B" Foreground="{StaticResource Red}" Style="{StaticResource Fig}" FontSize="11" FontWeight="Bold"
-                                                   Margin="5,0,0,0" Visibility="{Binding Blocked, Converter={StaticResource Shown}}"/>
-                                    </StackPanel>
-                                </Border>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
 
-                            <!-- the selected row opens to what the widget's d shows: model, cycles, spend, grades -->
-                            <StackPanel x:Name="Detail" Orientation="Horizontal" DataContext="{Binding Row}" Margin="16,6,0,0"
+                            <!-- the selected row's controls: the most used keys on the widget, e and u -->
+                            <StackPanel x:Name="Controls" Orientation="Horizontal" Margin="16,4,0,0" Height="20"
                                         Visibility="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}, Converter={StaticResource Shown}}">
-                                <TextBlock Style="{StaticResource Fig}" FontSize="9.5" Margin="0,0,8,0">
-                                    <Run Text="{Binding Model, Mode=OneWay}" Foreground="{StaticResource Faint}"/><Run
-                                         Text="{Binding Effort, Mode=OneWay}" Foreground="{Binding EffortBrush, Mode=OneWay}"/>
-                                </TextBlock>
-                                <TextBlock Style="{StaticResource Fig}" FontSize="9.5" Margin="0,0,8,0">
-                                    <Run Text="{Binding Cycles, Mode=OneWay}" Foreground="{StaticResource Dim}"/><Run
-                                         Text=" cyc" Foreground="{StaticResource Faint}"/><Run
-                                         Text="{Binding Pokes, Mode=OneWay}" Foreground="{StaticResource Blue}"/>
-                                </TextBlock>
-                                <Grid Width="40" Height="5" Margin="0,0,5,0" VerticalAlignment="Center">
-                                    <Border Background="{StaticResource Track}" CornerRadius="2.5"/>
-                                    <Border Background="{Binding SpendBrush}" CornerRadius="2.5" RenderTransformOrigin="0,0.5">
-                                        <Border.RenderTransform>
-                                            <ScaleTransform ScaleX="{Binding SpendFill}"/>
-                                        </Border.RenderTransform>
-                                    </Border>
-                                </Grid>
-                                <TextBlock Text="{Binding Spend}" Foreground="{StaticResource Dim}" Style="{StaticResource Fig}" FontSize="9.5" Margin="0,0,8,0"/>
-                                <ItemsControl ItemsSource="{Binding Grades}" VerticalAlignment="Center">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Letter}" Foreground="{Binding Fill}" FontFamily="Consolas" FontSize="10"
-                                                       FontWeight="SemiBold" Margin="0,0,4,0"/>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                <TextBlock Text="marks" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="9" Margin="0,0,2,0"/>
+                                <Button Content="&#8722;" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="13"
+                                        ToolTip="remove an extension mark (shift+e)" Click="OnMarkDown"/>
+                                <Button Content="+" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="13"
+                                        ToolTip="add an extension mark (e)" Click="OnMarkUp"/>
+                                <Button Content="lift block" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="10.5"
+                                        Foreground="{StaticResource Red}" Margin="6,0,0,0" ToolTip="lift the input block (u)" Click="OnUnblock"
+                                        Visibility="{Binding Blocked, Converter={StaticResource Shown}}"/>
                             </StackPanel>
                         </StackPanel>
                     </Grid>
@@ -176,6 +222,7 @@
                         <DataTrigger Binding="{Binding Row}" Value="{x:Null}">
                             <Setter TargetName="Figures" Property="Visibility" Value="Collapsed"/>
                             <Setter TargetName="Detail" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="Controls" Property="Visibility" Value="Collapsed"/>
                         </DataTrigger>
                     </DataTemplate.Triggers>
                 </DataTemplate>

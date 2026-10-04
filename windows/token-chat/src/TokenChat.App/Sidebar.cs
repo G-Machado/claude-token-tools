@@ -23,14 +23,25 @@ public sealed class SidebarItem(object key) : INotifyPropertyChanged
     public string State { get; private set; } = "";
     /// <summary>The widget's figures for the session, null until a collect has it.</summary>
     public FooterRow? Row { get; private set; }
+    /// <summary>The session's entry in the last collect, which the controls read and patch; null until a collect has it.</summary>
+    public JsonObject? Session { get; private set; }
+    public string Sid => Tab?.SessionId ?? Key as string ?? "";
+    public bool Blocked => Num(Session, "blocked") == 1;
+    public bool HasSession => Session is not null;
+    /// <summary>A session elsewhere has a window to bring forward; one here is its tab.</summary>
+    public bool CanOpen => !Here && Session is not null;
+    public string Cwd => Tab?.Options.WorkingDirectory ?? Str(Session, "cwd");
     /// <summary>Heads the sessions elsewhere, so the template draws the label between the two groups.</summary>
     public bool FirstElsewhere { get; private set; }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    internal void Set(string name, string project, Brush? brush, string state, FooterRow? row, bool firstElsewhere)
+    internal static string Str(JsonObject? o, string k) => o?[k] is JsonValue v && v.TryGetValue(out string? s) ? s : "";
+    internal static double Num(JsonObject? o, string k) => o?[k] is JsonValue v && v.TryGetValue(out double d) ? d : 0;
+
+    internal void Set(string name, string project, Brush? brush, string state, FooterRow? row, JsonObject? session, bool firstElsewhere)
     {
-        (Name, Project, ProjectBrush, State, Row, FirstElsewhere) = (name, project, brush, state, row, firstElsewhere);
+        (Name, Project, ProjectBrush, State, Row, Session, FirstElsewhere) = (name, project, brush, state, row, session, firstElsewhere);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null)); // every binding re-reads
     }
 }
@@ -82,7 +93,7 @@ public sealed class Sidebar
     void Refresh()
     {
         var feed = SessionTab.Feed.Value.Snapshot;
-        var want = new List<(object Key, string Name, string Project, Brush? Brush, string State, FooterRow? Row)>();
+        var want = new List<(object Key, string Name, string Project, Brush? Brush, string State, FooterRow? Row, JsonObject? Session)>();
         var here = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in _tabs)
         {
@@ -90,7 +101,7 @@ public sealed class Sidebar
             if (t.SessionId is { } sid && here.Add(sid)) feed?.Sessions.TryGetValue(sid, out s);
             // the topic names the session; the tab's title (its folder) is then the project
             var nick = Str(s, "nick");
-            want.Add((t, nick.Length > 0 ? nick : t.Title, nick.Length > 0 ? t.Title : "", t.ProjectBrush, t.State, t.Row));
+            want.Add((t, nick.Length > 0 ? nick : t.Title, nick.Length > 0 ? t.Title : "", t.ProjectBrush, t.State, t.Row, s));
         }
         if (feed is not null)
         {
@@ -102,7 +113,7 @@ public sealed class Sidebar
                 var cwd = Str(s, "cwd");
                 want.Add((Str(s, "sid"), nick.Length > 0 ? nick : Str(s, "name"), Str(s, "project"),
                     cwd.Length > 0 ? SessionTab.ProjectBrushes[Project.Slot(cwd, SessionTab.ProjectBrushes.Length)] : null,
-                    Num(s, "running") == 1 ? "working" : "idle", FooterRow.From(s, feed, 0, now)));
+                    Num(s, "running") == 1 ? "working" : "idle", FooterRow.From(s, feed, 0, now), s));
             }
         }
 
@@ -112,7 +123,7 @@ public sealed class Sidebar
             var at = IndexOf(w.Key, i);
             if (at < 0) Items.Insert(i, new SidebarItem(w.Key));
             else if (at != i) Items.Move(at, i);
-            Items[i].Set(w.Name, w.Project, w.Brush, w.State, w.Row, w.Key is string && (i == 0 || want[i - 1].Key is SessionTab));
+            Items[i].Set(w.Name, w.Project, w.Brush, w.State, w.Row, w.Session, w.Key is string && (i == 0 || want[i - 1].Key is SessionTab));
         }
         while (Items.Count > want.Count) Items.RemoveAt(Items.Count - 1);
         Refreshed?.Invoke();
@@ -124,6 +135,6 @@ public sealed class Sidebar
         return -1;
     }
 
-    static string Str(JsonObject? o, string k) => o?[k] is JsonValue v && v.TryGetValue(out string? s) ? s : "";
-    static double Num(JsonObject o, string k) => o[k] is JsonValue v && v.TryGetValue(out double d) ? d : 0;
+    static string Str(JsonObject? o, string k) => SidebarItem.Str(o, k);
+    static double Num(JsonObject? o, string k) => SidebarItem.Num(o, k);
 }

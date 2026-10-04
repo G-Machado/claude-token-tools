@@ -67,6 +67,15 @@ public sealed class SessionFeed : IDisposable
     public JsonObject? Session(string? sid) =>
         sid is not null && Snapshot?.Sessions.TryGetValue(sid, out var s) == true ? s : null;
 
+    /// <summary>A control's effect on the last collect at once, the way the widget redraws on the keystroke; the next
+    /// collect replaces it with what the script wrote. UI thread.</summary>
+    public void Patch(string sid, Action<JsonObject> change)
+    {
+        if (Session(sid) is not { } s) return;
+        change(s);
+        Changed?.Invoke();
+    }
+
     void Reload()
     {
         // a half-swapped or unreadable file keeps the last good snapshot
