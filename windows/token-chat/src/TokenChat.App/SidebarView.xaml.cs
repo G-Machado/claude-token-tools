@@ -45,6 +45,7 @@ public partial class SidebarView : UserControl
     {
         Note.Text = text;
         Note.Foreground = (Brush)FindResource("Dim");
+        _flash.Interval = TimeSpan.FromSeconds(4);
         _flash.Stop();
         _flash.Start();
     }
@@ -123,6 +124,38 @@ public partial class SidebarView : UserControl
         var error = await SessionControl.RunAsync(args);
         done();
         if (error is not null) Flash(error);
+    }
+
+    string? _switchArmed;
+    DateTime _switchArmedAt;
+
+    /// <summary>The widget's w, on any other account's row: the first click prices the switch for the warm windows
+    /// (the cache is per account), a second one inside the window makes it. Longer to answer when there is a bill to
+    /// read.</summary>
+    async void OnAccount(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AccountRow { Active: false } row || row.N == "-") return;
+        var (windows, tokens, unparked) = SessionControl.SwitchBurn(SessionTab.Feed.Value.Snapshot);
+        var wait = TimeSpan.FromSeconds(windows > 0 ? 15 : 5);
+        if (_switchArmed != row.N || DateTime.UtcNow - _switchArmedAt > wait)
+        {
+            _switchArmed = row.N;
+            _switchArmedAt = DateTime.UtcNow;
+            var said = $"click again to switch to account {row.N} (5h at {row.FiveHour.Pct})";
+            if (windows > 0) said += $" - burns {tokens / 1000:0}k across {windows} warm window{(windows == 1 ? "" : "s")}";
+            if (unparked.Count > 0) said += $". UNPARKED: {string.Join(", ", unparked)} - /park then /clear there first";
+            Flash(said);
+            _flash.Interval = wait;
+            _flash.Stop();
+            _flash.Start();
+            return;
+        }
+        _switchArmed = null;
+        Flash($"switching to account {row.N}…");
+        var error = await SessionControl.SwitchAccountAsync(row.N);
+        if (error is not null) { Flash(error); return; }
+        SessionTab.Feed.Value.Soon();
+        Flash($"switched to account {row.N} - the header follows at the next collect");
     }
 
     /// <summary>Enter on a session elsewhere brings its window forward; a row here already shows its tab.</summary>

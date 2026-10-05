@@ -54,6 +54,34 @@ public static class SessionControl
         return code == 0 && output.Trim().Length > 0 ? output : null;
     }
 
+    /// <summary>The widget's w: cswap switches the account, then the usage memo goes, since --json reads it and it
+    /// names the old account until it is rewritten. Chained in one shell so the next collect cannot land between the
+    /// two. Null when it worked.</summary>
+    public static async Task<string?> SwitchAccountAsync(string n)
+    {
+        if (FindBash() is not { } bash) return "Git Bash not found";
+        return await RunAsync(bash, ["-lc", "cswap switch \"$1\" >/dev/null 2>&1 && rm -f ~/.claude/.cswap-usage.json", "cswap", n])
+            is (0, _) ? null : $"cswap switch {n} failed";
+    }
+
+    /// <summary>What a switch costs the open windows: the cache is per account, so every warm window over the floor
+    /// loses its conversation half and rewrites it at 2x; the shared tier still reads (token-widget.ps1 Switch-Account,
+    /// measured 2026-09-02). Unparked: the burning ones big enough that they should /park and /clear first.</summary>
+    public static (int Windows, double Tokens, IReadOnlyList<string> Unparked) SwitchBurn(FeedSnapshot? feed)
+    {
+        const double floor = 20_000;
+        var parkAt = Num(feed?.Constants, "park_at");
+        var burn = (feed?.Ordered ?? []).Where(s => Num(s, "alive") == 1 && Num(s, "cache_left_min") > 0
+            && Num(s, "context") > floor).ToList();
+        var unparked = burn.Where(s => Num(s, "parked") != 1 && Num(s, "context_k") >= parkAt)
+            .Select(s => s["nick"]?.ToString() ?? "").ToList();
+        return (burn.Count, burn.Sum(s => (Num(s, "context") - floor) * 2), unparked);
+    }
+
+    static double Num(System.Text.Json.Nodes.JsonObject? o, string key) =>
+        o?[key] is System.Text.Json.Nodes.JsonValue v && double.TryParse(v.ToString(), NumberStyles.Float,
+            CultureInfo.InvariantCulture, out var d) ? d : 0;
+
     /// <summary>Every project's checkpoints, newest first: a directory listing (~1.5s), not a collect, so it is run on
     /// demand rather than kept fresh. Null when it failed.</summary>
     public static async Task<IReadOnlyList<Checkpoint>?> CheckpointsAsync()

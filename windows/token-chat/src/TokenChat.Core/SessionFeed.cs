@@ -136,6 +136,10 @@ public sealed class SessionFeed : IDisposable
     /// period.</summary>
     public bool IsDue(DateTimeOffset now) => now - _startedAt >= Every && now - _otherAt > OtherQuiet;
 
+    /// <summary>Something the last collect cannot know about changed (an account switch): collect at the next check
+    /// rather than a cadence from the last start. Still stands down while another writer is landing collects.</summary>
+    public void Soon() => _startedAt = DateTimeOffset.MinValue;
+
     /// <summary>One collect at a time; true when it ran and wrote the file. A failed one waits out the cadence like
     /// any other.</summary>
     public async Task<bool> CollectIfDueAsync(DateTimeOffset now)

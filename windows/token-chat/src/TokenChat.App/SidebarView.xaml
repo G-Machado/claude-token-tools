@@ -76,13 +76,19 @@
             <ItemsControl ItemsSource="{Binding Accounts}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3" ToolTip="{Binding Email}">
+                        <!-- another account's row switches to it, on a second click: the widget's w -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3" Background="Transparent"
+                                    MouseLeftButtonUp="OnAccount">
                             <StackPanel.Style>
                                 <Style TargetType="StackPanel">
                                     <Setter Property="Opacity" Value="0.62"/>
+                                    <Setter Property="Cursor" Value="Hand"/>
+                                    <Setter Property="ToolTip" Value="{Binding Email, StringFormat={}{0} - click to switch to it}"/>
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Active}" Value="True">
                                             <Setter Property="Opacity" Value="1"/>
+                                            <Setter Property="Cursor" Value="Arrow"/>
+                                            <Setter Property="ToolTip" Value="{Binding Email}"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
