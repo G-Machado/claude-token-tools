@@ -19,6 +19,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        var tray = new Tray(this);
+        Closed += (_, _) => tray.Dispose();
         _sidebar = new Sidebar(_tabs);
         _sidebar.Refreshed += SyncSidebar;
         Side.List.ItemsSource = _sidebar.Items;
