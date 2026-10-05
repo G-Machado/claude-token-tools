@@ -493,6 +493,45 @@
             </DataTemplate.Triggers>
         </DataTemplate>
 
+        <!-- a card the app raises: a block on the window (red edge), the auto-handoff offer (yellow) -->
+        <DataTemplate DataType="{x:Type t:CardItem}">
+            <Border x:Name="Card" Background="{StaticResource Inset}" BorderBrush="{StaticResource Yellow}" BorderThickness="1"
+                    CornerRadius="6" Padding="12,8,12,9" Margin="0,6">
+                <StackPanel>
+                    <TextBlock x:Name="Title" Text="{Binding Title, Mode=OneTime}" FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource Yellow}"/>
+                    <TextBox Style="{StaticResource Selectable}" Text="{Binding Text, Mode=OneTime}" FontSize="12.5" Margin="0,4,0,8"/>
+                    <ItemsControl x:Name="Buttons" ItemsSource="{Binding Actions, Mode=OneTime}" Focusable="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type t:CardAction}">
+                                <Button x:Name="B" Content="{Binding Label}" Margin="0,0,8,0" Click="OnCardAction"/>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding Primary}" Value="True">
+                                        <Setter TargetName="B" Property="Style" Value="{StaticResource Primary}"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock x:Name="Outcome" Text="{Binding Outcome}" Style="{StaticResource Meta}" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Kind}" Value="block">
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Red}"/>
+                    <Setter TargetName="Title" Property="Foreground" Value="{StaticResource Red}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsOpen}" Value="False">
+                    <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Outcome" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Line}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
         <DataTemplate DataType="{x:Type t:NoteItem}">
             <Grid Margin="0,3">
                 <Expander x:Name="WithDetail">

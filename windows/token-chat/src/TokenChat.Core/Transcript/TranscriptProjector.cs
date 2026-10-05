@@ -70,8 +70,27 @@ public sealed class TranscriptProjector
             case PromptCancelledEvent c: CancelPrompts(c.RequestId); break;
             case PermissionDeniedEvent d: AddNote(NoteKind.Warning, $"{d.ToolName} denied", d.Message); break;
             case CompactBoundaryEvent c: AddNote(NoteKind.Compact, $"Compacted ({c.Trigger}): {Tokens.K(c.PreTokens)} → {Tokens.K(c.PostTokens)}"); break;
+            case InformationalEvent { Content: { } text } when Block(text) is { } card: Items.Add(card); break;
             case InformationalEvent { Content: { Length: > 0 } text } i: AddNote(i.Level == "error" ? NoteKind.Error : NoteKind.Info, text); break;
         }
+    }
+
+    /// <summary>token-block.sh refusing the prompt: the CLI reports its stopReason as "Operation stopped by hook:
+    /// [token-block] &lt;why&gt;, so ...". A card naming why, with the prompt it refused (the last one sent) to send again
+    /// once lifted. /park and /compact pass the block, so they are offered too.</summary>
+    CardItem? Block(string text)
+    {
+        var at = text.IndexOf("[token-block] ", StringComparison.Ordinal);
+        if (at < 0) return null;
+        var why = text[(at + "[token-block] ".Length)..];
+        var cut = why.IndexOf(", so ", StringComparison.Ordinal);
+        if (cut > 0) why = why[..cut];
+        var prompt = Items.OfType<UserItem>().LastOrDefault()?.Text;
+        return new CardItem("block", "BLOCKED", $"This window refused the prompt: {why}.", [
+            new CardAction(prompt is null ? "Lift the block" : "Lift and resend", "lift", Primary: true),
+            new CardAction("/park", "park"),
+            new CardAction("/compact", "compact"),
+        ], prompt);
     }
 
     /// <summary>Publishes buffered deltas. Call at the render rate (~10 Hz), not per event.</summary>

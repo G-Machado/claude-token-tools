@@ -254,6 +254,11 @@ public partial class SessionView : UserControl
         if ((sender as FrameworkElement)?.DataContext is PermissionItem p) _ = Tab?.DecideAsync(p, decision);
     }
 
+    void OnCardAction(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is CardAction a && Owner<CardItem>(sender) is { } card) _ = Tab?.ActAsync(card, a.Key);
+    }
+
     void OnPickOption(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not OptionPick o) return;

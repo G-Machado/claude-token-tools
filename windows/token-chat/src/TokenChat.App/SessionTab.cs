@@ -162,6 +162,31 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         return "ok";
     }
 
+    /// <summary>A card's button. A block: lift it the way the widget's u does, then send the refused prompt again; or
+    /// /park or /compact, which pass it. One button per card; a poke refused as busy leaves the card open.</summary>
+    public async Task ActAsync(CardItem card, string key)
+    {
+        if (!card.IsOpen) return;
+        switch (key)
+        {
+            case "lift" when SessionId is { } sid:
+                card.Outcome = "lifting…";
+                if (await SessionControl.RunAsync(SessionControl.Unblock(sid)) is { } error) { card.Outcome = null; Transcript.AddNote(NoteKind.Error, error); return; }
+                Feed.Value.Patch(sid, o => o["blocked"] = 0)();
+                card.Outcome = card.Payload is null ? "block lifted" : "block lifted - prompt sent again";
+                if (card.Payload is { } prompt) await SendAsync(prompt);
+                break;
+            case "park" or "compact" or "handoff":
+                var said = Poke("/" + key);
+                if (said == "ok") card.Outcome = $"/{key} sent";
+                else Transcript.AddNote(NoteKind.Warning, said == "busy" ? $"mid-turn - /{key} once the turn ends" : "claude has exited");
+                break;
+            case "dismiss":
+                card.Outcome = "dismissed";
+                break;
+        }
+    }
+
     /// <summary>The footer's effort menu: /effort for this session only (settings.json untouched), sent the way a poke is.
     /// Local, so no request and no tokens; the footer label follows on the next reply.</summary>
     public void SetEffort(string level)
@@ -303,6 +328,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
             case ResultEvent: _activity = null; break;
         }
     }
+
 
     /// <summary>Write previews diff against this; a missing, locked or huge file previews as new.</summary>
     static string? ReadFileOrNull(string path)

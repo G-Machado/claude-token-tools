@@ -223,6 +223,27 @@ public sealed class QuestionItem : TranscriptItem
     public Dictionary<string, string> Answers() => Questions.Where(q => q.Answer is not null).ToDictionary(q => q.Text, q => q.Answer!);
 }
 
+/// <summary>One button on a <see cref="CardItem"/>: what it says, and the key the tab acts on.</summary>
+public sealed record CardAction(string Label, string Key, bool Primary = false);
+
+/// <summary>A card the app raises itself, with buttons: a block token-block.sh put on the window, the auto-handoff
+/// offer. Open until one button is taken; then its outcome replaces the buttons.</summary>
+public sealed class CardItem(string kind, string title, string text, IReadOnlyList<CardAction> actions, string? payload = null)
+    : TranscriptItem
+{
+    string? _outcome;
+
+    /// <summary>"block" or "handoff"; what the tab dispatches the key on.</summary>
+    public string Kind { get; } = kind;
+    public string Title { get; } = title;
+    public string Text { get; } = text;
+    public IReadOnlyList<CardAction> Actions { get; } = actions;
+    /// <summary>A block: the prompt it refused, which "lift" sends again.</summary>
+    public string? Payload { get; } = payload;
+    public string? Outcome { get => _outcome; set { if (Set(ref _outcome, value)) Notify(nameof(IsOpen)); } }
+    public bool IsOpen => Outcome is null;
+}
+
 public enum NoteKind { Info, Warning, Error, Command, Compact }
 
 public sealed class NoteItem(NoteKind kind, string text, string? detail = null) : TranscriptItem

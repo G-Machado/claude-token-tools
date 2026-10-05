@@ -158,4 +158,23 @@ public class TranscriptTests
         Assert.All(notes, n => Assert.Equal(NoteKind.Command, n.Kind));
         Assert.Equal("Set effort level to medium (this session only)", notes[0].Text);
     }
+
+    [Fact]
+    public void ATokenBlockRefusalBecomesACardCarryingTheRefusedPrompt()
+    {
+        var t = new TranscriptProjector();
+        t.AddUser("fix the build");
+        t.Apply(new InformationalEvent("Operation stopped by hook: [token-block] the cache expired 14m ago, so this window is refusing every prompt - a lapsed window", "warning"));
+        var card = Assert.IsType<CardItem>(t.Items[^1]);
+        Assert.Equal("block", card.Kind);
+        Assert.Equal("This window refused the prompt: the cache expired 14m ago.", card.Text);
+        Assert.Equal("fix the build", card.Payload);
+        Assert.Equal(["lift", "park", "compact"], card.Actions.Select(a => a.Key));
+        Assert.True(card.IsOpen);
+        card.Outcome = "block lifted";
+        Assert.False(card.IsOpen);
+
+        t.Apply(new InformationalEvent("Operation stopped by hook: something else", "warning"));
+        Assert.IsType<NoteItem>(t.Items[^1]);
+    }
 }
