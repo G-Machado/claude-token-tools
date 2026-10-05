@@ -64,8 +64,9 @@ public sealed class SessionFeed : IDisposable
     /// <summary>Raised on a thread-pool thread after a new snapshot lands.</summary>
     public event Action? Changed;
 
-    /// <param name="collect">token-sessions.sh --json's output, or null when it failed; run when the file is stale.</param>
-    public SessionFeed(string? path = null, Func<Task<string?>>? collect = null)
+    /// <param name="collect">token-sessions.sh --json's output, or null when it failed; run on the cadence.</param>
+    /// <param name="usageDir">session-usage/, read between collects for every window's live context and cache clock.</param>
+    public SessionFeed(string? path = null, Func<Task<string?>>? collect = null, string? usageDir = null)
     {
         _path = path ?? DefaultPath;
         _settle = new Timer(_ => Reload());
@@ -86,6 +87,89 @@ public sealed class SessionFeed : IDisposable
         _watcher.Created += poke;
         _watcher.Renamed += (_, _) => _settle.Change(SettleMs, Timeout.Infinite);
         _watcher.EnableRaisingEvents = true;
+        if (usageDir is null || !Directory.Exists(usageDir)) return;
+        _usageDir = usageDir;
+        _usageSettle = new Timer(_ => ReadUsage());
+        _usageWatcher = new FileSystemWatcher(usageDir, "*.json") { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName };
+        FileSystemEventHandler usage = (_, _) => _usageSettle.Change(SettleMs, Timeout.Infinite);
+        _usageWatcher.Changed += usage;
+        _usageWatcher.Created += usage;
+        _usageWatcher.Renamed += (_, _) => _usageSettle.Change(SettleMs, Timeout.Infinite);
+        _usageWatcher.EnableRaisingEvents = true;
+    }
+
+    // ----- live usage: the widget's Live-Tick -----
+
+    string? _usageDir;
+    FileSystemWatcher? _usageWatcher;
+    Timer? _usageSettle;
+    /// <summary>Per session: the payload's mtime and what it said, so an untouched file is one stat.</summary>
+    readonly Dictionary<string, (DateTime At, double Context, long Expires)> _usage = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A window's status line (or a TokenChat tab) rewrites session-usage/&lt;sid&gt;.json on every request,
+    /// so its context and cache expiry move seconds after a turn rather than a collect later. Overlaid on the last
+    /// collect; the cache clock as minutes left at <see cref="FeedSnapshot.Generated"/>, which is how its readers run it
+    /// down.</summary>
+    void ReadUsage()
+    {
+        if (_usageDir is null || Snapshot is not { } snap) return;
+        var moved = false;
+        lock (_usage)
+            foreach (var (sid, s) in snap.Sessions)
+            {
+                var f = Path.Combine(_usageDir, sid + ".json");
+                DateTime at;
+                try { if (!File.Exists(f)) continue; at = File.GetLastWriteTimeUtc(f); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                if (_usage.TryGetValue(sid, out var seen) && seen.At == at) continue;
+                if (ParseUsage(f) is not { } u) continue;
+                _usage[sid] = (at, u.Context, u.Expires);
+                moved |= Overlay(s, at, u.Context, u.Expires, snap.Generated);
+            }
+        if (moved) Changed?.Invoke();
+    }
+
+    /// <summary>Only a payload newer than the collect, and only what it changes: the context, and the cache clock
+    /// when a request has pushed the expiry on.</summary>
+    public static bool Overlay(JsonObject s, DateTime at, double context, long expires, DateTimeOffset generated)
+    {
+        if (at <= generated.UtcDateTime || context <= 0) return false;
+        var k = Math.Round(context / 1000, 1);
+        var changed = Num(s, "context_k") != k;
+        s["context"] = context;
+        s["context_k"] = k;
+        if (expires > 0)
+        {
+            var left = (int)Math.Max(0, Math.Floor((expires - generated.ToUnixTimeSeconds()) / 60.0));
+            changed |= Num(s, "cache_left_min") != left;
+            s["cache_left_min"] = left;
+        }
+        return changed;
+    }
+
+    static double Num(JsonObject s, string key) =>
+        s[key] is JsonValue v && double.TryParse(v.ToString(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : double.NaN;
+
+    static (double Context, long Expires)? ParseUsage(string path)
+    {
+        try
+        {
+            using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (JsonNode.Parse(f) is not JsonObject o) return null;
+            var ctx = o["context_window"]?["total_input_tokens"] is JsonValue c && c.TryGetValue(out double d) ? d : 0;
+            var exp = o["prompt_cache"]?["expires_at"] is JsonValue e && e.TryGetValue(out long x) ? x : 0;
+            return (ctx, exp);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    /// <summary>A new collect: the payloads already read that are newer than it go back on.</summary>
+    void ReapplyUsage(FeedSnapshot next)
+    {
+        lock (_usage)
+            foreach (var (sid, u) in _usage)
+                if (next.Sessions.TryGetValue(sid, out var s)) Overlay(s, u.At, u.Context, u.Expires, next.Generated);
     }
 
     public JsonObject? Session(string? sid) =>
@@ -176,8 +260,11 @@ public sealed class SessionFeed : IDisposable
         var stamp = next.Generated.ToUnixTimeSeconds();
         if (stamp != _mine && stamp != Snapshot?.Generated.ToUnixTimeSeconds()) _otherAt = DateTimeOffset.UtcNow;
         Reapply(next);
+        ReapplyUsage(next);
         Snapshot = next;
         Changed?.Invoke();
+        // a session new to this collect may have a payload nobody has read yet
+        if (_usageSettle is not null) _usageSettle.Change(SettleMs, Timeout.Infinite);
     }
 
     public static FeedSnapshot? Read(string path)
@@ -195,6 +282,8 @@ public sealed class SessionFeed : IDisposable
     {
         _check?.Dispose();
         _watcher?.Dispose();
+        _usageWatcher?.Dispose();
+        _usageSettle?.Dispose();
         _settle.Dispose();
     }
 }

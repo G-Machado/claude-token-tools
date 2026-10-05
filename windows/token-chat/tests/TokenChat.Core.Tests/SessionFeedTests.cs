@@ -179,4 +179,40 @@ public class SessionFeedTests
         }
         finally { Directory.Delete(dir, true); }
     }
+
+    [Fact]
+    public async Task AWindowsUsagePayloadMovesItsContextAndCacheClockBetweenCollects()
+    {
+        var dir = Directory.CreateTempSubdirectory("feed-").FullName;
+        try
+        {
+            var path = Path.Combine(dir, "token-sessions.json");
+            var usage = Directory.CreateDirectory(Path.Combine(dir, "session-usage")).FullName;
+            var generated = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 120;
+            File.WriteAllText(path, Collect(generated, 10));
+            // a payload older than the collect says nothing the collect did not
+            var payload = Path.Combine(usage, "f8d13707-d94e.json");
+            File.WriteAllText(payload, $$$"""{"context_window":{"total_input_tokens":33000},"prompt_cache":{"expires_at":{{{generated + 600}}}}}""");
+            File.SetLastWriteTimeUtc(payload, DateTimeOffset.FromUnixTimeSeconds(generated - 60).UtcDateTime);
+            using var feed = new SessionFeed(path, usageDir: usage);
+            var changed = 0;
+            feed.Changed += () => Interlocked.Increment(ref changed);
+            await Task.Delay(400);
+            Assert.Equal(10, (double)feed.Session("f8d13707-d94e")!["context_k"]!);
+
+            // a request lands: the status line rewrites it
+            File.WriteAllText(payload, $$$"""{"context_window":{"total_input_tokens":55432},"prompt_cache":{"expires_at":{{{generated + 3720}}}}}""");
+            await Task.Delay(500);
+            var s = feed.Session("f8d13707-d94e")!;
+            Assert.Equal(55.4, (double)s["context_k"]!);
+            Assert.Equal(62, (int)s["cache_left_min"]!);
+            Assert.True(changed >= 1);
+
+            // the next collect, stamped before that request, keeps the live figure
+            File.WriteAllText(path, Collect(generated + 1, 12));
+            await Task.Delay(500);
+            Assert.Equal(55.4, (double)feed.Session("f8d13707-d94e")!["context_k"]!);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
 }
