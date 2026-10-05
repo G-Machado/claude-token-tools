@@ -82,13 +82,45 @@ public sealed class SessionFeed : IDisposable
     public JsonObject? Session(string? sid) =>
         sid is not null && Snapshot?.Sessions.TryGetValue(sid, out var s) == true ? s : null;
 
-    /// <summary>A control's effect on the last collect at once, the way the widget redraws on the keystroke; the next
-    /// collect replaces it with what the script wrote. UI thread.</summary>
-    public void Patch(string sid, Action<JsonObject> change)
+    sealed class Pending(string sid, Action<JsonObject> change)
     {
-        if (Session(sid) is not { } s) return;
-        change(s);
-        Changed?.Invoke();
+        public readonly string Sid = sid;
+        public readonly Action<JsonObject> Change = change;
+        public readonly DateTimeOffset Made = DateTimeOffset.UtcNow;
+        public DateTimeOffset? Done;
+    }
+
+    static readonly TimeSpan PatchLimit = TimeSpan.FromMinutes(5);
+    readonly List<Pending> _pending = [];
+
+    /// <summary>A control's effect on the last collect at once, the way the widget redraws on the keystroke. Kept until
+    /// a collect stamped after the script call returned arrives: one already running when the click landed read the
+    /// state file before the write, and would put the old count back for a whole collect. Call the returned action
+    /// when the script call has finished, whether it worked or not. UI thread.</summary>
+    public Action Patch(string sid, Action<JsonObject> change)
+    {
+        var p = new Pending(sid, change);
+        lock (_pending) _pending.Add(p);
+        if (Session(sid) is { } s)
+        {
+            change(s);
+            Changed?.Invoke();
+        }
+        return () => { lock (_pending) p.Done = DateTimeOffset.UtcNow; };
+    }
+
+    /// <summary>Re-applies the patches this collect cannot have seen, in the order they were made, and forgets the rest.
+    /// `generated` is whole seconds, floored, and stamped just before the state file is read, so a collect stamped at or
+    /// after the call's end read what it wrote.</summary>
+    void Reapply(FeedSnapshot next)
+    {
+        lock (_pending)
+        {
+            _pending.RemoveAll(p => p.Done is { } done && next.Generated >= done
+                || DateTimeOffset.UtcNow - p.Made > PatchLimit);
+            foreach (var p in _pending)
+                if (next.Sessions.TryGetValue(p.Sid, out var s)) p.Change(s);
+        }
     }
 
     /// <summary>One collect at a time; true when it ran and wrote the file. The watcher picks the write up, as it does
@@ -122,6 +154,7 @@ public sealed class SessionFeed : IDisposable
     {
         // a half-swapped or unreadable file keeps the last good snapshot
         if (Read(_path) is not { } next) return;
+        Reapply(next);
         Snapshot = next;
         Changed?.Invoke();
     }

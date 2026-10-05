@@ -37,7 +37,10 @@ public sealed class SidebarItem(object key) : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     internal static string Str(JsonObject? o, string k) => o?[k] is JsonValue v && v.TryGetValue(out string? s) ? s : "";
-    internal static double Num(JsonObject? o, string k) => o?[k] is JsonValue v && v.TryGetValue(out double d) ? d : 0;
+    /// <summary>A parsed number reads as any numeric type, but one a control patched in keeps its own: an int written by
+    /// Patch does not read as a double, and read as 0 it made the next mark click count up from nothing.</summary>
+    internal static double Num(JsonObject? o, string k) => o?[k] is not JsonValue v ? 0
+        : v.TryGetValue(out double d) ? d : v.TryGetValue(out int i) ? i : v.TryGetValue(out long l) ? l : 0;
 
     internal void Set(string name, string project, Brush? brush, string state, FooterRow? row, JsonObject? session, bool firstElsewhere)
     {

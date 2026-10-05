@@ -96,4 +96,41 @@ public class SessionFeedTests
         }
         finally { Directory.Delete(dir, true); }
     }
+
+    [Fact]
+    public async Task AClickSurvivesACollectThatStartedBeforeItsScriptCallEnded()
+    {
+        var dir = Directory.CreateTempSubdirectory("feed-").FullName;
+        try
+        {
+            var path = Path.Combine(dir, "token-sessions.json");
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            File.WriteAllText(path, Collect(now, 10));
+            var answer = "";
+            using var feed = new SessionFeed(path, () => Task.FromResult<string?>(answer));
+            double Shown() => (double)feed.Session("f8d13707-d94e")!["context_k"]!;
+            async Task Lands(long generated, double contextK)
+            {
+                answer = Collect(generated, contextK);
+                Assert.True(await feed.CollectIfStaleAsync(DateTimeOffset.UtcNow.AddHours(1)));
+            }
+
+            // what broke the mark buttons: a patched int is not a double to System.Text.Json, so the app's readers take any
+            Assert.False(System.Text.Json.Nodes.JsonValue.Create(2).TryGetValue(out double _));
+            var done = feed.Patch("f8d13707-d94e", o => o["context_k"] = 99.0);
+            Assert.Equal(99, Shown());
+            // in flight while the call runs, then one stamped before it returned: both read the old state file
+            await Lands(now - 30, 10);
+            Assert.Equal(99, Shown());
+            done();
+            await Lands(now - 5, 10);
+            Assert.Equal(99, Shown());
+            // stamped after the call returned: the script's answer, and the patch is gone for good
+            await Lands(now + 5, 42);
+            Assert.Equal(42, Shown());
+            await Lands(now - 30, 10);
+            Assert.Equal(10, Shown());
+        }
+        finally { Directory.Delete(dir, true); }
+    }
 }

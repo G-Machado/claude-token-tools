@@ -148,6 +148,6 @@ public sealed class FooterRow
     };
 
     static string S(JsonObject o, string k) => o[k] is JsonValue v && v.TryGetValue(out string? s) ? s : "";
-    static double D(JsonObject o, string k) => o[k] is JsonValue v && v.TryGetValue(out double d) ? d : 0;
+    static double D(JsonObject o, string k) => SidebarItem.Num(o, k);
     static int I(JsonObject o, string k) => (int)D(o, k);
 }

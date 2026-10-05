@@ -102,8 +102,8 @@ public partial class SidebarView : UserControl
         var cap = (int)SidebarItem.Num(feed.Snapshot?.Constants, "ext_max") is > 0 and var c ? c : 5;
         var used = (int)SidebarItem.Num(s, "ext_used");
         var marks = SessionControl.NextMarks((int)SidebarItem.Num(s, "ext_allowed"), used, cap, delta);
-        feed.Patch(item.Sid, o => { o["ext_allowed"] = marks; o["ext_left"] = Math.Max(0, marks - used); });
-        Run(SessionControl.Extend(item.Sid, marks),
+        var done = feed.Patch(item.Sid, o => { o["ext_allowed"] = marks; o["ext_left"] = Math.Max(0, marks - used); });
+        Run(SessionControl.Extend(item.Sid, marks), done,
             delta < 0 && marks > 0 && marks == used ? $"{item.Name}: those {marks} are spent - a hollow mark cannot be removed"
             : delta > 0 && marks == cap ? $"{item.Name}: {marks} marks, the cap - past this the answer is /park"
             : $"{item.Name}: {marks} extension mark{(marks == 1 ? "" : "s")}");
@@ -113,14 +113,16 @@ public partial class SidebarView : UserControl
     void Unblock(SidebarItem item)
     {
         if (!item.Blocked) { Flash($"{item.Name} is not blocked"); return; }
-        SessionTab.Feed.Value.Patch(item.Sid, o => o["blocked"] = 0);
-        Run(SessionControl.Unblock(item.Sid), $"{item.Name}: block lifted - it re-arms at the next lapse with no marks left");
+        var done = SessionTab.Feed.Value.Patch(item.Sid, o => o["blocked"] = 0);
+        Run(SessionControl.Unblock(item.Sid), done, $"{item.Name}: block lifted - it re-arms at the next lapse with no marks left");
     }
 
-    async void Run(IReadOnlyList<string> args, string said)
+    async void Run(IReadOnlyList<string> args, Action done, string said)
     {
         Flash(said);
-        if (await SessionControl.RunAsync(args) is { } error) Flash(error);
+        var error = await SessionControl.RunAsync(args);
+        done();
+        if (error is not null) Flash(error);
     }
 
     /// <summary>Enter on a session elsewhere brings its window forward; a row here already shows its tab.</summary>
