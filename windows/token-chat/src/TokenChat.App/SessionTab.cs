@@ -325,10 +325,27 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         switch (e)
         {
             case StatusEvent s: _activity = s.Status; break;
-            case ResultEvent: _activity = null; break;
+            case ResultEvent: _activity = null; OfferHandoff(); break;
         }
     }
 
+    double _offeredAtK;
+
+    /// <summary>Auto-handoff in ask mode (docs/token-chat-design.md): at a turn's end, once the context is past the
+    /// collect's cut bar (cut_no, where carrying the window costs more per cycle than a restart), a one-click card for
+    /// /handoff. Once per 50k band, as the hook's ACTION line, so "not now" holds until the window has grown again.</summary>
+    void OfferHandoff()
+    {
+        if (_session is not { } s || Feed.Value.Snapshot is not { } feed) return;
+        var cut = SidebarItem.Num(feed.Constants, "cut_no");
+        var ctxK = s.Usage.Context / 1000.0;
+        if (cut <= 0 || ctxK < cut || (_offeredAtK > 0 && ctxK < _offeredAtK + 50)) return;
+        _offeredAtK = ctxK;
+        Transcript.Items.Add(new CardItem("handoff", "HAND OFF",
+            $"Context {ctxK:0}k is past the cut bar ({cut:0}k): this window now costs more to carry per cycle than a fresh "
+            + "one does to start. /handoff parks it and carries on in a new tab.",
+            [new CardAction("Hand off", "handoff", Primary: true), new CardAction("Not now", "dismiss")]));
+    }
 
     /// <summary>Write previews diff against this; a missing, locked or huge file previews as new.</summary>
     static string? ReadFileOrNull(string path)
