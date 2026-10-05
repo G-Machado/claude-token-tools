@@ -57,17 +57,60 @@ public class SessionFeedTests
     }
 
     [Fact]
-    public void StaleAfterSeventyFiveSecondsOrNoFile()
+    public async Task CollectsEveryTwentySecondsWhileNobodyElseDoes()
     {
-        var at = DateTimeOffset.FromUnixTimeSeconds(1790952551);
-        var s = FeedSnapshot.Parse(Collect(at.ToUnixTimeSeconds(), 10));
-        Assert.False(SessionFeed.IsStale(s, at.AddSeconds(75)));
-        Assert.True(SessionFeed.IsStale(s, at.AddSeconds(76)));
-        Assert.True(SessionFeed.IsStale(null, at));
+        var dir = Directory.CreateTempSubdirectory("feed-").FullName;
+        try
+        {
+            var path = Path.Combine(dir, "token-sessions.json");
+            var runs = 0;
+            var stamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 600;
+            var t0 = DateTimeOffset.UtcNow;
+            // no file: nobody has collected, so the first check runs one at once
+            using var feed = new SessionFeed(path, () => { runs++; return Task.FromResult<string?>(Collect(++stamp, runs)); });
+            await Task.Delay(400);
+            Assert.Equal(1, runs);
+            // its own write coming back through the watcher is not someone else collecting
+            Assert.False(await feed.CollectIfDueAsync(t0.AddSeconds(19)));
+            Assert.True(await feed.CollectIfDueAsync(t0.AddSeconds(21)));
+            await Task.Delay(400);
+            Assert.False(await feed.CollectIfDueAsync(t0.AddSeconds(40)));
+            Assert.True(await feed.CollectIfDueAsync(t0.AddSeconds(41)));
+            Assert.Equal(3, runs);
+            Assert.Equal(3, (double)feed.Session("f8d13707-d94e")!["context_k"]!);
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     [Fact]
-    public async Task CollectsOnlyWhenStaleAndNeverWritesABadCollect()
+    public async Task StandsDownWhileAnotherWritersCollectsLand()
+    {
+        var dir = Directory.CreateTempSubdirectory("feed-").FullName;
+        try
+        {
+            var path = Path.Combine(dir, "token-sessions.json");
+            var stamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 600;
+            File.WriteAllText(path, Collect(stamp, 10));
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-10));
+            var runs = 0;
+            using var feed = new SessionFeed(path, () => { runs++; return Task.FromResult<string?>(Collect(++stamp, 20)); });
+            await Task.Delay(400);
+            Assert.Equal(1, runs);
+
+            // the widget's collect lands: the app leaves the collecting to it for the quiet period
+            File.WriteAllText(path, Collect(stamp + 100, 77));
+            await Task.Delay(400);
+            var landed = DateTimeOffset.UtcNow;
+            Assert.Equal(77, (double)feed.Session("f8d13707-d94e")!["context_k"]!);
+            Assert.False(await feed.CollectIfDueAsync(landed.AddSeconds(40)));
+            Assert.True(await feed.CollectIfDueAsync(landed.AddSeconds(46)));
+            Assert.Equal(2, runs);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task WaitsOutAFreshFileAndNeverWritesABadCollect()
     {
         var dir = Directory.CreateTempSubdirectory("feed-").FullName;
         try
@@ -80,15 +123,17 @@ public class SessionFeedTests
             var runs = 0;
             using var feed = new SessionFeed(path, () => { runs++; return Task.FromResult<string?>(answer); });
 
-            Assert.False(await feed.CollectIfStaleAsync(at.AddSeconds(30)));
+            Assert.False(await feed.CollectIfDueAsync(at.AddSeconds(30)));
             Assert.Equal(0, runs);
 
             answer = "{\"sessions\":";
-            Assert.False(await feed.CollectIfStaleAsync(at.AddSeconds(90)));
+            Assert.False(await feed.CollectIfDueAsync(at.AddSeconds(90)));
             Assert.Equal(10, (double)feed.Session("f8d13707-d94e")!["context_k"]!);
 
+            // a failed collect waits out the cadence like any other
             answer = Collect(200, 20);
-            Assert.True(await feed.CollectIfStaleAsync(at.AddSeconds(90)));
+            Assert.False(await feed.CollectIfDueAsync(at.AddSeconds(109)));
+            Assert.True(await feed.CollectIfDueAsync(at.AddSeconds(110)));
             Assert.Equal(2, runs);
             Assert.Equal(20, (double)feed.Session("f8d13707-d94e")!["context_k"]!);
             Assert.Equal(20, (double)SessionFeed.Read(path)!.Sessions["f8d13707-d94e"]["context_k"]!);
@@ -109,10 +154,11 @@ public class SessionFeedTests
             var answer = "";
             using var feed = new SessionFeed(path, () => Task.FromResult<string?>(answer));
             double Shown() => (double)feed.Session("f8d13707-d94e")!["context_k"]!;
+            var hours = 0;
             async Task Lands(long generated, double contextK)
             {
                 answer = Collect(generated, contextK);
-                Assert.True(await feed.CollectIfStaleAsync(DateTimeOffset.UtcNow.AddHours(1)));
+                Assert.True(await feed.CollectIfDueAsync(DateTimeOffset.UtcNow.AddHours(++hours)));
             }
 
             // what broke the mark buttons: a patched int is not a double to System.Text.Json, so the app's readers take any

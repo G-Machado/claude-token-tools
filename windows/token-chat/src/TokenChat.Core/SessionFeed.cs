@@ -29,19 +29,21 @@ public sealed record FeedSnapshot(DateTimeOffset Generated, JsonObject Constants
     }
 }
 
-/// <summary>The token widget's last collect, which it replaces whole at ~/.claude/token-sessions.json after every
-/// refresh. One watcher for the app, never a poll per tab; tabs look their session up by id, so the sidebar shows the
-/// widget's own figures rather than a second computation of them. Given a collect, the app runs one itself whenever
-/// the file goes stale, so the widget is optional: while it runs (every 30s) the file never gets that old.</summary>
+/// <summary>The last collect at ~/.claude/token-sessions.json, replaced whole by whoever ran it. One watcher for the
+/// app, never a poll per tab; tabs look their session up by id. Given a collect, the app keeps the file fresh itself
+/// on its own cadence (a start every 20s), and stands down only while collects it did not write keep landing,
+/// so the widget is optional and the two never collect side by side: duplicate collectors are what slowed a collect
+/// from six seconds to 140 (token-widget.ps1, 2026-09-03).</summary>
 public sealed class SessionFeed : IDisposable
 {
     const int SettleMs = 150;
-    const int CheckMs = 15_000;
-    /// <summary>Older than this and nobody is collecting: two and a half of the widget's refreshes missed.</summary>
-    public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(75);
-
-    public static bool IsStale(FeedSnapshot? snapshot, DateTimeOffset now) =>
-        snapshot is null || now - snapshot.Generated > StaleAfter;
+    const int CheckMs = 5_000;
+    /// <summary>Between the starts of two of the app's collects. Tighter than the widget's 30s $Every; a collect takes
+    /// ~21s, so this keeps one running nearly all the time.</summary>
+    public static readonly TimeSpan Every = TimeSpan.FromSeconds(20);
+    /// <summary>Longer than this since a collect the app did not write landed and nobody else is collecting: one and a
+    /// half of the widget's refreshes missed.</summary>
+    public static readonly TimeSpan OtherQuiet = TimeSpan.FromSeconds(45);
 
     public static string DefaultPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "token-sessions.json");
@@ -52,6 +54,11 @@ public sealed class SessionFeed : IDisposable
     readonly Func<Task<string?>>? _collect;
     readonly Timer? _check;
     int _collecting;
+    DateTimeOffset _startedAt = DateTimeOffset.MinValue;
+    DateTimeOffset _otherAt = DateTimeOffset.MinValue;
+    /// <summary>`generated` of the last collect the app wrote, so its own write coming back through the watcher is not
+    /// taken for someone else collecting.</summary>
+    long _mine = long.MinValue;
 
     public FeedSnapshot? Snapshot { get; private set; }
     /// <summary>Raised on a thread-pool thread after a new snapshot lands.</summary>
@@ -63,8 +70,10 @@ public sealed class SessionFeed : IDisposable
         _path = path ?? DefaultPath;
         _settle = new Timer(_ => Reload());
         Snapshot = Read(_path);
+        // a file written moments ago may be a running widget's: give it the quiet period before collecting over it
+        if (Snapshot is not null) _otherAt = new DateTimeOffset(File.GetLastWriteTimeUtc(_path), TimeSpan.Zero);
         _collect = collect;
-        if (collect is not null) _check = new Timer(_ => _ = CollectIfStaleAsync(DateTimeOffset.UtcNow), null, 0, CheckMs);
+        if (collect is not null) _check = new Timer(_ => _ = CollectIfDueAsync(DateTimeOffset.UtcNow), null, 0, CheckMs);
         var dir = Path.GetDirectoryName(_path)!;
         if (!Directory.Exists(dir)) return;
         _watcher = new FileSystemWatcher(dir, Path.GetFileName(_path))
@@ -123,15 +132,21 @@ public sealed class SessionFeed : IDisposable
         }
     }
 
-    /// <summary>One collect at a time; true when it ran and wrote the file. The watcher picks the write up, as it does
-    /// the widget's.</summary>
-    public async Task<bool> CollectIfStaleAsync(DateTimeOffset now)
+    /// <summary>Due when the last start was a cadence ago and no other writer has landed a collect within the quiet
+    /// period.</summary>
+    public bool IsDue(DateTimeOffset now) => now - _startedAt >= Every && now - _otherAt > OtherQuiet;
+
+    /// <summary>One collect at a time; true when it ran and wrote the file. A failed one waits out the cadence like
+    /// any other.</summary>
+    public async Task<bool> CollectIfDueAsync(DateTimeOffset now)
     {
-        if (_collect is null || !IsStale(Snapshot, now) || Interlocked.Exchange(ref _collecting, 1) == 1) return false;
+        if (_collect is null || !IsDue(now) || Interlocked.Exchange(ref _collecting, 1) == 1) return false;
         try
         {
+            _startedAt = now;
             // a collect that does not parse is never written over a good file
-            if (await _collect() is not { } json || FeedSnapshot.Parse(json) is null) return false;
+            if (await _collect() is not { } json || FeedSnapshot.Parse(json) is not { } parsed) return false;
+            _mine = parsed.Generated.ToUnixTimeSeconds();
             Save(_path, json);
             Reload();
             return true;
@@ -154,6 +169,8 @@ public sealed class SessionFeed : IDisposable
     {
         // a half-swapped or unreadable file keeps the last good snapshot
         if (Read(_path) is not { } next) return;
+        var stamp = next.Generated.ToUnixTimeSeconds();
+        if (stamp != _mine && stamp != Snapshot?.Generated.ToUnixTimeSeconds()) _otherAt = DateTimeOffset.UtcNow;
         Reapply(next);
         Snapshot = next;
         Changed?.Invoke();
