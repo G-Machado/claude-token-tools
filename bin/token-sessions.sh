@@ -143,7 +143,7 @@
 #            cache column and the advice line - it used to be mixed into this
 #            colour, which made a row change colour without changing size.
 #   cost     what the session has spent so far, in input-equivalents (output x5,
-#            cache write x2, cache read x0.1). The bar splits it three ways:
+#            cache write x2, cache read x0.05, TS_RW). The bar splits it three ways:
 #            green output, orange cache writes, blue cache reads. More green is
 #            better - it is the share that went into doing the work rather than
 #            into paying rent on a window. Cache reads are MODELLED (context x
@@ -306,7 +306,7 @@ RPC="${TOKEN_REQ_PER_CYCLE:-$(awk -F, 'NR>1 && $9!="" && $8=="" && $6+0>0 { prin
 RPC="${RPC:-2.3}"
 PRICE_IN="${TOKEN_PRICE_IN:-5}"          # $/MTok input, Opus 5 list. Everything else
                                          # here is a multiple of it: output x5,
-                                         # cache write x2, cache read x0.1.
+                                         # cache write x2, cache read x0.05 (TS_RW).
 # The plan ceilings cannot be read off disk - nothing under ~/.claude records
 # them, and /usage fetches them from the API. So they are calibrated by hand,
 # once: run /usage in Claude Code, read the percentage it reports, and set the
@@ -427,7 +427,7 @@ measure_constants() {
     NR > 1 && $2 != "" {
       cyc++
       # Per-session totals, for the scorecard medians. Weighted the same way
-      # everywhere: output x5, cache write x2, cache read x0.1 per request.
+      # everywhere: output x5, cache write x2, cache read x TS_RW (0.05) per request.
       sn[$2]++; so[$2] += $4; sr[$2] += $5; if ($6 + 0 > sc[$2]) sc[$2] = $6 + 0
       # Churn per session, cycle 1 excluded. Growth is the context a cycle
       # ADDED - the half the prompt chose; churn is the rest of the re-cache,
@@ -1540,7 +1540,7 @@ EOF
 $b	${AMETA[$b]:-}
 EOF
     # The same weights the rest of this file prices a window with: output 5x,
-    # cache write 2x, cache read 0.1x, all in input-equivalents.
+    # cache write 2x, cache read 0.05x (TS_RW), all in input-equivalents.
     wt=$(awk -v o="${to:-0}" -v w="${tw:-0}" -v r="${tr:-0}" 'BEGIN{printf "%.0f", o*5 + w*2 + r*ENVIRON["TS_RW"]}')
     age=$(( now_agent - mt )); [ "$age" -ge 0 ] || age=0
     run=0; [ "$age" -le "$AG_LIVE" ] && run=1
@@ -4397,7 +4397,7 @@ render() {
   # against a target someone picked. All three come off the same history rows
   # the alerts do, so a session cannot look good here and bad there.
   #
-  #   spend       weighted cost per cycle (output x5, cache write x2, read x0.1).
+  #   spend       weighted cost per cycle (output x5, cache write x2, read x TS_RW, 0.05).
   #               This is what the session cost, NOT what it was worth - no tool
   #               can see the second one, so it is named for what it measures.
   #   production  output as a share of that spend. High means the tokens went
@@ -5173,8 +5173,8 @@ analytics() {
     printf "\n%s\n", box(hb rep(" ", hgap) D clock R, length(hv) + hgap + length(clock))
     if (N == 0) { printf "  %sno history yet - the Stop hook writes one row per cycle%s\n\n", D, R; exit }
 
-    printf "%s%s%s weighted%s   %s~$%.0f at $%d/MTok in, output x5 write x2 read x0.1%s\n", \
-      lab("spend"), B, hum(TW), R, D, usd(TW), price, R
+    printf "%s%s%s weighted%s   %s~$%.0f at $%d/MTok in, output x5 write x2 read x%g%s\n", \
+      lab("spend"), B, hum(TW), R, D, usd(TW), price, ENVIRON["TS_RW"] + 0, R
     printf "%s%s   %s%s%s %.0f%% output   %s%s%s %.0f%% cache writes   %s%s%s %.0f%% cache reads\n", \
       lab(""), splitbar(TO, TWR, TRD, 16), \
       GRN, full, R, TO * 100 / TW, ORG, full, R, TWR * 100 / TW, \
