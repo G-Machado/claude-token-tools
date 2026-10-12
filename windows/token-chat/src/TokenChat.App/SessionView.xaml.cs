@@ -305,11 +305,17 @@ public partial class SessionView : UserControl
         e.Handled = true;
     }
 
-    /// <summary>Ticks the level the last reply ran at.</summary>
+    /// <summary>Ticks the level the last reply ran at, and the tab's handoff mode.</summary>
     void OnEffortMenuOpened(object sender, RoutedEventArgs e)
     {
         if (sender is not ContextMenu { PlacementTarget: FrameworkElement { DataContext: FooterRow row } } menu) return;
-        foreach (var item in menu.Items.OfType<MenuItem>()) item.IsChecked = (string)item.Header == row.Effort.Trim();
+        foreach (var item in menu.Items.OfType<MenuItem>())
+            item.IsChecked = item.Tag is string mode ? mode == Tab?.HandoffMode : (string)item.Header == row.Effort.Trim();
+    }
+
+    void OnHandoffPick(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: string mode } && Tab is { } tab) tab.HandoffMode = mode;
     }
 
     void OnEffortPick(object sender, RoutedEventArgs e)

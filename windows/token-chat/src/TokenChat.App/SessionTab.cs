@@ -331,15 +331,32 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 
     double _offeredAtK;
 
-    /// <summary>Auto-handoff in ask mode (docs/token-chat-design.md): at a turn's end, once the context is past the
-    /// collect's cut bar (cut_no, where carrying the window costs more per cycle than a restart), a one-click card for
-    /// /handoff. Once per 50k band, as the hook's ACTION line, so "not now" holds until the window has grown again.</summary>
+    /// <summary>Per tab, from the model pill menu: "ask" (the card), "auto" (/handoff unasked) or "off". Not persisted;
+    /// a new or resumed tab starts at ask.</summary>
+    public string HandoffMode { get; set; } = "ask";
+
+    static readonly string AutoHandoffLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "token-auto-handoff.log");
+
+    /// <summary>Auto-handoff: at a turn's end, once the context is past the collect's cut bar (cut_no, where carrying the
+    /// window costs more per cycle than a restart). Ask mode adds a one-click card for /handoff, once per 50k band as the
+    /// hook's ACTION line, so "not now" holds until the window has grown again. Auto mode sends a bare /handoff itself
+    /// and logs it; a busy poke leaves the band open, so the next turn end tries again.</summary>
     void OfferHandoff()
     {
-        if (_session is not { } s || Feed.Value.Snapshot is not { } feed) return;
+        if (HandoffMode == "off" || _session is not { } s || Feed.Value.Snapshot is not { } feed) return;
         var cut = SidebarItem.Num(feed.Constants, "cut_no");
         var ctxK = s.Usage.Context / 1000.0;
         if (cut <= 0 || ctxK < cut || (_offeredAtK > 0 && ctxK < _offeredAtK + 50)) return;
+        if (HandoffMode == "auto")
+        {
+            var said = Poke("/handoff");
+            try { File.AppendAllText(AutoHandoffLog, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{SessionId}\t{ctxK:0}\t{cut:0}\t{said}\n"); }
+            catch (IOException) { }
+            if (said != "ok") return;
+            _offeredAtK = ctxK;
+            Transcript.AddNote(NoteKind.Info, $"Context {ctxK:0}k is past the cut bar ({cut:0}k): /handoff sent (handoff: auto).");
+            return;
+        }
         _offeredAtK = ctxK;
         Transcript.Items.Add(new CardItem("handoff", "HAND OFF",
             $"Context {ctxK:0}k is past the cut bar ({cut:0}k): this window now costs more to carry per cycle than a fresh "

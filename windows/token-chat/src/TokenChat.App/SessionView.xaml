@@ -780,6 +780,11 @@
                                     <MenuItem Header="max" Click="OnEffortPick"/>
                                     <Separator/>
                                     <MenuItem Header="auto" Click="OnEffortPick"/>
+                                    <Separator/>
+                                    <!-- past the cut bar at a turn end: a card, /handoff unasked, or nothing -->
+                                    <MenuItem Header="handoff: ask" Tag="ask" Click="OnHandoffPick"/>
+                                    <MenuItem Header="handoff: auto" Tag="auto" Click="OnHandoffPick"/>
+                                    <MenuItem Header="handoff: off" Tag="off" Click="OnHandoffPick"/>
                                 </ContextMenu>
                             </Border.ContextMenu>
                             <TextBlock Style="{StaticResource Fig}" FontSize="9.5">
