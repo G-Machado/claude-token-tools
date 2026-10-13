@@ -124,7 +124,28 @@
                            TextTrimming="CharacterEllipsis"/>
             </Grid>
         </StackPanel>
-        <Border Grid.Row="2" Height="1" Background="{StaticResource Line}"/>
+        <StackPanel Grid.Row="2">
+            <Border Height="1" Background="{StaticResource Line}"/>
+            <!-- pinned above the sessions: the chat area shows cycles side by side instead of a chat -->
+            <ToggleButton x:Name="AnalyticsRow" Foreground="{StaticResource Text}" Margin="0,4,0,0" Click="OnAnalytics"
+                          ToolTip="cycles side by side: output, growth, cache, $ and budget class">
+                <ToggleButton.Template>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="B" Margin="6,1" Padding="9,5,10,6" CornerRadius="5" Background="Transparent" Cursor="Hand">
+                            <TextBlock Text="analytics" FontSize="12" FontWeight="SemiBold"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger SourceName="B" Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </ToggleButton.Template>
+            </ToggleButton>
+        </StackPanel>
 
         <ListBox x:Name="List" Grid.Row="3" Background="Transparent" BorderThickness="0" Padding="0,4,0,8"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">

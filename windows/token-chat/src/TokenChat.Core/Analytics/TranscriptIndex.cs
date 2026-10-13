@@ -26,6 +26,14 @@ public static partial class TranscriptIndex
             .ToList();
     }
 
+    /// <summary>Every session transcript, without titles: the overview reads the whole corpus and titles only its top rows.</summary>
+    public static List<TranscriptFile> All(string root) =>
+        !Directory.Exists(root) ? [] : Directory.EnumerateDirectories(root)
+            .SelectMany(d => new DirectoryInfo(d).EnumerateFiles("*.jsonl"))
+            .Select(f => new TranscriptFile(f.FullName, System.IO.Path.GetFileNameWithoutExtension(f.Name),
+                null, null, f.LastWriteTimeUtc, f.Length))
+            .ToList();
+
     public static string? Find(string root, string sessionId) =>
         Directory.Exists(root)
             ? Directory.EnumerateDirectories(root).Select(d => System.IO.Path.Combine(d, sessionId + ".jsonl")).FirstOrDefault(File.Exists)

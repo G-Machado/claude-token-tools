@@ -12,6 +12,8 @@ public sealed record Prices(double Input, double CacheWrite, double CacheRead, d
     static readonly Dictionary<string, Prices> Known = new()
     {
         ["claude-opus-5-5"] = new(4, 8, 0.2, 20),
+        // Looked up, not measured: pricing-reference.md's $5/$25 list rate, 1-hour write 2x, read 0.1x.
+        ["claude-opus-5"] = new(5, 10, 0.5, 25),
     };
 
     public static Prices? For(string? model) => model is not null && Known.TryGetValue(model, out var p) ? p : null;

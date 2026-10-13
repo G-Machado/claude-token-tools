@@ -14,9 +14,10 @@ public partial class App : Application
     {
         base.OnStartup(e);
         var request = LaunchRequest.Parse(e.Args);
-        // --preview runs beside a live TokenChat: it neither claims the instance nor forwards to it.
-        var first = request.Preview is null && SingleInstance.Claim();
-        if (request.Preview is null && !first && SingleInstance.Forward(request))
+        // --preview and --standalone run beside a live TokenChat: they neither claim the instance nor forward to it.
+        var beside = request.Preview is not null || request.Standalone;
+        var first = !beside && SingleInstance.Claim();
+        if (!beside && !first && SingleInstance.Forward(request))
         {
             Shutdown();
             return;

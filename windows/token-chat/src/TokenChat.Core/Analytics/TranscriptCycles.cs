@@ -11,8 +11,9 @@ namespace TokenChat.Core.Analytics;
 /// <param name="Churn">cache write that is not growth: context that was already there, rewritten</param>
 /// <param name="MessageIds">the requests, in order: what pairs a cycle with a stream turn</param>
 /// <param name="Model">model of the last request, null when the lines do not say</param>
+/// <param name="Started">the prompt line's timestamp, null when it has none</param>
 public sealed record CycleStats(int Index, string PromptId, TokenUsage Usage, long Context, long Growth, long Churn,
-    int Requests, IReadOnlyList<string> MessageIds, string? Model);
+    int Requests, IReadOnlyList<string> MessageIds, string? Model, DateTimeOffset? Started = null);
 
 /// <summary>Port of the cycle parser in ~/.claude/token-cycles.sh, so a terminal transcript and a TokenChat one are
 /// scored by the same rules as the CLAUDE.md budgets. Keep the two in step: a change here is a change there.</summary>
@@ -47,7 +48,11 @@ public static class TranscriptCycles
             if (Json.Str(o?["type"]) == "user")
             {
                 var pid = Json.Str(o?["promptId"]);
-                if (pid is not null && pid != last) { cycles.Add(new Cycle(pid)); last = pid; }
+                if (pid is not null && pid != last)
+                {
+                    cycles.Add(new Cycle(pid, DateTimeOffset.TryParse(Json.Str(o?["timestamp"]), out var at) ? at : null));
+                    last = pid;
+                }
                 continue;
             }
 
@@ -68,15 +73,16 @@ public static class TranscriptCycles
             var context = c.Context > 0 ? c.Context : previous;
             var growth = Math.Max(0, context - previous);
             stats.Add(new CycleStats(stats.Count + 1, c.PromptId, c.Usage, context, growth,
-                Math.Max(0, c.Usage.CacheWrite - growth), c.MessageIds.Count, c.MessageIds, c.Model));
+                Math.Max(0, c.Usage.CacheWrite - growth), c.MessageIds.Count, c.MessageIds, c.Model, c.Started));
             previous = context;
         }
         return stats;
     }
 
-    sealed class Cycle(string promptId)
+    sealed class Cycle(string promptId, DateTimeOffset? started)
     {
         public string PromptId { get; } = promptId;
+        public DateTimeOffset? Started { get; } = started;
         public TokenUsage Usage { get; private set; }
         public long Context { get; private set; }
         public List<string> MessageIds { get; } = [];

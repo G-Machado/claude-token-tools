@@ -1,0 +1,336 @@
+<UserControl x:Class="TokenChat.App.AnalyticsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:TokenChat.App">
+    <!-- Every transcript on disk, terminal and TokenChat alike, summed over one range; the grades are the feed's
+         OVERALL line, which is always this 7 days against the 7 before whatever the range says. -->
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="Shown"/>
+        <!-- a group's header, a card of its own: title, what is inside in Tag, the chevron turning when it opens.
+             Closed by default, so the grades stay the page. -->
+        <Style x:Key="Fold" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Width" Value="850"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="B" Padding="14,10,14,10" CornerRadius="6" Background="{StaticResource Card}"
+                                BorderBrush="{StaticResource Line}" BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="Edge" Width="3" CornerRadius="1.5" Margin="0,1,12,1" Background="{StaticResource Line}"/>
+                                <ContentPresenter Grid.Column="1" VerticalAlignment="Center"
+                                                  TextElement.FontSize="13" TextElement.FontWeight="SemiBold"/>
+                                <TextBlock Grid.Column="2" Text="{TemplateBinding Tag}" Foreground="{StaticResource Faint}" FontSize="11"
+                                           Margin="12,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="Chevron" Grid.Column="3" Text="▸" Foreground="{StaticResource Faint}" FontSize="13"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource Track}"/>
+                                <Setter TargetName="Chevron" Property="Foreground" Value="{StaticResource Text}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Chevron" Property="Text" Value="▾"/>
+                                <Setter TargetName="Edge" Property="Background" Value="{StaticResource Blue}"/>
+                                <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="Range" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+            <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="B" Padding="8,3" CornerRadius="4" Background="{StaticResource Ghost}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ChartCard" TargetType="Border">
+            <Setter Property="Width" Value="420"/>
+            <Setter Property="Margin" Value="0,0,10,10"/>
+            <Setter Property="Padding" Value="12,9,14,8"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Background" Value="{StaticResource Card}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="ChartTitle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style x:Key="Legend" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Margin" Value="0,2,0,8"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="Cell" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+            <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <DataTemplate x:Key="TileTemplate" DataType="{x:Type local:Tile}">
+            <Border Width="196" Margin="0,0,10,10" Padding="12,9,12,10" CornerRadius="6" Background="{StaticResource Card}"
+                    BorderBrush="{StaticResource Line}" BorderThickness="1">
+                <StackPanel>
+                    <TextBlock Text="{Binding Label}" Foreground="{StaticResource Faint}" FontSize="10.5"/>
+                    <TextBlock Text="{Binding Value}" Foreground="{StaticResource Text}" FontFamily="{StaticResource Mono}"
+                               FontSize="20" Margin="0,2,0,2"/>
+                    <TextBlock Text="{Binding Note}" Foreground="{StaticResource Dim}" FontSize="10.5" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+        <DataTemplate x:Key="GradeTemplate" DataType="{x:Type local:GradeCell}">
+            <Border Width="196" Margin="0,0,10,10" Padding="12,9,12,10" CornerRadius="6" Background="{StaticResource Card}"
+                    BorderBrush="{Binding Brush}" BorderThickness="1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding Letter}" Foreground="{Binding Brush}" FontFamily="{StaticResource Mono}"
+                               FontSize="30" FontWeight="SemiBold" Margin="0,-4,12,0" VerticalAlignment="Top"/>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Foreground="{StaticResource Text}" FontSize="12" FontWeight="SemiBold">
+                            <Run Text="{Binding Axis, Mode=OneWay}"/>
+                            <Run Text="{Binding Was, Mode=OneWay}" Foreground="{StaticResource Faint}" FontWeight="Normal" FontSize="10.5"/>
+                        </TextBlock>
+                        <TextBlock Text="{Binding Value}" Foreground="{StaticResource Text}" FontFamily="{StaticResource Mono}"
+                                   FontSize="12" Margin="0,2,0,1"/>
+                        <TextBlock Text="{Binding Meaning}" Foreground="{StaticResource Dim}" FontSize="10.5" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+        <Grid Margin="20,14,20,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="usage overview" Foreground="{StaticResource Text}" FontSize="15" FontWeight="SemiBold"/>
+                <TextBlock x:Name="Status" Text="reading transcripts…" Foreground="{StaticResource Faint}" FontSize="10.5" Margin="0,2,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <RadioButton x:Name="Week" Content="7d" GroupName="Range" Style="{StaticResource Range}" IsChecked="True" Checked="OnRange"/>
+                <RadioButton x:Name="Month" Content="30d" GroupName="Range" Style="{StaticResource Range}" Checked="OnRange"/>
+                <RadioButton x:Name="All" Content="all" GroupName="Range" Style="{StaticResource Range}" Checked="OnRange"/>
+            </StackPanel>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="20,0,10,20">
+                <TextBlock Text="grades · this 7 days; the ring is the 7 before" Foreground="{StaticResource Faint}" FontSize="10.5" Margin="0,2,0,6"/>
+                <Border Style="{StaticResource ChartCard}" Width="850" Padding="14,10,18,10">
+                    <local:GradeBands x:Name="Bands"/>
+                </Border>
+                <ItemsControl x:Name="Grades" ItemTemplate="{StaticResource GradeTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+                <TextBlock x:Name="NoGrades" Text="no grades yet: token-sessions has not written its feed" Foreground="{StaticResource Faint}"
+                           FontSize="11" Visibility="Collapsed"/>
+
+                <TextBlock Text="what to change" Foreground="{StaticResource Faint}" FontSize="10.5" Margin="0,10,0,6"/>
+                <ItemsControl x:Name="Suggestions">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,10,6" Padding="12,7,12,8" CornerRadius="6" Background="{StaticResource YellowTint}"
+                                    BorderBrush="{StaticResource Yellow}" BorderThickness="2,0,0,0" MaxWidth="830" HorizontalAlignment="Left">
+                                <TextBlock Text="{Binding}" Foreground="{StaticResource Text}" FontSize="12" TextWrapping="Wrap"/>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock x:Name="AllGood" Text="every grade is B or better: nothing to change this week" Foreground="{StaticResource Dim}"
+                           FontSize="12" Visibility="Collapsed"/>
+                <Border Height="1" Background="{StaticResource Line}" Width="850" HorizontalAlignment="Left" Margin="0,16,0,10"/>
+                <CheckBox x:Name="FoldOverview" Style="{StaticResource Fold}" Content="overview" Tag="totals for the range"/>
+                <StackPanel Visibility="{Binding IsChecked, ElementName=FoldOverview, Converter={StaticResource Shown}}" Margin="0,2,0,12">
+                    <ItemsControl x:Name="Tiles" ItemTemplate="{StaticResource TileTemplate}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </StackPanel>
+                <CheckBox x:Name="FoldProgress" Style="{StaticResource Fold}" Content="progress since TokenChat" Tag="whole history"/>
+                <StackPanel Visibility="{Binding IsChecked, ElementName=FoldProgress, Converter={StaticResource Shown}}" Margin="0,2,0,12">
+                    <WrapPanel>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock x:Name="ProgressTitle" Text="before and since TokenChat" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}" Text="change against before: green is better, red worse"/>
+                                <Grid TextElement.FontSize="11">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="130"/>
+                                        <ColumnDefinition/>
+                                        <ColumnDefinition/>
+                                        <ColumnDefinition/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="1" Text="before" Style="{StaticResource Cell}" Foreground="{StaticResource Faint}"/>
+                                    <TextBlock Grid.Column="2" Text="TokenChat" Style="{StaticResource Cell}" Foreground="{StaticResource Faint}"/>
+                                    <TextBlock Grid.Column="3" Text="terminal" Style="{StaticResource Cell}" Foreground="{StaticResource Faint}"/>
+                                </Grid>
+                                <ItemsControl x:Name="ProgressRows">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type local:ProgressRow}">
+                                            <Grid Margin="0,3,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="130"/>
+                                                    <ColumnDefinition/>
+                                                    <ColumnDefinition/>
+                                                    <ColumnDefinition/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Metric}" Foreground="{StaticResource Text}" FontSize="11.5" ToolTip="{Binding Tip}"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding Before}" Style="{StaticResource Cell}"/>
+                                                <TextBlock Grid.Column="2" Style="{StaticResource Cell}">
+                                                    <Run Text="{Binding Chat, Mode=OneWay}" Foreground="{StaticResource Text}"/>
+                                                    <Run Text="{Binding ChatChange, Mode=OneWay}" Foreground="{Binding ChatBrush, Mode=OneWay}" FontSize="10"/>
+                                                </TextBlock>
+                                                <TextBlock Grid.Column="3" Style="{StaticResource Cell}">
+                                                    <Run Text="{Binding Term, Mode=OneWay}"/>
+                                                    <Run Text="{Binding TermChange, Mode=OneWay}" Foreground="{Binding TermBrush, Mode=OneWay}" FontSize="10"/>
+                                                </TextBlock>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock Text="weighted tokens per cycle, by week" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}">
+                                    <Run Text="■" Foreground="{StaticResource Dim}"/> terminal
+                                    <Run Text="■" Foreground="{StaticResource Blue}"/> TokenChat · lower is cheaper work
+                                </TextBlock>
+                                <local:BarChart x:Name="WeekCostChart" Height="120" Grouped="True"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock Text="over-budget cycles, by week" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}">
+                                    <Run Text="■" Foreground="{StaticResource Dim}"/> terminal
+                                    <Run Text="■" Foreground="{StaticResource Blue}"/> TokenChat · share of cycles past feature
+                                </TextBlock>
+                                <local:BarChart x:Name="WeekOverChart" Height="120" Grouped="True"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock Text="re-cache share, by week" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}">
+                                    <Run Text="■" Foreground="{StaticResource Dim}"/> terminal
+                                    <Run Text="■" Foreground="{StaticResource Blue}"/> TokenChat · spend rewriting context already there
+                                </TextBlock>
+                                <local:BarChart x:Name="WeekChurnChart" Height="120" Grouped="True"/>
+                            </StackPanel>
+                        </Border>
+                    </WrapPanel>
+                </StackPanel>
+                <CheckBox x:Name="FoldCharts" Style="{StaticResource Fold}" Content="usage charts" Tag="per day, window size, projects"/>
+                <StackPanel Visibility="{Binding IsChecked, ElementName=FoldCharts, Converter={StaticResource Shown}}" Margin="0,2,0,12">
+                    <WrapPanel>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock Text="weighted tokens per day" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}">
+                                    <Run Text="■" Foreground="{StaticResource Blue}"/> output
+                                    <Run Text="■" Foreground="{StaticResource Orange}"/> cache write
+                                    <Run Text="■" Foreground="{StaticResource Green}"/> read
+                                    <Run Text="■" Foreground="{StaticResource Faint}"/> input
+                                </TextBlock>
+                                <local:BarChart x:Name="DailyChart" Height="150"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock Text="cycles per day by budget class" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}">
+                                    <Run Text="■" Foreground="{StaticResource Green}"/> recon
+                                    <Run Text="■" Foreground="{StaticResource Blue}"/> change
+                                    <Run Text="■" Foreground="{StaticResource Yellow}"/> feature
+                                    <Run Text="■" Foreground="{StaticResource Red}"/> over budget
+                                </TextBlock>
+                                <local:BarChart x:Name="ClassChart" Height="150"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock Text="window size at each cycle's end" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}" Text="cycles per 20k of context; the dashed line is the cut bar"/>
+                                <local:BarChart x:Name="ContextChart" Height="150"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource ChartCard}">
+                            <StackPanel>
+                                <TextBlock Text="waste: cache rewrites per day" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock x:Name="CommandsText" Style="{StaticResource Legend}"/>
+                                <local:BarChart x:Name="ChurnChart" Height="150"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource ChartCard}" Width="850">
+                            <StackPanel>
+                                <TextBlock Text="weighted tokens by project" Style="{StaticResource ChartTitle}"/>
+                                <TextBlock Style="{StaticResource Legend}" Text="$ and sessions after each bar"/>
+                                <local:BarChart x:Name="ProjectChart" Horizontal="True"/>
+                            </StackPanel>
+                        </Border>
+                    </WrapPanel>
+                </StackPanel>
+                <CheckBox x:Name="FoldHours" Style="{StaticResource Fold}" Content="when you work" Tag="weekday by hour"/>
+                <StackPanel Visibility="{Binding IsChecked, ElementName=FoldHours, Converter={StaticResource Shown}}" Margin="0,2,0,12">
+                    <Border Style="{StaticResource ChartCard}" Width="850">
+                        <StackPanel>
+                            <TextBlock Text="when you work: weighted tokens by weekday and hour" Style="{StaticResource ChartTitle}"/>
+                            <TextBlock Style="{StaticResource Legend}" Text="local time a cycle's prompt was sent; darker is more spend"/>
+                            <local:HeatMap x:Name="HourMap" Height="150"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

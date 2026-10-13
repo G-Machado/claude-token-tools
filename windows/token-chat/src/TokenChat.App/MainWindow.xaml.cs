@@ -34,6 +34,7 @@ public partial class MainWindow : Window
             if (!_syncing && Side.List.SelectedItem is SidebarItem { Tab: { } tab }) Select(tab);
         };
         Side.NewSession += ShowStart;
+        Side.ShowAnalytics += ShowAnalytics;
         Side.CloseSession += CloseSession;
         PreviewKeyDown += (_, e) =>
         {
@@ -61,8 +62,24 @@ public partial class MainWindow : Window
     {
         Chat.Content = tab;
         Start.Visibility = Visibility.Collapsed;
+        Analytics.Visibility = Visibility.Collapsed;
+        Chat.Visibility = Visibility.Visible;
+        Side.AnalyticsRow.IsChecked = false;
         _syncTo = tab;
         SyncSidebar();
+    }
+
+    /// <summary>The analytics row: no session row stays selected, so clicking the one that was showing goes back to it.</summary>
+    void ShowAnalytics()
+    {
+        Side.AnalyticsRow.IsChecked = true;
+        Analytics.Visibility = Visibility.Visible;
+        Chat.Visibility = Visibility.Collapsed; // the view has no ground of its own: the chat would show through
+        Start.Visibility = Visibility.Collapsed;
+        _syncTo = null;
+        _syncing = true;
+        Side.List.SelectedItem = null;
+        _syncing = false;
     }
 
     void SyncSidebar()
