@@ -95,7 +95,7 @@ public sealed class GradeBands : FrameworkElement
         if (at >= 0)
         {
             var g = _grades[at];
-            tip.Content = $"{g.Axis} {g.Letter}: {g.Value} {g.Meaning}" + (g.Previous is { } p ? $"\nthe 7 days before: {p}" : "");
+            tip.Content = $"{g.Axis} {g.Letter}: {g.Value} {g.Meaning}" + (g.Previous is { } p ? $"\nthe period before: {p}" : "");
         }
         tip.Visibility = at >= 0 ? Visibility.Visible : Visibility.Collapsed;
         tip.IsOpen = at >= 0;

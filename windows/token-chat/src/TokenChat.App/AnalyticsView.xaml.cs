@@ -55,7 +55,16 @@ public partial class AnalyticsView : UserControl
         var o = UsageOverview.Build(_sessions, Range, DateTimeOffset.Now);
         Tiles.ItemsSource = TilesOf(o);
 
-        var grades = GradeAdvice.Read(SessionTab.Feed.Value.Snapshot?.Overall);
+        // The feed's cut bar when there is one; 242k is where it sat when this was written.
+        var cutK = SessionTab.Feed.Value.Snapshot?.Overall?["cut_k"] is System.Text.Json.Nodes.JsonValue c
+            && c.TryGetValue<double>(out var k) && k > 0 ? k : 242;
+        var grades = RangeGrades.Build(_sessions, Range, DateTimeOffset.Now, cutK);
+        GradesLabel.Text = Range switch
+        {
+            OverviewRange.Week => "grades · this 7 days; the ring is the 7 before",
+            OverviewRange.Month => "grades · this 30 days; the ring is the 30 before",
+            _ => "grades · everything on disk",
+        };
         Grades.ItemsSource = grades.Select(g => new GradeCell(g.Axis, g.Letter, g.Previous is { } p ? $"was {p}" : "",
             g.Value, g.Meaning, GradeBrush(g.Letter))).ToList();
         Bands.Grades = grades;

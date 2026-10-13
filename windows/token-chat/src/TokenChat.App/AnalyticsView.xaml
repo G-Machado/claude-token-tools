@@ -160,7 +160,7 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="20,0,10,20">
-                <TextBlock Text="grades · this 7 days; the ring is the 7 before" Foreground="{StaticResource Faint}" FontSize="10.5" Margin="0,2,0,6"/>
+                <TextBlock x:Name="GradesLabel" Text="grades · this 7 days; the ring is the 7 before" Foreground="{StaticResource Faint}" FontSize="10.5" Margin="0,2,0,6"/>
                 <Border Style="{StaticResource ChartCard}" Width="850" Padding="14,10,18,10">
                     <local:GradeBands x:Name="Bands"/>
                 </Border>

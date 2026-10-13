@@ -23,8 +23,12 @@ public sealed record Grade(string Axis, string Letter, string? Previous, string 
         return Math.Min(4.999, 4 + (v - cuts[^1]) / width);
     }
 
+    /// <summary>The letter on the OVERALL ladder: A up to and including the first cut, E past the last.</summary>
+    public static string LetterOf(string axis, double v) =>
+        Ladders.TryGetValue(axis, out var cuts) ? "ABCDE"[cuts.Count(c => v > c)].ToString() : "?";
+
     // The OVERALL ladders in token-sessions.sh (heldgrade, shortgrade, churngrade, ctlgrade, ~:2780): A up to the
-    // first cut, E past the last. They only place the marker; the letter is always the feed's.
+    // first cut, E past the last.
     static readonly Dictionary<string, double[]> Ladders = new()
     {
         ["held"] = [10, 25, 45, 65],
@@ -51,15 +55,23 @@ public static class GradeAdvice
         return
         [
             new("held", L(g, "held") ?? "?", L(prev, "held"), $"{Num(overall["held"]):0.#}%",
-                $"of spend paid past the {cut:0}k cut bar", Num(overall["held"]), Was("held")),
+                Meaning("held", cut), Num(overall["held"]), Was("held")),
             new("short", L(g, "short") ?? "?", L(prev, "short"), $"{Num(overall["short"]):0.#}%",
-                "of spend on the cold floor of sessions that stopped at two cycles", Num(overall["short"]), Was("short")),
+                Meaning("short", cut), Num(overall["short"]), Was("short")),
             new("churn", L(g, "churn") ?? "?", L(prev, "churn"), $"{Num(overall["churn"]):0.#}%",
-                "of spend rewriting a window whose cache had lapsed", Num(overall["churn"]), Was("churn")),
+                Meaning("churn", cut), Num(overall["churn"]), Was("churn")),
             new("control", L(g, "control") ?? "?", L(prev, "control"), Num(overall["ctl"]).ToString("0.00", Inv),
-                "over-budget prompts per cycle", Num(overall["ctl"]), Was("ctl")),
+                Meaning("control", cut), Num(overall["ctl"]), Was("ctl")),
         ];
     }
+
+    public static string Meaning(string axis, double cutK) => axis switch
+    {
+        "held" => $"of spend paid past the {cutK:0}k cut bar",
+        "short" => "of spend on the cold floor of sessions that stopped at two cycles",
+        "churn" => "of spend rewriting a window whose cache had lapsed",
+        _ => "over-budget prompts per cycle",
+    };
 
     /// <summary>The worst grades at C or below, worst first, at most two: one concrete fix each.</summary>
     public static IReadOnlyList<string> Suggest(IReadOnlyList<Grade> grades) =>
