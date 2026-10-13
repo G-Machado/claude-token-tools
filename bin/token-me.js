@@ -82,7 +82,7 @@ console.log(`  context   ${k(me.context)}   cut bar ${C.cut_no}k   overheat ${C.
 console.log(`  heat      ${me.hot}x  (rent vs work; >=1 costs more to hold than it produces)   verdict: ${me.verdict}`);
 console.log(`  cache     ${cache}   extension marks ${marks}   parked ${me.parked ? 'yes (' + me.ck_topic + ')' : 'no'}   blocked ${me.blocked ? 'yes' : 'no'}`);
 console.log(`  cycles    ${me.cycles}   output last ${k(me.output_last)}   growth total ${k(me.growth_total)}   breaches ${me.breaches}`);
-console.log(`  spent     $${me.cost.usd.toFixed(2)}   output ${me.cost.pct_output}% / write ${me.cost.pct_write}% / read ${me.cost.pct_read}%   grades ${me.grades.spend}/${me.grades.churn}/${me.grades.control}`);
+console.log(`  spent     $${me.cost.usd.toFixed(2)}   output ${me.cost.pct_output}% / write ${me.cost.pct_write}% / read ${me.cost.pct_read}%   grades ${me.grades.held}/${me.grades.short}/${me.grades.churn}/${me.grades.control}`);
 console.log(`  if it lapses: ~${k(me.lapse_cost)} weighted rewrite`);
 if (oth) console.log(`  other windows lapsing within 15m: ${oth}`);
 const a = snap.alert || {};

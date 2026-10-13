@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*), Bash(git:*), Bash(powershell:*), Read, Write, Edit
 
 !`bash "$HOME/.claude/token-park-context.sh"`
 
-Hand this work to a fresh window: checkpoint it, open a new terminal already running
+Hand this work to a fresh window: checkpoint it, open a new TokenChat tab already running
 `/unpark <topic>`, then block this window so the strand cannot fork. The user typed: **$ARGUMENTS**
 
 Glue over pieces that already exist - do not reimplement any of them.
@@ -23,7 +23,8 @@ the advice is this command. Keep the slug you chose; the next steps need it.
 powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/token-unpark-new.ps1" -Topic <slug> -Cwd "<cwd above>" -OldSid <session id above>
 ```
 
-It opens Windows Terminal (cmd as fallback) in that folder running `/unpark <slug>`, and sets this
+It opens a new TokenChat tab in that folder running `/unpark <slug> --handoff`, which carries on with the Next steps unless something waits on the user (Windows Terminal only when no
+TokenChat build can be found; the output says which), and sets this
 session to `--extend 0` so nothing pays to keep it warm. Add `-Model <id>` only if the user named
 one. **Exit 2** (`no checkpoint` / `no dir`) means nothing opened: report its output and stop -
 do not block a window that has nowhere to hand off to.
@@ -40,5 +41,5 @@ window something.
 
 ## 4. Reply
 
-One line: the checkpoint file, that the new window is running `/unpark <slug>`, and that this
+One line: the checkpoint file, that the new window is running `/unpark <slug> --handoff`, and that this
 one is read-only now - close it, or `u` in the widget to consult it.

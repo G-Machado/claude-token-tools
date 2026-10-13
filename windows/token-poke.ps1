@@ -273,6 +273,94 @@ if ($proc.ProcessName -ne 'claude') {
   exit 1
 }
 
+# One row per poke, so the panel can tell a held window from a worked one.
+#
+# A log rather than a scan. The alternative is to find these cycles again later
+# by matching the prompt text in the transcript, which is both dearer and
+# wrong at the edges - a real prompt can quote the sentinel, and a cycle cannot
+# be attributed to a prompt by timestamp without guessing. Writing the row at
+# the moment the thing happens costs nothing and cannot be misread afterwards.
+#
+#   ISO8601 <TAB> short <TAB> pid <TAB> kind <TAB> contextK <TAB> marksLeft
+#
+# kind is renew or park: both are messages this machine put into a session that
+# the person at the keyboard did not type, which is the distinction the stats
+# care about. Everything else about the cycle - what it cost, what it grew - is
+# already in token-history.csv under the same session, keyed by the timestamp.
+# Same row whether the line went into a console or over TokenChat's pipe.
+function Write-PokeRow {
+  try {
+    $kind = if ($CrOnly) { 'nudge' } elseif ($Text -match '^/park') { 'park' } else { 'renew' }
+    $mk2  = Get-Marks $Short
+    $lf   = [Math]::Max(0, $mk2.allowed - $mk2.used - 1)
+    $row  = "{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f `
+              (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'), $Short, $TargetPid, $kind, $ContextK, $lf
+    Add-Content -Path (Join-Path $CL 'token-poke.log') -Value $row -Encoding utf8
+  } catch {
+    # A poke that lands but cannot be logged is still a poke. Say so and carry on -
+    # losing the row costs a mark in the stats, losing the renewal costs 2x.
+    Write-Output "WARN: poked but could not write token-poke.log: $($_.Exception.Message)"
+  }
+}
+
+# A TokenChat tab owns no console: its claude.exe is a child of TokenChat.App
+# reading stream-json on a pipe, so there is no input buffer to attach to.
+# TokenChat takes the line over its instance pipe instead and sends it as a user
+# message in that tab - window not raised, focus not taken, input box, queue and
+# attachments untouched - and answers on the same pipe:
+#   ok      sent; poke_landed sees session-usage "requests" move as usual
+#   busy    a turn, prompt or queued message is open: that turn renews it
+#   no-tab  no open tab holds the session, or its claude has exited
+# Slash commands expand in stream-json, so -Text /park goes the same way. A
+# message TokenChat accepted was sent, not typed, so -CrOnly has nothing to
+# nudge and -NoEnter nothing to hold back.
+$parentId = (Get-CimInstance Win32_Process -Filter "ProcessId=$TargetPid" -ErrorAction SilentlyContinue).ParentProcessId
+$tcProc = if ($parentId) { Get-Process -Id $parentId -ErrorAction SilentlyContinue }
+if ($tcProc -and $tcProc.ProcessName -eq 'TokenChat.App') {
+  $pipeName = "TokenChat-$env:USERNAME"
+  if ($CrOnly -or $NoEnter) {
+    Write-Output "SKIP: pid $TargetPid is a TokenChat tab - nothing typed, so nothing to $(if ($CrOnly) { 'nudge' } else { 'hold back' })"
+    exit 2
+  }
+  # The tab is keyed by the full id; sessions/<pid>.json has it for headless claude too.
+  $sf  = Join-Path $CL ("sessions/{0}.json" -f $TargetPid)
+  $sid = if (Test-Path $sf) { [regex]::Match((Get-Content $sf -Raw), '"sessionId"\s*:\s*"([0-9a-f-]{36})"').Groups[1].Value }
+  if (-not $sid) { Write-Output "FAIL: no session id for TokenChat pid $TargetPid in $sf"; exit 1 }
+  $pipe = $null
+  try {
+    $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::InOut)
+    $pipe.Connect(3000)
+    if ($Probe) {
+      # Connected and hung up: TokenChat reads an empty request and serves the next one.
+      Write-Output ("PROBE ok: pid {0} is a TokenChat tab (TokenChat.App pid {1}), session {2}, pipe {3} answers" -f `
+        $TargetPid, $tcProc.Id, $sid, $pipeName)
+      Write-Output ("  would send: {0}" -f $Text)
+      exit 0
+    }
+    $writer = New-Object System.IO.StreamWriter($pipe)
+    $writer.AutoFlush = $true
+    $writer.WriteLine((@{ Poke = @{ SessionId = $sid; Text = $Text } } | ConvertTo-Json -Compress))
+    # Bounded: a modal box in TokenChat holds its pipe thread, and this runs unattended.
+    $read = (New-Object System.IO.StreamReader($pipe)).ReadLineAsync()
+    $reply = if ($read.Wait(10000)) { $read.Result } else { $null }
+  } catch {
+    Write-Output "FAIL: TokenChat pipe $pipeName - $($_.Exception.Message)"
+    exit 1
+  } finally {
+    if ($pipe) { $pipe.Dispose() }
+  }
+  switch ($reply) {
+    'ok' {
+      Write-PokeRow
+      Write-Output ("POKE ok: sent to TokenChat tab {0} over {1} (TokenChat.App pid {2})" -f $Short, $pipeName, $tcProc.Id)
+      exit 0
+    }
+    'busy'   { Write-Output "SKIP: TokenChat tab $Short is busy - a turn or prompt is open, and its own request renews it"; exit 2 }
+    'no-tab' { Write-Output "SKIP: TokenChat has no open tab for $Short"; exit 2 }
+    default  { Write-Output "FAIL: TokenChat did not answer the poke ($(if ($null -eq $reply) { 'no reply in 10s' } else { "'$reply'" }))"; exit 1 }
+  }
+}
+
 # Our own console has to go before another can be attached; a process may hold
 # exactly one. Nothing after this point can Write-Host - output goes through the
 # pipe we were started with, which survives.
@@ -687,32 +775,7 @@ if ($ho -ne $INVALID) { [void][ConIn]::CloseHandle($ho) }
 
 if (-not $ok) { Write-Output "FAIL: WriteConsoleInput (win32 $err)"; exit 1 }
 
-# One row per poke, so the panel can tell a held window from a worked one.
-#
-# A log rather than a scan. The alternative is to find these cycles again later
-# by matching the prompt text in the transcript, which is both dearer and
-# wrong at the edges - a real prompt can quote the sentinel, and a cycle cannot
-# be attributed to a prompt by timestamp without guessing. Writing the row at
-# the moment the thing happens costs nothing and cannot be misread afterwards.
-#
-#   ISO8601 <TAB> short <TAB> pid <TAB> kind <TAB> contextK <TAB> marksLeft
-#
-# kind is renew or park: both are messages this machine put into a session that
-# the person at the keyboard did not type, which is the distinction the stats
-# care about. Everything else about the cycle - what it cost, what it grew - is
-# already in token-history.csv under the same session, keyed by the timestamp.
-try {
-  $kind = if ($CrOnly) { 'nudge' } elseif ($Text -match '^/park') { 'park' } else { 'renew' }
-  $mk2  = Get-Marks $Short
-  $lf   = [Math]::Max(0, $mk2.allowed - $mk2.used - 1)
-  $row  = "{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f `
-            (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'), $Short, $TargetPid, $kind, $ContextK, $lf
-  Add-Content -Path (Join-Path $CL 'token-poke.log') -Value $row -Encoding utf8
-} catch {
-  # A poke that lands but cannot be logged is still a poke. Say so and carry on -
-  # losing the row costs a mark in the stats, losing the renewal costs 2x.
-  Write-Output "WARN: poked but could not write token-poke.log: $($_.Exception.Message)"
-}
+Write-PokeRow
 
 $expect = $(if ($CrOnly) { 1 } else { $Text.Length + $(if ($NoEnter) { 0 } else { 1 }) })
 Write-Output ("POKE ok: wrote {0} of {1} records to pid {2} ({3})" -f $written, $expect, $TargetPid, $TypeMode)

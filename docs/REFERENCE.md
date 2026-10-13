@@ -153,7 +153,7 @@ both near the end, so live sessions only. The `/unpark` topic is the optional th
 | **context** | window size. Length *and* colour are both size and nothing else: dim green under the ~63k floor, green under the parking bar, yellow past it, orange once a cut would pay with a checkpoint on disk, red once it would pay without one. What the window costs *right now* lives in **cache**, not here. |
 | **cost** | spend so far in input-equivalents (output x5, cache write x2, cache read x0.1). The bar splits it green output / orange cache writes / blue cache reads. More green is better — that is the share that went into doing work rather than paying rent on a window. |
 | **growth** | one glyph per cycle, up to twelve, on a fixed scale so the column means the same on every row. Red over the growth budget, amber over the output budget. |
-| **grade** | spend / churn / control for that session, against what your machine actually does. Spend is measured **above** the cold floor, because that write is not a choice. |
+| **grade** | held / short / churn / control for that session, on per-session ladders: held is the share of its spend paid past the cut bar, short the share that went on the cold floor write, churn the share that rewrote a lapsed window, control over-budget prompts per cycle. Blank until 2 cycles. |
 | **cache** | minutes of prompt-cache life left, and nothing else. |
 
 **Cache reads are modelled** (context x `TOKEN_REQ_PER_CYCLE`), not measured — the CLI does not

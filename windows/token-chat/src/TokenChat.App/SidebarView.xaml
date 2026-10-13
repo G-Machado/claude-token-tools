@@ -1,0 +1,378 @@
+<UserControl x:Class="TokenChat.App.SidebarView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:TokenChat.App">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="Shown"/>
+        <Style x:Key="Fig" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="Pill" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource Inset}"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="6,1,6,2"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <!-- one limit window: label, bar, percentage and the time to its reset; the label rides in on Tag -->
+        <DataTemplate DataType="{x:Type local:LimitGauge}">
+            <StackPanel Orientation="Horizontal" Margin="0,0,8,0">
+                <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=ContentControl}}"
+                           Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,0,5,0"/>
+                <Grid Width="40" Height="4" Margin="0,0,5,0" VerticalAlignment="Center">
+                    <Border Background="{StaticResource Track}" CornerRadius="2"/>
+                    <Border Background="{Binding Brush}" CornerRadius="2" RenderTransformOrigin="0,0.5">
+                        <Border.RenderTransform>
+                            <ScaleTransform ScaleX="{Binding Fill}"/>
+                        </Border.RenderTransform>
+                    </Border>
+                </Grid>
+                <TextBlock Text="{Binding Pct}" Style="{StaticResource Fig}" FontSize="9.5" FontWeight="SemiBold"
+                           Foreground="{Binding Brush}" Margin="0,0,4,0"/>
+                <TextBlock Text="{Binding ResetsIn}" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"/>
+            </StackPanel>
+        </DataTemplate>
+        <!-- the widget's keys for a row, as a menu; they work as keys while the list has focus -->
+        <ContextMenu x:Key="RowMenu" x:Shared="False" Background="{StaticResource Card}" Foreground="{StaticResource Text}"
+                     BorderBrush="{StaticResource Line}">
+            <MenuItem Header="add an extension mark" InputGestureText="e" IsEnabled="{Binding HasSession}" Click="OnMarkUp"/>
+            <MenuItem Header="remove an extension mark" InputGestureText="shift+e" IsEnabled="{Binding HasSession}" Click="OnMarkDown"/>
+            <MenuItem Header="lift the input block" InputGestureText="u" IsEnabled="{Binding Blocked}" Click="OnUnblock"/>
+            <Separator/>
+            <MenuItem Header="open its window" InputGestureText="enter" IsEnabled="{Binding CanOpen}" Click="OnOpen"/>
+            <MenuItem Header="copy the resume command" InputGestureText="y" Click="OnCopy"/>
+            <MenuItem Header="open the folder" InputGestureText="o" Click="OnFolder"/>
+            <Separator/>
+            <MenuItem Header="park the session" IsEnabled="{Binding Here}" Click="OnPark"/>
+            <MenuItem Header="close the session" IsEnabled="{Binding Here}" Click="OnCloseRow"/>
+        </ContextMenu>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="34"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <!-- in the caption band, so it drags the window as the strip beside the tabs does -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="Note" Text="sessions" Foreground="{StaticResource Faint}" FontSize="10.5" VerticalAlignment="Bottom"
+                       Margin="14,0,10,9" TextTrimming="CharacterEllipsis"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,6,0">
+                <CheckBox x:Name="LiteBox" Content="lite" Style="{StaticResource TextToggle}" Margin="0,1,2,0"
+                          ToolTip="new sessions start Lite: Read, Edit, Write, Bash, Grep, Glob, AskUserQuestion; no MCP (about 16.9k floor)"/>
+                <Button Content="+" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="16"
+                        Padding="7,0,7,2" ToolTip="new session…" Click="OnNew"/>
+            </StackPanel>
+        </Grid>
+        <!-- the widget's limits block: a row per plan account, then today's spend against TOKEN_DAY_CAP -->
+        <StackPanel x:Name="Usage" Grid.Row="1" Margin="14,0,10,8">
+            <ItemsControl ItemsSource="{Binding Accounts}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- another account's row switches to it, on a second click: the widget's w -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3" Background="Transparent"
+                                    MouseLeftButtonUp="OnAccount">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Opacity" Value="0.62"/>
+                                    <Setter Property="Cursor" Value="Hand"/>
+                                    <Setter Property="ToolTip" Value="{Binding Email, StringFormat={}{0} - click to switch to it}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Active}" Value="True">
+                                            <Setter Property="Opacity" Value="1"/>
+                                            <Setter Property="Cursor" Value="Arrow"/>
+                                            <Setter Property="ToolTip" Value="{Binding Email}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="{Binding N}" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"
+                                       MinWidth="7" Margin="0,0,8,0"/>
+                            <ContentControl Content="{Binding FiveHour}" Tag="5h" Focusable="False"/>
+                            <ContentControl Content="{Binding SevenDay}" Tag="7d" Focusable="False"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Grid Margin="0,2,0,0" Visibility="{Binding HasDay, Converter={StaticResource Shown}}" ToolTip="{Binding DayTip}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="today" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,0,6,0"/>
+                <Grid Grid.Column="1" Width="66" Height="5" Margin="0,0,6,0" VerticalAlignment="Center">
+                    <Border Background="{StaticResource Track}" CornerRadius="2.5"/>
+                    <Border Background="{Binding DayBrush}" CornerRadius="2.5" RenderTransformOrigin="0,0.5">
+                        <Border.RenderTransform>
+                            <ScaleTransform ScaleX="{Binding DayFill}"/>
+                        </Border.RenderTransform>
+                    </Border>
+                </Grid>
+                <TextBlock Grid.Column="2" Text="{Binding DayText}" Style="{StaticResource Fig}" FontSize="9.5"
+                           Foreground="{StaticResource Dim}"/>
+                <TextBlock Grid.Column="3" Text="{Binding Account}" Style="{StaticResource Fig}" FontSize="9.5"
+                           Foreground="{StaticResource Faint}" HorizontalAlignment="Right" Margin="8,0,0,0"
+                           TextTrimming="CharacterEllipsis"/>
+            </Grid>
+        </StackPanel>
+        <Border Grid.Row="2" Height="1" Background="{StaticResource Line}"/>
+
+        <ListBox x:Name="List" Grid.Row="3" Background="Transparent" BorderThickness="0" Padding="0,4,0,8"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                    <Setter Property="ContextMenu" Value="{StaticResource RowMenu}"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListBoxItem">
+                                <StackPanel>
+                                    <TextBlock Text="other windows" Foreground="{StaticResource Faint}" FontSize="10" Margin="14,12,0,4"
+                                               Visibility="{Binding FirstElsewhere, Converter={StaticResource Shown}}"/>
+                                    <Border x:Name="B" Margin="6,1" Padding="9,6,10,7" CornerRadius="5" Background="Transparent" Cursor="Hand">
+                                        <ContentPresenter/>
+                                    </Border>
+                                </StackPanel>
+                                <ControlTemplate.Triggers>
+                                    <Trigger SourceName="B" Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ListBox.ItemContainerStyle>
+
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="{x:Type local:SidebarItem}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3"/>
+                            <ColumnDefinition/>
+                        </Grid.ColumnDefinitions>
+                        <!-- the project's colour down the edge, as along the top of a tab -->
+                        <Border Background="{Binding ProjectBrush}" CornerRadius="1.5" Margin="0,1"/>
+                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                            <!-- line 1: state, name, project; ctx and the hour on the right -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <!-- a session of this window closes from its row, as it did from its tab -->
+                                <Button Grid.Column="3" Content="&#10005;" Style="{StaticResource GlyphClose}" FontSize="9" Padding="7,0,0,0"
+                                        ToolTip="close the session" Click="OnCloseRow"
+                                        Visibility="{Binding Here, Converter={StaticResource Shown}}"/>
+                                <TextBlock x:Name="Dot" Text="&#9679;" FontSize="9" Margin="0,1,7,0" Foreground="{StaticResource Faint}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                                    <Run Text="{Binding Name, Mode=OneWay}" FontSize="12" FontWeight="SemiBold"/><Run
+                                         Text="  "/><Run Text="{Binding Project, Mode=OneWay}" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                                </TextBlock>
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" DataContext="{Binding Row}" Margin="8,0,0,0">
+                                    <TextBlock Text="{Binding Ctx}" Foreground="{Binding CtxBrush}" Style="{StaticResource Fig}" FontSize="11"/>
+                                    <TextBlock Text="{Binding Clock}" Foreground="{Binding ClockBrush}" FontSize="11" MinWidth="34" TextAlignment="Right">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Fig}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Cold}" Value="True">
+                                                        <Setter Property="FontWeight" Value="Bold"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- line 2: the widget's verdict, growth, heat and cycles; parked and the marks on the right -->
+                            <Grid x:Name="Figures" DataContext="{Binding Row}" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Mark}" Foreground="{Binding MarkBrush}" Style="{StaticResource Fig}" FontSize="9" Width="16"/>
+                                    <Grid VerticalAlignment="Center">
+                                        <TextBlock Text="-" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="9"
+                                                   Visibility="{Binding SparkEmpty, Converter={StaticResource Shown}}"/>
+                                        <ItemsControl ItemsSource="{Binding Spark}" Height="13">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Width="{Binding Width}" Height="{Binding Height}" Background="{Binding Fill}" CornerRadius="1"
+                                                            VerticalAlignment="Bottom" Margin="0,0,2,0"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Grid>
+                                    <TextBlock Text="{Binding Growth}" Foreground="{Binding GrowthBrush}" Style="{StaticResource Fig}" FontSize="9.5" Margin="2,0,8,0"/>
+                                    <TextBlock Text="{Binding Heat}" Foreground="{Binding HeatBrush}" Style="{StaticResource Fig}" FontSize="9.5"
+                                               FontWeight="SemiBold" Margin="0,0,8,0"/>
+                                    <TextBlock Style="{StaticResource Fig}" FontSize="9.5">
+                                        <Run Text="{Binding Cycles, Mode=OneWay}" Foreground="{StaticResource Dim}"/><Run
+                                             Text=" cyc" Foreground="{StaticResource Faint}"/><Run
+                                             Text="{Binding Pokes, Mode=OneWay}" Foreground="{StaticResource Blue}"/>
+                                    </TextBlock>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <TextBlock Text="PARKED" Foreground="{Binding ParkedBrush}" Style="{StaticResource Fig}" FontSize="9"
+                                               FontWeight="Bold" Margin="6,0,0,0" Visibility="{Binding Parked, Converter={StaticResource Shown}}"/>
+                                    <Border Style="{StaticResource Pill}" Margin="6,0,0,0" Visibility="{Binding HasState, Converter={StaticResource Shown}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding MarksLeft}" Foreground="{StaticResource Blue}" Style="{StaticResource Fig}" FontSize="10.5"/>
+                                            <TextBlock Text="{Binding MarksSpent}" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="10.5"/>
+                                            <TextBlock Text="B" Foreground="{StaticResource Red}" Style="{StaticResource Fig}" FontSize="11" FontWeight="Bold"
+                                                       Margin="5,0,0,0" Visibility="{Binding Blocked, Converter={StaticResource Shown}}"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- line 3: model and effort; spend against the day's bands and the grades on the right -->
+                            <Grid x:Name="Detail" DataContext="{Binding Row}" Margin="16,5,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource Fig}" FontSize="9.5" TextTrimming="CharacterEllipsis">
+                                    <Run Text="{Binding Model, Mode=OneWay}" Foreground="{StaticResource Faint}"/><Run
+                                         Text="{Binding Effort, Mode=OneWay}" Foreground="{Binding EffortBrush, Mode=OneWay}"/>
+                                </TextBlock>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Grid Width="66" Height="5" Margin="8,0,6,0" VerticalAlignment="Center">
+                                        <Border Background="{StaticResource Track}" CornerRadius="2.5"/>
+                                        <Border Background="{Binding SpendBrush}" CornerRadius="2.5" RenderTransformOrigin="0,0.5">
+                                            <Border.RenderTransform>
+                                                <ScaleTransform ScaleX="{Binding SpendFill}"/>
+                                            </Border.RenderTransform>
+                                        </Border>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Yellow}"
+                                                Margin="{x:Static local:FooterRow.TickOkAt}" Opacity="{Binding TickOk}"/>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Orange}"
+                                                Margin="{x:Static local:FooterRow.TickWatchAt}" Opacity="{Binding TickWatch}"/>
+                                        <Border Width="1" HorizontalAlignment="Left" Background="{StaticResource Red}"
+                                                Margin="{x:Static local:FooterRow.TickHeavyAt}" Opacity="{Binding TickHeavy}"/>
+                                    </Grid>
+                                    <TextBlock Text="{Binding Spend}" Foreground="{StaticResource Dim}" Style="{StaticResource Fig}" FontSize="9.5"
+                                               MinWidth="34" Margin="0,0,8,0"/>
+                                    <ItemsControl ItemsSource="{Binding Grades}" VerticalAlignment="Center">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Letter}" Foreground="{Binding Fill}" FontFamily="Consolas" FontSize="10"
+                                                           FontWeight="SemiBold" Margin="3,0,0,0"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- the selected row's controls: the most used keys on the widget, e and u -->
+                            <StackPanel x:Name="Controls" Orientation="Horizontal" Margin="16,4,0,0" Height="20"
+                                        Visibility="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}, Converter={StaticResource Shown}}">
+                                <TextBlock Text="marks" Foreground="{StaticResource Faint}" Style="{StaticResource Fig}" FontSize="9" Margin="0,0,2,0"/>
+                                <Button Content="&#8722;" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="13"
+                                        ToolTip="remove an extension mark (shift+e)" Click="OnMarkDown"/>
+                                <Button Content="+" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="13"
+                                        ToolTip="add an extension mark (e)" Click="OnMarkUp"/>
+                                <Button Content="lift block" Style="{StaticResource Glyph}" FontFamily="{StaticResource Ui}" FontSize="10.5"
+                                        Foreground="{StaticResource Red}" Margin="6,0,0,0" ToolTip="lift the input block (u)" Click="OnUnblock"
+                                        Visibility="{Binding Blocked, Converter={StaticResource Shown}}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                    <!-- the dot as on a tab (a hollow one would read as the verdict mark below it) -->
+                    <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding State}" Value="idle">
+                            <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Green}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding State}" Value="working">
+                            <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Blue}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding State}" Value="exited">
+                            <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Red}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Row}" Value="{x:Null}">
+                            <Setter TargetName="Figures" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="Detail" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="Controls" Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </DataTemplate.Triggers>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+        <!-- every project's checkpoints, newest first; enter or a double click opens one as a tab on /unpark <topic> -->
+        <StackPanel x:Name="ParkedPane" Grid.Row="4">
+            <Border Height="1" Background="{StaticResource Line}"/>
+            <CheckBox x:Name="ParkedBox" Style="{StaticResource TextToggle}" Margin="8,6,0,6" HorizontalAlignment="Left"
+                      ToolTip="checkpoints written by /park; open one to resume it in a new tab">
+                <TextBlock>
+                    <Run Text="parked"/><Run Text=" · "/><Run Text="{Binding Parked.Count, Mode=OneWay}"/>
+                </TextBlock>
+            </CheckBox>
+            <ListBox x:Name="ParkedList" ItemsSource="{Binding Parked}" MaxHeight="300" Background="Transparent" BorderThickness="0"
+                     Padding="0,0,0,6" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     Visibility="{Binding IsChecked, ElementName=ParkedBox, Converter={StaticResource Shown}}">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                        <Setter Property="ToolTip" Value="{Binding Task}"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <Border x:Name="B" Margin="6,0" Padding="9,3,10,4" CornerRadius="5" Background="Transparent" Cursor="Hand">
+                                        <ContentPresenter/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger SourceName="B" Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock TextTrimming="CharacterEllipsis" FontSize="11.5">
+                                <Run Text="{Binding Topic, Mode=OneWay}"/><Run Text="  "/><Run
+                                     Text="{Binding Project, Mode=OneWay}" Foreground="{StaticResource Faint}" FontSize="10.5"/>
+                            </TextBlock>
+                            <TextBlock Grid.Column="1" Text="{Binding Age}" Style="{StaticResource Fig}" FontSize="9.5"
+                                       Foreground="{StaticResource Faint}" Margin="8,0,0,0"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </StackPanel>
+    </Grid>
+</UserControl>

@@ -27,17 +27,21 @@ the window; do not read other files to write this.
 
 - **Stamp:** set `session=<session id above>` in the `<!-- park: -->` line and the time in the
   `#` heading. The compact re-inject hook finds the checkpoint by this stamp, so it must be current.
-- **Decided — do not reopen:** append what this arc settled, with its reason, plus `ruled out:` lines
-  for what was tried and dropped. Leave existing lines alone unless this arc overturned one on
-  evidence; then replace it and say so in the reply.
+- **Decided — do not reopen:** append what this arc settled, with its reason and `· assumes <premise>`
+  when it rests on one, plus `ruled out:` lines for what was tried and dropped. Leave existing lines
+  alone unless this arc overturned one on evidence or its premise changed; then replace it and say
+  so in the reply.
 - **Verified vs assumed:** add new lines. Move an `assumed:` line to verified only if this arc
-  checked it, and name the command or `file:line` that did.
+  checked it, and name the command or `file:line` that did. Each new `open:` line carries its
+  one-command check.
 - **State:** edit only the bullets this arc changed. Add one for any new file.
-- **Next:** replace it with the single next action.
+- **Next:** replace it with the plan from here (numbered steps, `Stop after:`), in the `/park` format.
+- **Map / Facts:** drop rows for finished steps; add the ranges and facts the new Next steps need, as
+  seen in this window (Map at most 8 rows, Facts at most 10 lines).
 - **Waiting on the user:** drop the items that got answered, add new ones.
 
-Keep the whole file **under ~40 lines**: when it grows past that, compress older State bullets, not
-Decided.
+Keep the whole file **under ~50 lines**: when it grows past that, compress older State bullets and
+Map rows for finished work, not Decided.
 
 ## 3. Reply (one or two lines)
 

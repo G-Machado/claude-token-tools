@@ -537,8 +537,9 @@ function Pk-Resolve-Cwd($C) {
   return $dir
 }
 
-# A terminal in the project directory, already running it. Windows Terminal when
-# it is there, because a bare conhost window is a worse place to hold a session
+# A TokenChat tab in the project directory, its first message the /unpark
+# (Open-Unpark, token-open.ps1). A terminal only when TokenChat cannot take it:
+# Windows Terminal when it is there, because a bare conhost window is a worse place to hold a session
 # for an hour; plain cmd otherwise, which is always there.
 #
 # cmd.exe rather than powershell as the inner shell on purpose: on PATH the
@@ -561,6 +562,15 @@ function Pk-Unpark-Row {
     if ($script:PkArmedOpen -ne $c.file) { $script:PkArmedOpen = $c.file; Pk-Log-Parked 'resume-armed' $c; return }
   }
   $script:PkArmedOpen = ''
+  if (Get-Command Open-Unpark -ErrorAction SilentlyContinue) {
+    try { $e = Open-Unpark $c.cwd (Pk-Resume-Args $c) ([string]$c.model) ([string]$c.effort) }
+    catch { $e = $_.Exception.Message }
+    if (-not $e) {
+      Flash ("unparking {0} in TokenChat" -f $c.topic)
+      Pk-Log-Parked 'resume-chat' $c
+      return
+    }
+  }
   # Through the shim, never `claude` directly: a session started from this
   # widget would otherwise inherit CLAUDE_CODE_CHILD_SESSION and come up with
   # transcript saving off and no sessions/<pid>.json - silently unmeasurable.

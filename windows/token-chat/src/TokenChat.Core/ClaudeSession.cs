@@ -17,12 +17,19 @@ public sealed class ClaudeSession : IAsyncDisposable
     readonly ConcurrentDictionary<string, TaskCompletionSource<ControlResponseEvent>> _pending = new();
     readonly ConcurrentDictionary<string, byte> _openPrompts = new(); // can_use_tool requests awaiting an answer
     readonly TurnRecorder _recorder = new();
+    readonly SessionUsageFile? _usageFile;
     readonly CancellationTokenSource _cts = new();
     Task? _pump;
+    Task? _usageHeartbeat;
     int _nextRequest;
     int _turnsInFlight;
 
-    public ClaudeSession(IClaudeTransport transport) => _transport = transport;
+    /// <summary>usageFile: written on every main-chain request. Null for replays, which must not look live.</summary>
+    public ClaudeSession(IClaudeTransport transport, SessionUsageFile? usageFile = null)
+    {
+        _transport = transport;
+        _usageFile = usageFile;
+    }
 
     /// <summary>Single reader. Completes when the process exits, faulted if the pump failed.</summary>
     public ChannelReader<ClaudeEvent> Events => _events.Reader;
@@ -42,9 +49,16 @@ public sealed class ClaudeSession : IAsyncDisposable
     /// <summary>No turn running and no permission or question waiting: safe to hand off, compact or park.</summary>
     public bool AtCleanPoint => Volatile.Read(ref _turnsInFlight) == 0 && _openPrompts.IsEmpty;
 
-    public static async Task<ClaudeSession> StartAsync(LaunchOptions options, TimeSpan? handshakeTimeout = null, CancellationToken ct = default)
+    public static Task<ClaudeSession> StartAsync(LaunchOptions options, TimeSpan? handshakeTimeout = null, CancellationToken ct = default) =>
+        HandshakeOrDisposeAsync(new ClaudeSession(new ProcessTransport(ClaudeLauncher.Build(options)),
+            new SessionUsageFile(SessionUsageFile.DefaultDir)), handshakeTimeout, ct);
+
+    /// <summary>Over any transport: a <see cref="ReplayTransport"/> for --preview.</summary>
+    public static Task<ClaudeSession> StartAsync(IClaudeTransport transport, TimeSpan? handshakeTimeout = null, CancellationToken ct = default) =>
+        HandshakeOrDisposeAsync(new ClaudeSession(transport), handshakeTimeout, ct);
+
+    static async Task<ClaudeSession> HandshakeOrDisposeAsync(ClaudeSession session, TimeSpan? handshakeTimeout, CancellationToken ct)
     {
-        var session = new ClaudeSession(new ProcessTransport(ClaudeLauncher.Build(options)));
         try
         {
             await session.HandshakeAsync(handshakeTimeout ?? TimeSpan.FromSeconds(60), ct);
@@ -58,7 +72,23 @@ public sealed class ClaudeSession : IAsyncDisposable
     }
 
     /// <summary>Starts the stdout pump. Idempotent; <see cref="HandshakeAsync"/> calls it.</summary>
-    public void Start() => _pump ??= Task.Run(PumpAsync);
+    public void Start()
+    {
+        _pump ??= Task.Run(PumpAsync);
+        if (_usageFile is not null) _usageHeartbeat ??= KeepUsageFileLiveAsync(_usageFile);
+    }
+
+    /// <summary>Once a minute while claude runs, so an idle window still reads as open (<see cref="SessionUsageFile.Touch"/>).</summary>
+    async Task KeepUsageFileLiveAsync(SessionUsageFile file)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token) && _pump is { IsCompleted: false })
+                if (Init is { } init) file.Touch(init.SessionId);
+        }
+        catch (OperationCanceledException) { }
+    }
 
     public async Task HandshakeAsync(TimeSpan timeout, CancellationToken ct = default)
     {
@@ -152,7 +182,11 @@ public sealed class ClaudeSession : IAsyncDisposable
 
     async ValueTask ObserveAsync(ClaudeEvent e)
     {
+        var ledger = _recorder.Ledger;
+        var requests = ledger.Snapshot.Requests;
         _recorder.Apply(e);
+        if (ledger.Snapshot.Requests != requests && _usageFile is not null && Init is { } init)
+            _usageFile.Write(init.SessionId, init.Cwd, ledger.Snapshot.Context, ledger.Snapshot.Requests, DateTimeOffset.UtcNow);
         switch (e)
         {
             case InitEvent i:
@@ -181,6 +215,7 @@ public sealed class ClaudeSession : IAsyncDisposable
         await _cts.CancelAsync();
         await _transport.DisposeAsync();
         if (_pump is not null) await _pump;
+        if (_usageHeartbeat is not null) await _usageHeartbeat;
         _cts.Dispose();
     }
 }

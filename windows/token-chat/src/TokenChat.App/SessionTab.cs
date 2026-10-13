@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Windows.Media;
 using System.Windows.Threading;
 using TokenChat.Core;
 using TokenChat.Core.Protocol;
@@ -17,32 +18,72 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 {
     static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>Project colours: hues no state uses (the dot's green, blue and red; the question card's yellow).
+    /// violet, pink, teal, lime, fuchsia, sand.</summary>
+    internal static readonly Brush[] ProjectBrushes =
+        [.. new[] { "#A78BFA", "#F472B6", "#2DD4BF", "#A3E635", "#D946EF", "#CBB994" }.Select(Frozen)];
+
+    static Brush Frozen(string hex)
+    {
+        var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        b.Freeze();
+        return b;
+    }
+
     readonly ConcurrentQueue<ClaudeEvent> _inbox = new();
+    /// <summary>The widget's collect, one watcher for every tab; the app collects itself when the widget is not running.</summary>
+    internal static readonly Lazy<SessionFeed> Feed = new(() => new SessionFeed(collect: SessionControl.CollectAsync, usageDir: SessionUsageFile.DefaultDir));
+
     readonly DispatcherTimer _render;
+    readonly DispatcherTimer _clock;
     ClaudeSession? _session;
+    FooterRow? _row;
     string? _activity;
     string _status = "starting claude…";
     string _state = "starting";
     string _mode = "";
     bool _isReady, _exitNoted, _disposed;
     volatile bool _readerDone;
+    string? _firstPrompt;
+    readonly IClaudeTransport? _replay;
 
-    public SessionTab(LaunchOptions options)
+    /// <summary>firstPrompt goes out as the first message once claude is up: the Parked tab's /unpark. replay stands in
+    /// for claude (--preview).</summary>
+    public SessionTab(LaunchOptions options, string? firstPrompt = null, IClaudeTransport? replay = null)
     {
         Options = options;
+        _firstPrompt = firstPrompt;
+        _replay = replay;
         var name = Path.GetFileName(options.WorkingDirectory.TrimEnd('\\', '/'));
         Title = options.Profile == Profile.Lite ? name + " · lite" : name;
+        ProjectKey = Project.Key(options.WorkingDirectory);
+        ProjectBrush = ProjectBrushes[Project.Slot(options.WorkingDirectory, ProjectBrushes.Length)];
         _render = new DispatcherTimer(RenderInterval, DispatcherPriority.Normal, (_, _) => Drain(), Dispatcher.CurrentDispatcher);
         Attachments.CollectionChanged += (_, _) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AttachmentsTotal)));
+        // the cache clock runs down between collects
+        _clock = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) => UpdateStatus(), Dispatcher.CurrentDispatcher);
+        Feed.Value.Changed += OnFeed;
+        // The stream starts at the next turn; claude has the history, this tab does not.
+        if (options.ResumeSessionId is { } sid)
+            Transcript.AddNote(NoteKind.Info, $"Resumed {sid[..Math.Min(8, sid.Length)]}", "earlier turns are in the session but not shown here");
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public LaunchOptions Options { get; }
+    /// <summary>The session this tab holds: the one it resumed, else claude's own once init has arrived.
+    /// A resume keeps its id (measured 2026-10-01), so the two never disagree.</summary>
+    public string? SessionId => Options.ResumeSessionId ?? _session?.SessionId;
     public string Title { get; }
+    /// <summary>Tabs of one project sit together: a new one opens after its project's last.</summary>
+    public string ProjectKey { get; }
+    /// <summary>The stripe on the tab's top edge.</summary>
+    public Brush ProjectBrush { get; }
     public TranscriptProjector Transcript { get; } = new() { ReadFile = ReadFileOrNull };
     public ObservableCollection<TranscriptItem> Items => Transcript.Items;
     public string Status { get => _status; private set => Set(ref _status, value); }
+    /// <summary>This session's row from the widget's collect; null until the widget has listed it.</summary>
+    public FooterRow? Row { get => _row; private set => Set(ref _row, value); }
     public bool IsReady { get => _isReady; private set => Set(ref _isReady, value); }
     /// <summary>starting, idle, working or exited: the colour of the tab's dot.</summary>
     public string State { get => _state; private set => Set(ref _state, value); }
@@ -53,7 +94,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     {
         try
         {
-            var session = await ClaudeSession.StartAsync(Options);
+            var session = await (_replay is { } replay ? ClaudeSession.StartAsync(replay) : ClaudeSession.StartAsync(Options));
             if (_disposed)
             {
                 await session.DisposeAsync();
@@ -63,6 +104,11 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
             _ = Task.Run(ReadAsync);
             IsReady = true;
             UpdateStatus();
+            if (_firstPrompt is { } prompt)
+            {
+                _firstPrompt = null;
+                await SendAsync(prompt);
+            }
         }
         catch (Exception ex)
         {
@@ -101,6 +147,58 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         Transcript.AddUser(m.Text, m.Files.Select(f => f.Label).ToList());
         try { await (m.Files.Count == 0 ? s.SendAsync(m.Text) : s.SendAsync(Core.Attachments.Blocks(m.Text, m.Files))); }
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "send failed", ex.Message); }
+        UpdateStatus();
+    }
+
+    /// <summary>A poke (<see cref="PokeRequest"/>): "ok" once handed to claude, "busy" while a turn, prompt or queued message
+    /// is open (that turn renews the cache anyway), "no-tab" once claude has exited. Leaves the input, queue and attachments
+    /// alone. A renewal renders dimmed; a /park renders like any message.</summary>
+    public string Poke(string text)
+    {
+        if (_exitNoted || _disposed) return "no-tab";
+        if (_session is not { AtCleanPoint: true } s || !IsReady || Queued.Count > 0) return "busy";
+        Transcript.AddUser(text, renewal: !text.StartsWith('/'));
+        _ = PokeNowAsync(s, text);
+        return "ok";
+    }
+
+    /// <summary>A card's button. A block: lift it the way the widget's u does, then send the refused prompt again; or
+    /// /park or /compact, which pass it. One button per card; a poke refused as busy leaves the card open.</summary>
+    public async Task ActAsync(CardItem card, string key)
+    {
+        if (!card.IsOpen) return;
+        switch (key)
+        {
+            case "lift" when SessionId is { } sid:
+                card.Outcome = "lifting…";
+                if (await SessionControl.RunAsync(SessionControl.Unblock(sid)) is { } error) { card.Outcome = null; Transcript.AddNote(NoteKind.Error, error); return; }
+                Feed.Value.Patch(sid, o => o["blocked"] = 0)();
+                card.Outcome = card.Payload is null ? "block lifted" : "block lifted - prompt sent again";
+                if (card.Payload is { } prompt) await SendAsync(prompt);
+                break;
+            case "park" or "compact" or "handoff":
+                var said = Poke("/" + key);
+                if (said == "ok") card.Outcome = $"/{key} sent";
+                else Transcript.AddNote(NoteKind.Warning, said == "busy" ? $"mid-turn - /{key} once the turn ends" : "claude has exited");
+                break;
+            case "dismiss":
+                card.Outcome = "dismissed";
+                break;
+        }
+    }
+
+    /// <summary>The footer's effort menu: /effort for this session only (settings.json untouched), sent the way a poke is.
+    /// Local, so no request and no tokens; the footer label follows on the next reply.</summary>
+    public void SetEffort(string level)
+    {
+        if (Poke("/effort " + level) == "busy")
+            Transcript.AddNote(NoteKind.Info, $"Effort unchanged: a turn is open. Pick {level} again once it ends.");
+    }
+
+    async Task PokeNowAsync(ClaudeSession s, string text)
+    {
+        try { await s.SendAsync(text); }
+        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "poke failed", ex.Message); }
         UpdateStatus();
     }
 
@@ -172,7 +270,14 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     }
 
     /// <summary>UI thread only; call before <see cref="DisposeAsync"/>, which may run on any thread.</summary>
-    public void StopRendering() => _render.Stop();
+    public void StopRendering()
+    {
+        _render.Stop();
+        _clock.Stop();
+        Feed.Value.Changed -= OnFeed;
+    }
+
+    void OnFeed() => _clock.Dispatcher.BeginInvoke(UpdateStatus);
 
     public async ValueTask DisposeAsync()
     {
@@ -220,8 +325,43 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         switch (e)
         {
             case StatusEvent s: _activity = s.Status; break;
-            case ResultEvent: _activity = null; break;
+            case ResultEvent: _activity = null; OfferHandoff(); break;
         }
+    }
+
+    double _offeredAtK;
+
+    /// <summary>Per tab, from the model pill menu: "ask" (the card), "auto" (/handoff unasked) or "off". Not persisted;
+    /// a new or resumed tab starts at ask.</summary>
+    public string HandoffMode { get; set; } = "ask";
+
+    static readonly string AutoHandoffLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "token-auto-handoff.log");
+
+    /// <summary>Auto-handoff: at a turn's end, once the context is past the collect's cut bar (cut_no, where carrying the
+    /// window costs more per cycle than a restart). Ask mode adds a one-click card for /handoff, once per 50k band as the
+    /// hook's ACTION line, so "not now" holds until the window has grown again. Auto mode sends a bare /handoff itself
+    /// and logs it; a busy poke leaves the band open, so the next turn end tries again.</summary>
+    void OfferHandoff()
+    {
+        if (HandoffMode == "off" || _session is not { } s || Feed.Value.Snapshot is not { } feed) return;
+        var cut = SidebarItem.Num(feed.Constants, "cut_no");
+        var ctxK = s.Usage.Context / 1000.0;
+        if (cut <= 0 || ctxK < cut || (_offeredAtK > 0 && ctxK < _offeredAtK + 50)) return;
+        if (HandoffMode == "auto")
+        {
+            var said = Poke("/handoff");
+            try { File.AppendAllText(AutoHandoffLog, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{SessionId}\t{ctxK:0}\t{cut:0}\t{said}\n"); }
+            catch (IOException) { }
+            if (said != "ok") return;
+            _offeredAtK = ctxK;
+            Transcript.AddNote(NoteKind.Info, $"Context {ctxK:0}k is past the cut bar ({cut:0}k): /handoff sent (handoff: auto).");
+            return;
+        }
+        _offeredAtK = ctxK;
+        Transcript.Items.Add(new CardItem("handoff", "HAND OFF",
+            $"Context {ctxK:0}k is past the cut bar ({cut:0}k): this window now costs more to carry per cycle than a fresh "
+            + "one does to start. /handoff parks it and carries on in a new tab.",
+            [new CardAction("Hand off", "handoff", Primary: true), new CardAction("Not now", "dismiss")]));
     }
 
     /// <summary>Write previews diff against this; a missing, locked or huge file previews as new.</summary>
@@ -244,17 +384,28 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         var u = s.Usage;
         State = _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : "working";
         Mode = (s.PermissionMode ?? Options.PermissionMode) switch { "acceptEdits" => "accept edits", var m => m } + " mode";
+        Row = SessionId is { } sid && Feed.Value.Snapshot is { } feed && feed.Sessions.TryGetValue(sid, out var row)
+            ? FooterRow.From(row, feed, u.Context, DateTimeOffset.Now)
+            : null;
+        var state = _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : _activity ?? "working";
+        // headless claude has no id until its first prompt, so the widget can't list it yet; its zeros say less than this
+        if (SessionId is null)
+        {
+            Status = string.Join("  ·  ", Options.Profile.ToString().ToLowerInvariant(), "row after first prompt", state);
+            return;
+        }
         string? Pct(RateWindow? w) => w is null ? null : (w.Utilization * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
+        // model and ctx are on the row's line once the widget has this session
         string?[] parts =
         [
-            s.Init?.Model,
+            Row is null ? s.Init?.Model : null,
             Options.Profile.ToString().ToLowerInvariant(),
-            $"ctx {Tokens.K(u.Context)}",
+            Row is null ? $"ctx {Tokens.K(u.Context)}" : null,
             $"floor {Tokens.K(u.Floor)}",
             $"out {Tokens.K(u.Session.Output)}",
             Pct(s.RateLimit?.FiveHour) is { } five ? "5h " + five : null,
             Pct(s.RateLimit?.SevenDay) is { } seven ? "7d " + seven : null,
-            _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : _activity ?? "working",
+            state,
         ];
         Status = string.Join("  ·  ", parts.Where(p => p is not null));
     }

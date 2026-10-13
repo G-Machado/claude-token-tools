@@ -22,10 +22,15 @@
     <SolidColorBrush x:Key="DiffAdd" Color="#244ADE80"/>
     <SolidColorBrush x:Key="DiffDel" Color="#24F87171"/>
     <SolidColorBrush x:Key="Blue" Color="#FF60A5FA"/>
+    <!-- grounds for a picked option, a question's header and a recommended tag -->
+    <SolidColorBrush x:Key="BlueTint" Color="#2460A5FA"/>
+    <SolidColorBrush x:Key="YellowTint" Color="#1AFACC15"/>
+    <SolidColorBrush x:Key="GreenTint" Color="#244ADE80"/>
 
     <FontFamily x:Key="Ui">Segoe UI</FontFamily>
     <FontFamily x:Key="Mono">Consolas</FontFamily>
     <FontFamily x:Key="Sym">Segoe UI Symbol</FontFamily>
+    <FontFamily x:Key="Icons">Segoe MDL2 Assets</FontFamily>
 
     <!-- A 6px thumb in the card's greys and nothing else, both ways (code blocks scroll sideways).
          MinWidth/MinHeight beat the theme style's 17px system width. -->
@@ -135,6 +140,177 @@
         <Setter Property="BorderBrush" Value="{StaticResource Blue}"/>
     </Style>
 
+    <!-- The one action a card is waiting on: solid blue, the card's own colour for the words. -->
+    <Style x:Key="Filled" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource Card}"/>
+        <Setter Property="Background" Value="{StaticResource Blue}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Padding" Value="14,4,14,5"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="B" Background="{TemplateBinding Background}" CornerRadius="5"
+                            Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="#FF7DB8FB"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- The way out beside a Filled one: just the word until the pointer is on it. -->
+    <Style x:Key="Quiet" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Padding" Value="12,4,12,5"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- After an option's caption, when the asker marked it "(Recommended)". Content is the OptionPick. -->
+    <DataTemplate x:Key="RecommendedTag">
+        <Border x:Name="Tag" Background="{StaticResource GreenTint}" CornerRadius="4" Padding="5,0,5,1" Margin="7,0,0,0">
+            <TextBlock Text="recommended" FontFamily="{StaticResource Ui}" FontSize="10" FontWeight="Normal"
+                       Foreground="{StaticResource Green}"/>
+        </Border>
+        <DataTemplate.Triggers>
+            <DataTrigger Binding="{Binding IsRecommended}" Value="False">
+                <Setter TargetName="Tag" Property="Visibility" Value="Collapsed"/>
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <!-- An option under a ▶ ask: a pill that fills blue and ticks once picked. DataContext is the OptionPick. -->
+    <Style x:Key="ChoiceChip" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Margin" Value="0,0,6,6"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="B" Background="Transparent" BorderBrush="{StaticResource Track}" BorderThickness="1"
+                            CornerRadius="12" Padding="11,4,12,5" SnapsToDevicePixels="True">
+                        <TextBlock>
+                            <Run x:Name="Tick" Text="" FontFamily="{StaticResource Sym}" Foreground="{StaticResource Blue}"/><Run
+                                 Text="{Binding Caption, Mode=OneTime}"/><InlineUIContainer BaselineAlignment="Center"><ContentControl
+                                 Content="{Binding}" ContentTemplate="{StaticResource RecommendedTag}" Focusable="False"/></InlineUIContainer>
+                        </TextBlock>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                        </Trigger>
+                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{StaticResource BlueTint}"/>
+                            <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource Blue}"/>
+                            <Setter TargetName="Tick" Property="Text" Value="&#x2713; "/>
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- An AskUserQuestion option: a full-width row, a radio mark (a box when several may be picked),
+         the caption and its description. DataContext is the OptionPick. -->
+    <Style x:Key="ChoiceRow" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
+        <Setter Property="FontSize" Value="12.5"/>
+        <Setter Property="Margin" Value="0,0,0,5"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="B" Background="Transparent" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                            CornerRadius="6" Padding="10,7,12,8" SnapsToDevicePixels="True">
+                        <DockPanel>
+                            <TextBlock x:Name="Mark" DockPanel.Dock="Left" Text="&#x25CB;" FontFamily="{StaticResource Sym}" FontSize="13"
+                                       Foreground="{StaticResource Faint}" Margin="0,-1,9,0" VerticalAlignment="Top"/>
+                            <StackPanel>
+                                <TextBlock TextWrapping="Wrap">
+                                    <Run Text="{Binding Caption, Mode=OneTime}" FontWeight="SemiBold"/><InlineUIContainer
+                                         BaselineAlignment="Center"><ContentControl Content="{Binding}"
+                                         ContentTemplate="{StaticResource RecommendedTag}" Focusable="False"/></InlineUIContainer>
+                                </TextBlock>
+                                <TextBlock x:Name="Desc" Text="{Binding Description, Mode=OneTime}" FontSize="12"
+                                           Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding Description}" Value="{x:Null}">
+                            <Setter TargetName="Desc" Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                            <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource Track}"/>
+                        </Trigger>
+                        <DataTrigger Binding="{Binding IsMulti}" Value="True">
+                            <Setter TargetName="Mark" Property="Text" Value="&#x2610;"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                            <Setter TargetName="Mark" Property="Text" Value="&#x25CF;"/>
+                            <Setter TargetName="Mark" Property="Foreground" Value="{StaticResource Blue}"/>
+                        </DataTrigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsMulti}" Value="True"/>
+                                <Condition Binding="{Binding IsSelected}" Value="True"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter TargetName="Mark" Property="Text" Value="&#x2611;"/>
+                        </MultiDataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A folding question's line: the whole of it opens or folds the question. The list's template lays out the
+         content (chevron, number or pill, the ask, the answer); the hover ground bleeds 6px past it either side. -->
+    <Style x:Key="QuestionFold" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Setter Property="FontFamily" Value="{StaticResource Ui}"/>
+        <Setter Property="Margin" Value="-6,0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="B" Background="Transparent" CornerRadius="6" Padding="6,5" SnapsToDevicePixels="True">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- The widget's header glyphs: faint until the pointer is on them. -->
     <Style x:Key="Glyph" TargetType="Button">
         <Setter Property="Foreground" Value="{StaticResource Faint}"/>
@@ -195,7 +371,8 @@
         </Style.Triggers>
     </Style>
 
-    <!-- A fold, the widget's way: a small triangle and the header, no chrome. -->
+    <!-- A fold, the widget's way: a small triangle and the header, no chrome. The header docks beside the
+         triangle rather than stacking, so a long one wraps instead of running off the edge. -->
     <Style TargetType="Expander">
         <Setter Property="Template">
             <Setter.Value>
@@ -206,11 +383,11 @@
                                       Content="{TemplateBinding Header}" ContentTemplate="{TemplateBinding HeaderTemplate}">
                             <ToggleButton.Template>
                                 <ControlTemplate TargetType="ToggleButton">
-                                    <StackPanel Orientation="Horizontal" Background="{StaticResource Ghost}">
-                                        <TextBlock x:Name="G" Text="&#9656;" FontFamily="{StaticResource Sym}" FontSize="9"
+                                    <DockPanel Background="{StaticResource Ghost}">
+                                        <TextBlock x:Name="G" DockPanel.Dock="Left" Text="&#9656;" FontFamily="{StaticResource Sym}" FontSize="9"
                                                    Foreground="{StaticResource Faint}" Margin="0,0,6,0" VerticalAlignment="Center"/>
                                         <ContentPresenter VerticalAlignment="Center"/>
-                                    </StackPanel>
+                                    </DockPanel>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsChecked" Value="True">
                                             <Setter TargetName="G" Property="Text" Value="&#9662;"/>

@@ -89,3 +89,28 @@ The 300k hard block in `token-block.sh` never comes into play.
 5. **Session chain**: manual and auto handoff, compact and clear boundaries, resume app sessions
    from the transcript jsonl, profiles.
 6. **Ship**: `dotnet publish` in `install.sh`, widget button, toasts, hotkey and tray, search.
+
+## Sidebar: the widget moves into the app (decided 2026-10-04)
+
+- **The sidebar replaces the tabs.** A tab carried title, state dot and project colour; a row carries
+  those and the stats. `+` and `lite` move to the sidebar header; the caption keeps the window glyphs.
+- **Every session is listed**, the app's first, terminal ones grouped below. A terminal row has stats and
+  controls; opening it focuses its window through `token-open.ps1` (a session belongs to one front end).
+- **The footer's widget row goes.** It is the selected sidebar row twice. Its effort menu moves to the
+  footer's status line.
+- **Row, ~280px:** line 1 dot, name, verdict, ctx (live for app sessions), cache clock; line 2 growth,
+  heat, marks, blocked. The selected row expands to spend and grades (the widget's `d`).
+- **Controls** through `token-sessions.sh --extend <short> N` / `--unblock <sid>` / `--name <sid> <name>`,
+  plus copy resume, open folder, park/close for app sessions. On-row buttons for `+`/`-` mark and lift-block
+  (the most used keys in `token-keys.log`: e 84, enter 31, u 11), the rest in a context menu; the widget's
+  letters while the sidebar has focus. The snapshot is patched on the click, the next collect confirms.
+- **The widget becomes optional.** When the feed is over ~75s old, the app runs `--json` itself and swaps
+  the file in as `Save-Feed` does. It must also do the widget's `Ensure-PokeDue` (not yet read).
+
+Phases, one session each:
+
+1. Read-only sidebar beside the tabs: `FooterRow` generalised to `SessionRow`, `SidebarView` on `SessionFeed`.
+2. Controls: `SessionControl` in Core, mark clamp (floor = spent, cap = `ext_max`) with tests.
+3. Tabs out: the sidebar navigates; footer row out, effort menu moved.
+4. Collector, plus limits (five-hour, seven-day), day spend and account in the sidebar header.
+5. Parked section: checkpoints below the sessions; opening one starts a session on `/unpark <topic>`.

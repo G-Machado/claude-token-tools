@@ -31,7 +31,15 @@ public partial class SessionView : UserControl
             _scroller = (ScrollViewer?)Transcript.Template.FindName("Scroller", Transcript);
             _scroller?.ScrollToEnd();
             Input.Focus();
+            UnhookVoice(); // Loaded can fire again on re-parenting
+            VoiceLink.Shared.StateChanged += OnVoiceState;
+            VoiceLink.Shared.Text += OnVoiceText;
+            VoiceLink.Shared.Partial += OnVoicePartial;
+            ShowVoice(VoiceLink.Shared.Current, null);
         };
+        Unloaded += (_, _) => UnhookVoice();
+        PreviewMouseDown += OnMouse4;
+        PreviewMouseUp += OnMouse4;
     }
 
     SessionTab? Tab => DataContext as SessionTab;
@@ -102,6 +110,82 @@ public partial class SessionView : UserControl
         _ = tab.SendAsync(text);
     }
 
+    // Dictation: the mic toggles, Mouse 4 is hold-to-talk, Shift with either is Portuguese. The
+    // transcript lands at the caret and is never sent - reading it over is the point of a composer.
+    static string VoiceLang => (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? "pt" : "en";
+
+    void OnMic(object sender, RoutedEventArgs e)
+    {
+        var voice = VoiceLink.Shared;
+        _ = voice.Current == VoiceLink.State.Off ? voice.StartAsync(VoiceLang) : voice.StopAsync();
+        Input.Focus();
+    }
+
+    /// <summary>Reaches here only when voice-nav runs with --serve; its own hotkey mode takes Mouse 4
+    /// first and pastes, which lands in the focused composer just the same.</summary>
+    void OnMouse4(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.XButton1) return;
+        e.Handled = true;
+        if (e.ButtonState == MouseButtonState.Pressed)
+        {
+            CaptureMouse(); // or a release outside the window never arrives and it records on
+            if (VoiceLink.Shared.Current == VoiceLink.State.Off) _ = VoiceLink.Shared.StartAsync(VoiceLang);
+        }
+        else
+        {
+            ReleaseMouseCapture();
+            _ = VoiceLink.Shared.StopAsync(); // a tap under voice-nav's tap time cancels instead
+        }
+    }
+
+    void OnVoiceState(VoiceLink.State state, string? detail) => Dispatcher.BeginInvoke(() => ShowVoice(state, detail));
+
+    void OnVoiceText(string text) => Dispatcher.BeginInvoke(() => InsertDictation(text));
+
+    void OnVoicePartial(string text) => Dispatcher.BeginInvoke(() =>
+    {
+        if (VoiceLink.Shared.Current is not (VoiceLink.State.Recording or VoiceLink.State.Transcribing)) return;
+        VoicePreview.Text = text + " …";
+        VoicePreview.Visibility = Visibility.Visible;
+    });
+
+    void UnhookVoice()
+    {
+        VoiceLink.Shared.StateChanged -= OnVoiceState;
+        VoiceLink.Shared.Text -= OnVoiceText;
+        VoiceLink.Shared.Partial -= OnVoicePartial;
+    }
+
+    void ShowVoice(VoiceLink.State state, string? detail)
+    {
+        if (state is not (VoiceLink.State.Recording or VoiceLink.State.Transcribing))
+        {
+            VoicePreview.Visibility = Visibility.Collapsed; // the transcript has landed, or there is none
+            VoicePreview.Text = "";
+        }
+        Mic.Content = state switch
+        {
+            VoiceLink.State.Starting => "starting…",
+            VoiceLink.State.Recording => "● rec",
+            VoiceLink.State.Transcribing => "…",
+            _ => "mic",
+        };
+        Mic.Foreground = (Brush)FindResource(state == VoiceLink.State.Recording ? "Red" : "Dim");
+        Mic.ToolTip = detail ?? "dictate - click to start and stop, or hold Mouse 4; with Shift, Portuguese";
+    }
+
+    void InsertDictation(string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return;
+        var at = Input.SelectionStart;
+        if (at > 0 && !char.IsWhiteSpace(Input.Text[at - 1])) text = " " + text;
+        Input.SelectedText = text; // through the selection, so Ctrl+Z takes it back out
+        Input.Select(Input.SelectionStart + Input.SelectionLength, 0);
+        Input.Focus();
+    }
+
     void OnDetach(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is Attachment a) Tab?.Detach(a);
@@ -170,11 +254,24 @@ public partial class SessionView : UserControl
         if ((sender as FrameworkElement)?.DataContext is PermissionItem p) _ = Tab?.DecideAsync(p, decision);
     }
 
+    void OnCardAction(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is CardAction a && Owner<CardItem>(sender) is { } card) _ = Tab?.ActAsync(card, a.Key);
+    }
+
     void OnPickOption(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not OptionPick o) return;
         o.Pick();
-        if (Owner<QuestionItem>(sender) is { AnswersOnPick: true, CanSubmit: true } q) _ = Tab?.AnswerAsync(q);
+        if (Owner<QuestionItem>(sender) is not { } q) return;
+        if (q is { AnswersOnPick: true, CanSubmit: true }) _ = Tab?.AnswerAsync(q);
+        else if (Owner<QuestionPick>(sender) is { } pick) q.AdvanceFrom(pick);
+    }
+
+    /// <summary>A question's line opens or folds it, whatever the others are doing.</summary>
+    void OnFoldQuestion(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is IFoldingQuestion q) q.IsExpanded = !q.IsExpanded;
     }
 
     void OnSubmitAnswer(object sender, RoutedEventArgs e)
@@ -187,17 +284,58 @@ public partial class SessionView : UserControl
         if (Owner<QuestionItem>(sender) is { } q) _ = Tab?.DeclineAsync(q);
     }
 
-    /// <summary>Enter in a typed answer submits the card once every question has an answer.</summary>
+    /// <summary>Enter in a typed answer submits the card once every question has an answer; before that it folds
+    /// its question, multi-select too, and opens the next unanswered.</summary>
     void OnOtherKey(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
         e.Handled = true;
-        if (Owner<QuestionItem>(sender) is { CanSubmit: true } q) _ = Tab?.AnswerAsync(q);
+        if (Owner<QuestionItem>(sender) is not { } q) return;
+        if (q.CanSubmit) _ = Tab?.AnswerAsync(q);
+        else if (Owner<QuestionPick>(sender) is { } pick) q.AdvanceFrom(pick, done: true);
     }
 
-    void OnSendOpen(object sender, RoutedEventArgs e)
+    /// <summary>The model pill opens its effort menu on a left click as well as a right one.</summary>
+    void OnEffortMenu(object sender, MouseButtonEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not OpenBlock { CanSend: true, Reply: { } reply } || Tab is not { IsReady: true } tab) return;
+        if (sender is not FrameworkElement { ContextMenu: { } menu } pill) return;
+        menu.PlacementTarget = pill;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    /// <summary>Ticks the level the last reply ran at, and the tab's handoff mode.</summary>
+    void OnEffortMenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu { PlacementTarget: FrameworkElement { DataContext: FooterRow row } } menu) return;
+        foreach (var item in menu.Items.OfType<MenuItem>())
+            item.IsChecked = item.Tag is string mode ? mode == Tab?.HandoffMode : (string)item.Header == row.Effort.Trim();
+    }
+
+    void OnHandoffPick(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: string mode } && Tab is { } tab) tab.HandoffMode = mode;
+    }
+
+    void OnEffortPick(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Header: string level }) Tab?.SetEffort(level);
+    }
+
+    void OnSendOpen(object sender, RoutedEventArgs e) => SendOpen((sender as FrameworkElement)?.DataContext as OpenBlock);
+
+    /// <summary>Enter in a ▶ ask's typed answer sends the bar, as its send button would.</summary>
+    void OnOpenOtherKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
+        e.Handled = true;
+        SendOpen(Owner<OpenBlock>(sender));
+    }
+
+    void SendOpen(OpenBlock? block)
+    {
+        if (block is not { CanSend: true, Reply: { } reply } || Tab is not { IsReady: true } tab) return;
         _stick = true;
         _ = tab.SendAsync(reply);
     }

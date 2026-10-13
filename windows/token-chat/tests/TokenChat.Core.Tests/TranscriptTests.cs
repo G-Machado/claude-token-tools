@@ -41,7 +41,7 @@ public class TranscriptTests
     [Theory, MemberData(nameof(Fixture.All), MemberType = typeof(Fixture))]
     public void EveryToolRowGetsSummaryAndResult(string fixture)
     {
-        var tools = Replay(fixture).Projector.Items.OfType<ToolUseItem>().ToList();
+        var tools = Replay(fixture).Projector.Tools.ToList();
         Assert.All(tools, t =>
         {
             Assert.NotEmpty(t.Summary);
@@ -126,6 +126,55 @@ public class TranscriptTests
         var turn = projector.Items.OfType<TurnItem>().Single();
         Assert.True(turn.IsStopped);
         Assert.False(turn.IsError);
-        Assert.StartsWith("stopped ·", turn.Summary);
+        Assert.StartsWith("stopped in 0.0s · 1 step · Claude wrote 0 tokens", turn.Summary);
+    }
+
+    [Fact]
+    public void ARenewalDimsItsWholeTurnAndNothingAfter()
+    {
+        var projector = new TranscriptProjector();
+        projector.AddUser("[auto-renew] reply with only: ok", renewal: true);
+        projector.AddNote(NoteKind.Error, "inside the renewal");
+        projector.Apply(EventParser.Parse("""{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"ok","usage":{"input_tokens":1,"output_tokens":1}}"""));
+        projector.AddUser("next");
+
+        Assert.Equal([true, true, true, false], projector.Items.Select(i => i.IsRenewal));
+    }
+
+    [Fact]
+    public void ALocalCommandShowsItsResultOnce()
+    {
+        // stream-json /effort: no request, nothing streamed, the answer only in the result
+        const string result = """{"type":"result","subtype":"success","is_error":false,"num_turns":0,"result":"Set effort level to medium (this session only)","usage":{"input_tokens":0,"output_tokens":0}}""";
+        var projector = new TranscriptProjector();
+        projector.AddUser("/effort medium");
+        projector.Apply(EventParser.Parse(result));
+        // the same answer already shown from local-command-stdout is not repeated
+        projector.Apply(EventParser.Parse("""{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set effort level to medium (this session only)</local-command-stdout>"}}"""));
+        projector.Apply(EventParser.Parse(result));
+
+        var notes = projector.Items.OfType<NoteItem>().ToList();
+        Assert.Equal(2, notes.Count);
+        Assert.All(notes, n => Assert.Equal(NoteKind.Command, n.Kind));
+        Assert.Equal("Set effort level to medium (this session only)", notes[0].Text);
+    }
+
+    [Fact]
+    public void ATokenBlockRefusalBecomesACardCarryingTheRefusedPrompt()
+    {
+        var t = new TranscriptProjector();
+        t.AddUser("fix the build");
+        t.Apply(new InformationalEvent("Operation stopped by hook: [token-block] the cache expired 14m ago, so this window is refusing every prompt - a lapsed window", "warning"));
+        var card = Assert.IsType<CardItem>(t.Items[^1]);
+        Assert.Equal("block", card.Kind);
+        Assert.Equal("This window refused the prompt: the cache expired 14m ago.", card.Text);
+        Assert.Equal("fix the build", card.Payload);
+        Assert.Equal(["lift", "park", "compact"], card.Actions.Select(a => a.Key));
+        Assert.True(card.IsOpen);
+        card.Outcome = "block lifted";
+        Assert.False(card.IsOpen);
+
+        t.Apply(new InformationalEvent("Operation stopped by hook: something else", "warning"));
+        Assert.IsType<NoteItem>(t.Items[^1]);
     }
 }

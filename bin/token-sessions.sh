@@ -143,7 +143,7 @@
 #            cache column and the advice line - it used to be mixed into this
 #            colour, which made a row change colour without changing size.
 #   cost     what the session has spent so far, in input-equivalents (output x5,
-#            cache write x2, cache read x0.1). The bar splits it three ways:
+#            cache write x2, cache read x0.05, TS_RW). The bar splits it three ways:
 #            green output, orange cache writes, blue cache reads. More green is
 #            better - it is the share that went into doing the work rather than
 #            into paying rent on a window. Cache reads are MODELLED (context x
@@ -153,13 +153,13 @@
 #            column means the same thing on every row: how much NEW material
 #            that cycle pulled in. Red over the growth budget, amber over the
 #            output budget. Select the row for med / last / peak.
-#   grade    spend / churn / control for that session, against what this
-#            machine actually does. Spend is measured ABOVE the ~63k cold floor,
-#            because that write is not a choice - undiscounted it ran 254k per
-#            cycle at cycle 1 and decayed to 168k by cycle 8 on identical work,
-#            which was a whole letter of penalty for being young. The same
-#            three, aggregated over the last seven days, sit under the summary
-#            box as OVERALL - that line is the one to watch across weeks.
+#   grade    held / short / churn / control for that session, on per-session
+#            ladders fitted 2026-10-01: held is the share of its spend paid past
+#            the cut bar, short the share that went on the cold floor write,
+#            churn the share that rewrote a lapsed window, control over-budget
+#            prompts per cycle. The same four, aggregated over the last seven
+#            days, sit under the summary box as OVERALL - that line is the one
+#            to watch across weeks.
 #   cache    minutes of prompt-cache life left, and nothing else. It used to
 #            draw a bar beside the number, which is two renderings of one
 #            scalar taking the width of a real column; the number is the half
@@ -184,6 +184,10 @@ set -u
 # no LANG at all, so the pane worked; the desktop shortcut runs a LOGIN shell,
 # the profile sets one, and the program died before it could paint anything.
 export LC_ALL=C
+# Cache-read weight against an uncached input token: opus-5-5 measured 0.05x
+# (pricing-reference.md), older models 0.1x. Every rent, heat and cut bar below
+# reads it from the environment (ENVIRON in awk), so one knob moves them all.
+export TS_RW="${TOKEN_W_CACHE_READ:-0.05}"
 # The renderers are single-quoted awk programs, so an apostrophe ANYWHERE inside
 # one - in a comment as readily as in a string - closes the quote and hands the
 # rest of the program to bash. It fails as a shell syntax error hundreds of
@@ -302,7 +306,7 @@ RPC="${TOKEN_REQ_PER_CYCLE:-$(awk -F, 'NR>1 && $9!="" && $8=="" && $6+0>0 { prin
 RPC="${RPC:-2.3}"
 PRICE_IN="${TOKEN_PRICE_IN:-5}"          # $/MTok input, Opus 5 list. Everything else
                                          # here is a multiple of it: output x5,
-                                         # cache write x2, cache read x0.1.
+                                         # cache write x2, cache read x0.05 (TS_RW).
 # The plan ceilings cannot be read off disk - nothing under ~/.claude records
 # them, and /usage fetches them from the API. So they are calibrated by hand,
 # once: run /usage in Claude Code, read the percentage it reports, and set the
@@ -423,7 +427,7 @@ measure_constants() {
     NR > 1 && $2 != "" {
       cyc++
       # Per-session totals, for the scorecard medians. Weighted the same way
-      # everywhere: output x5, cache write x2, cache read x0.1 per request.
+      # everywhere: output x5, cache write x2, cache read x TS_RW (0.05) per request.
       sn[$2]++; so[$2] += $4; sr[$2] += $5; if ($6 + 0 > sc[$2]) sc[$2] = $6 + 0
       # Churn per session, cycle 1 excluded. Growth is the context a cycle
       # ADDED - the half the prompt chose; churn is the rest of the re-cache,
@@ -473,13 +477,13 @@ measure_constants() {
       for (b = int(f / 25000) + 1; b <= 40; b++) {
         if (hn[b] < 5 || hw[b] <= 0) continue
         # Rent above the floor, as in hot(): f is the measured floor in tokens.
-        rr = (hc[b] - hn[b] * f) * rpc * 0.1; if (rr < 0) rr = 0
+        rr = (hc[b] - hn[b] * f) * rpc * ENVIRON["TS_RW"]; if (rr < 0) rr = 0
         rr = rr / hw[b]; mid = (b + 0.5) * 25
         if (pm2 > 0 && pr2 < 1 && rr >= 1) { heat = pm2 + (mid - pm2) * (1 - pr2) / (rr - pr2); break }
         pm2 = mid; pr2 = rr }
       for (k in sn) {
         if (sn[k] < 2) continue
-        w = so[k] * 5 + sr[k] * 2 + sc[k] * rpc * 0.1 * sn[k]
+        w = so[k] * 5 + sr[k] * 2 + sc[k] * rpc * ENVIRON["TS_RW"] * sn[k]
         if (w <= 0) continue
         # Above the floor, not from zero. Every session pays ~f of cache write
         # before it has done anything, and dividing that one-off by a small
@@ -532,7 +536,7 @@ cut_bar_k() {
   awk -v f="$M_FLOOR" -v rd="$M_RD" -v rem="$M_REM" -v rpc="$RPC" 'BEGIN {
     F = (f > 0 ? f : 63); D = (rd > 0 ? rd : 34); M = (rem + 0 > 0.5 ? rem : 4)
     P = (rpc + 0 > 0 ? rpc : 2.3)
-    printf "%.1f\n", F + D + (F + D) * 2 / (M * P * 0.1) }'
+    printf "%.1f\n", F + D + (F + D) * 2 / (M * P * ENVIRON["TS_RW"]) }'
 }
 CUT_K=$(cut_bar_k)
 
@@ -547,18 +551,20 @@ CUT_K=$(cut_bar_k)
 # estimate charges cycle 1 for the window cycle 40 ended up with.
 measure_overall() {
   O_WPC=0; O_PROD=0; O_CTL=0; O_N=0; P_WPC=0; P_PROD=0; P_CTL=0; P_N=0
-  O_5H=0; O_7D=0; O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
+  O_5H=0; O_7D=0; O_DAY=0; O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
   [ -r "$HIST" ] || return 0
   read -r O_WPC O_PROD O_CTL O_N P_WPC P_PROD P_CTL P_N O_5H O_7D O_CHURN P_CHURN \
-          O_HELD P_HELD O_SHORT P_SHORT <<< "$(awk -F, \
+          O_HELD P_HELD O_SHORT P_SHORT O_DAY <<< "$(awk -F, \
     -v now="${EPOCHSECONDS:-$(date +%s)}" -v rpc="$RPC" -v floor="$M_FLOOR" -v cut="$CUT_K" '
     function ep(t,   s) { s = t; gsub(/[-:]/, " ", s); return mktime(s " 00") }
+    # Today from local midnight, the day TOKEN_DAY_CAP budgets.
+    BEGIN { mid = mktime(strftime("%Y %m %d 00 00 00", now)) }
     NR > 1 && $2 != "" {
       e = ep($1); if (e <= 0) next
       g = (($2 in pv) ? $6 - pv[$2] : 0); if (g < 0) g = 0
       ch = $5 - g; if (ch < 0) ch = 0
       pv[$2] = $6
-      w = $4 * 5 + $5 * 2 + $6 * rpc * 0.1
+      w = $4 * 5 + $5 * 2 + $6 * rpc * ENVIRON["TS_RW"]
       # The floor lands entirely on cycle 1, so that is the only row it is
       # discounted off - see the note in measure_constants. Graded on the same
       # basis as a single session, or the OVERALL line and a row cell would be
@@ -589,7 +595,8 @@ measure_overall() {
       if (!hl) scy[$2]++
       slast[$2] = e
       if (age <= 604800) s7 += w
-      if (age <= 18000)  s5 += w }
+      if (age <= 18000)  s5 += w
+      if (e >= mid)      sd += w }
     END {
       for (k in slast) if (scy[k] <= 2 && now - slast[k] > 3600) { rs += sr7[k]; qs += srq[k]; xs += srx[k] }
       # A quiet fortnight leaves the prior week too thin to compare against, so
@@ -602,14 +609,15 @@ measure_overall() {
       # work. Rebasing the second measured flat across cycle index (35% at cycle
       # 1, 35% at cycle 8), so there was nothing there to correct and correcting
       # it anyway would just have inflated the number.
-      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f %.1f %.1f %.1f %.1f %.1f %.1f\n", \
+      printf "%.1f %.0f %.3f %d %.1f %.0f %.3f %d %.0f %.0f %.1f %.1f %.1f %.1f %.1f %.1f %.0f\n", \
         (rn ? rw / rn / 1000 : 0), (ru ? ro * 100 / ru : 0), (rn ? rc / rn : 0), rn, \
         (qn ? qw / qn / 1000 : 0), (qu ? qo * 100 / qu : 0), (qn ? qc / qn : 0), qn, \
         s5 / 1000, s7 / 1000, (ru ? rh * 100 / ru : 0), (qu ? qh * 100 / qu : 0), \
-        (rp ? rhd * 100 / rp : 0), (qp ? qhd * 100 / qp : 0), (rp ? rs * 100 / rp : 0), (qp ? qs * 100 / qp : 0) }' <(hist_rows) 2>/dev/null)"
+        (rp ? rhd * 100 / rp : 0), (qp ? qhd * 100 / qp : 0), (rp ? rs * 100 / rp : 0), (qp ? qs * 100 / qp : 0), sd / 1000 }' <(hist_rows) 2>/dev/null)"
   : "${O_WPC:=0}" "${O_PROD:=0}" "${O_CTL:=0}" "${O_N:=0}"
   : "${P_WPC:=0}" "${P_PROD:=0}" "${P_CTL:=0}" "${P_N:=0}" "${O_5H:=0}" "${O_7D:=0}"
   : "${O_CHURN:=0}" "${P_CHURN:=0}" "${O_HELD:=0}" "${P_HELD:=0}" "${O_SHORT:=0}" "${P_SHORT:=0}"
+  : "${O_DAY:=0}"
 }
 # This one used to run whatever the mode was, so --extend and --block paid for a
 # 7d aggregate they then exited without printing. The zeros are the same ones
@@ -617,7 +625,7 @@ measure_overall() {
 # can tell the difference between "skipped" and "nothing to measure".
 zero_overall() {
   O_WPC=0; O_PROD=0; O_CTL=0; O_N=0
-  P_WPC=0; P_PROD=0; P_CTL=0; P_N=0; O_5H=0; O_7D=0; O_CHURN=0; P_CHURN=0
+  P_WPC=0; P_PROD=0; P_CTL=0; P_N=0; O_5H=0; O_7D=0; O_DAY=0; O_CHURN=0; P_CHURN=0
   O_HELD=0; P_HELD=0; O_SHORT=0; P_SHORT=0
 }
 if [ "${TS_NOSTATS:-0}" = 1 ]; then zero_overall; else measure_overall; fi
@@ -713,8 +721,9 @@ g G|first row / last row|
 /n|"/n build-fix" names a row without leaving the prompt line|
 s|re-order: lapse, context, cost, active, project|sort
 d|expand the selected row into the full panel|expand
+enter|open it: its TokenChat tab or terminal window, else resume in TokenChat|open
 y|copy "claude -r <id>" to the clipboard|copy
-o|open the checkpoint, or the transcript folder|open
+o|open the checkpoint, or the transcript folder|
 n|name this row - the line opens on its current name, empty clears it|rename
 D|move a closed session log to deleted-sessions|delete
 t|analytics: the whole history|analytics
@@ -1301,7 +1310,11 @@ prompt_of() {
     # it as a bare STRING. Matching only the array - which this did until
     # 2026-09-02 - meant every terminal session was named "new-session" and
     # titled "(no prompt yet)", silently, for as long as it lived.
-    /"origin":\{"kind":"human"\}/ {
+    #
+    # A third: a prompt sent over stream-json (TokenChat, claude -p) has no
+    # origin at all, it says promptSource sdk. Tool results and interrupts
+    # carry neither marker. Missing it titled every TokenChat tab the same way.
+    /"origin":\{"kind":"human"\}|"promptSource":"sdk"/ {
       if (match($0, /"content":\[\{"type":"text","text":"/)) { }
       else if (match($0, /"message":\{"role":"user","content":"/)) { }
       else next
@@ -1527,8 +1540,8 @@ EOF
 $b	${AMETA[$b]:-}
 EOF
     # The same weights the rest of this file prices a window with: output 5x,
-    # cache write 2x, cache read 0.1x, all in input-equivalents.
-    wt=$(awk -v o="${to:-0}" -v w="${tw:-0}" -v r="${tr:-0}" 'BEGIN{printf "%.0f", o*5 + w*2 + r*0.1}')
+    # cache write 2x, cache read 0.05x (TS_RW), all in input-equivalents.
+    wt=$(awk -v o="${to:-0}" -v w="${tw:-0}" -v r="${tr:-0}" 'BEGIN{printf "%.0f", o*5 + w*2 + r*ENVIRON["TS_RW"]}')
     age=$(( now_agent - mt )); [ "$age" -ge 0 ] || age=0
     run=0; [ "$age" -le "$AG_LIVE" ] && run=1
     AGN[$sid]=$(( ${AGN[$sid]:-0} + 1 ))
@@ -2688,7 +2701,7 @@ emit_json() {
     function ep(t,   x) { x = t; gsub(/[-:]/, " ", x); return mktime(x " 00") }
     NR > 1 && $2 != "" {
       e = ep($1); if (e <= 0 || now - e > 604800) next
-      o += $4 * 5; w += $5 * 2; r += $6 * rpc * 0.1 }
+      o += $4 * 5; w += $5 * 2; r += $6 * rpc * ENVIRON["TS_RW"] }
     END { printf "%.0f %.0f %.0f\n", o, w, r }' <(hist_rows) 2>/dev/null)"
   : "${S7O:=0}" "${S7W:=0}" "${S7R:=0}"
   # The per-session cycle series behind the growth sparkline. hist_rows is a
@@ -2709,10 +2722,10 @@ emit_json() {
       -v o_wpc="$O_WPC" -v o_prod="$O_PROD" -v o_ctl="$O_CTL" -v o_n="$O_N" -v o_churn="$O_CHURN" \
       -v q_wpc="$P_WPC" -v q_prod="$P_PROD" -v q_ctl="$P_CTL" -v q_n="$P_N" -v q_churn="$P_CHURN" \
       -v o_held="$O_HELD" -v q_held="$P_HELD" -v o_short="$O_SHORT" -v q_short="$P_SHORT" -v cutk="$CUT_K" \
-      -v o5h="$O_5H" -v o7d="$O_7D" -v ttl="$TTL" -v ctxmax="$CTXMAX" \
+      -v o5h="$O_5H" -v o7d="$O_7D" -v oday="$O_DAY" -v ttl="$TTL" -v ctxmax="$CTXMAX" \
       -v s7o="$S7O" -v s7w="$S7W" -v s7r="$S7R" \
       -v hf="$HF" \
-      -v obud="$OBUD" -v gbud="$GBUD" -v price="$PRICE_IN" -v nicks="$NICKS" \
+      -v obud="$OBUD" -v gbud="$GBUD" -v price="$PRICE_IN" -v daycap="$DAYCAP" -v nicks="$NICKS" \
       -v extf="$EXTF" -v extdef="$EXT_DEFAULT" -v extmax="$EXT_MAX" \
       -v blocked="$(blocks_list)" \
       -v limf="$LIMF" -v acctmap="$ACCTMAP" \
@@ -2776,7 +2789,7 @@ emit_json() {
   # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
     return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
-  # Held and short grade the aggregates only (7d, per day), never one session:
+  # The aggregate ladders (7d, per day; one session gets sheldgrade for held):
   # the share of spend past the cut bar, and the share spent in sessions that
   # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
   # on C (held 45 percent, short 12.5).
@@ -2784,6 +2797,14 @@ emit_json() {
     return (v <= 10) ? "A" : (v <= 25) ? "B" : (v <= 45) ? "C" : (v <= 65) ? "D" : "E" }
   function shortgrade(v) {
     return (v <= 5) ? "A" : (v <= 10) ? "B" : (v <= 20) ? "C" : (v <= 35) ? "D" : "E" }
+  # The per-session ladders, fitted 2026-10-01 on 278 sessions of two or more
+  # real cycles. Held is the share of a session paid past the cut bar: zero-
+  # inflated, 52 percent never got there, so A is real and B-E split the rest at
+  # its quartiles (42/69/79). Short is the floor write as a share of the
+  # session, median 15 percent - the 7d short cuts already land that on C, so a
+  # session reuses shortgrade.
+  function sheldgrade(v) {
+    return (v <= 10) ? "A" : (v <= 40) ? "B" : (v <= 65) ? "C" : (v <= 80) ? "D" : "E" }
 
   function ago(m) {
     if (m < 60)   return sprintf("%dm", m)
@@ -2801,8 +2822,8 @@ emit_json() {
     PARK_AT  = (RESTART_PARK + 23) / 2
     CLEAR_PK = RESTART_PARK / 2
     CLEAR_NO = RESTART_NO / 2
-    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * 0.1)
-    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * 0.1)
+    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * ENVIRON["TS_RW"])
+    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * ENVIRON["TS_RW"])
     if (OVERHEAT <= PARK_AT) OVERHEAT = PARK_AT + 1
     if (OVERHEAT >= CUT_PK)  OVERHEAT = CUT_PK - 1
 
@@ -2890,7 +2911,12 @@ emit_json() {
         PCX[hs] = hr[6] + 0
         hk = ++HN[hs]
         HCY[hs, hk] = hr[3] + 0; HOU[hs, hk] = hr[4] + 0
-        HGR[hs, hk] = hg; HRC[hs, hk] = hr[5] + 0; HCX[hs, hk] = hr[6] + 0 }
+        HGR[hs, hk] = hg; HRC[hs, hk] = hr[5] + 0; HCX[hs, hk] = hr[6] + 0
+        # Held, per session: the same row test the 7d line uses, real cycles
+        # only, so a card and the week cannot disagree on what "past" means.
+        if (hr[8] != "renew" && hr[8] != "park") {
+          hw = hr[4] * 5 + hr[5] * 2 + hr[6] * RPC * ENVIRON["TS_RW"]
+          HPW[hs] += hw; if (hr[6] + 0 > cutk * 1000) HHB[hs] += hw } }
       close(hf) } }
 
   /^#/ { if ($2 == "hidden") { HID = $3 + 0; HTOT = $4 + 0 } next }
@@ -2904,7 +2930,7 @@ emit_json() {
     if (R[i,11] + 0 < 3 || R[i,12] + 0 <= 0 || R[i,5] / 1000 < FLOOR) return 0
     work = R[i,12] / R[i,11] * 5
     if (work <= 0) return 0
-    return (R[i,5] - FLOOR * 1000) * RPC * 0.1 / work }
+    return (R[i,5] - FLOOR * 1000) * RPC * ENVIRON["TS_RW"] / work }
 
   function urank(i,   c) {
     if (R[i,2] + 0 != 1) return -1
@@ -2931,7 +2957,7 @@ emit_json() {
 
   function tip(i, slot,   c, carry, be, lf, pk) {
     c = R[i,5] / 1000; lf = R[i,4] + 0; pk = R[i,19] + 0
-    carry = (c - FLOOR - RD_NO) * RPC * 0.1; if (carry < 0.05) carry = 0.05
+    carry = (c - FLOOR - RD_NO) * RPC * ENVIRON["TS_RW"]; if (carry < 0.05) carry = 0.05
     be = int(RESTART_NO / carry + 0.5)
     if (R[i,2] + 0 != 1)
       return (slot == 1) ? "the process is gone - nothing here is being paid for any more." : ""
@@ -2997,7 +3023,7 @@ emit_json() {
     printf "\"floor\":%.1f,\"rd_no\":%.1f,\"rd_park\":%.1f,\"restart_no\":%.1f,\"restart_park\":%.1f,", FLOOR, RD_NO, RD_PARK, RESTART_NO, RESTART_PARK
     printf "\"rem\":%.1f,\"cps\":%.2f,\"rpc\":%.2f,", REM, CPS, RPC
     printf "\"park_at\":%.1f,\"clear_pk\":%.1f,\"clear_no\":%.1f,\"cut_pk\":%.1f,\"cut_no\":%.1f,\"overheat\":%.1f,\"max_at\":%.1f,\"ext_max\":%d,", PARK_AT, CLEAR_PK, CLEAR_NO, CUT_PK, CUT_NO, OVERHEAT, MAX_AT, extmax + 0
-    printf "\"ttl\":%d,\"ctxmax\":%d,\"obud\":%d,\"gbud\":%d,\"price_in\":%s", ttl, ctxmax, obud, gbud, price
+    printf "\"ttl\":%d,\"ctxmax\":%d,\"obud\":%d,\"gbud\":%d,\"price_in\":%s,\"day_cap\":%d", ttl, ctxmax, obud, gbud, price, daycap + 0
     printf "},\n"
 
     printf "  \"overall\": {"
@@ -3014,7 +3040,7 @@ emit_json() {
       heldgrade(q_held), shortgrade(q_short), churngrade(q_churn), ctlgrade(q_ctl)
     printf "\"median\":{\"wpc\":%.1f,\"prod\":%.0f,\"churn\":%.1f},", p_wpc, p_prod, p_churn
     printf "\"split_7d\":{\"output\":%.0f,\"cache_write\":%.0f,\"cache_read\":%.0f},", s7o, s7w, s7r
-    printf "\"spend_5h\":%.0f,\"spend_7d\":%.0f", o5h, o7d
+    printf "\"spend_5h\":%.0f,\"spend_7d\":%.0f,\"spend_day\":%.0f", o5h, o7d, oday
     printf "},\n"
     # Account-wide usage, which is a different question from every other number
     # here: those are about what a WINDOW costs, this is about what is left to
@@ -3086,14 +3112,14 @@ emit_json() {
       lvq = R[i,31] + 0; lvo = R[i,32] + 0; lvw = R[i,33] + 0
       lvr = R[i,34] + 0; lvx = R[i,35] + 0
       if (lvx <= cx) { lvq = 0; lvo = 0; lvw = 0; lvr = 0; lvx = cx }
-      lvcost = lvo * 5 + lvw * 2 + lvr * 0.1
+      lvcost = lvo * 5 + lvw * 2 + lvr * ENVIRON["TS_RW"]
       lvgro  = lvx - cx; if (lvgro < 0) lvgro = 0
       # Context is the live reading wherever there is one. Everything priced off
       # it - the extension marks, the lapse cost, the bands - is answering "what
       # would this window cost right now", and right now is not last cycle.
       cxl = (lvx > cx) ? lvx : cx
-      wtd = ot * 5 + rt * 2 + cx * RPC * 0.1 * cy + lvcost
-      cread = cx * RPC * 0.1 * cy + lvr * 0.1; cout = (ot + lvo) * 5; cwrite = (rt + lvw) * 2
+      wtd = ot * 5 + rt * 2 + cx * RPC * ENVIRON["TS_RW"] * cy + lvcost
+      cread = cx * RPC * ENVIRON["TS_RW"] * cy + lvr * ENVIRON["TS_RW"]; cout = (ot + lvo) * 5; cwrite = (rt + lvw) * 2
       dis = wtd - FLOOR * 2000; if (dis < wtd * 0.15) dis = wtd * 0.15
       spend = (cy > 0) ? dis / cy / 1000 : 0
       prod  = (wtd > 0) ? cout * 100 / wtd : 0
@@ -3103,6 +3129,11 @@ emit_json() {
       chn2  = R[i,25] - R[i,26] - FLOOR * 1000; if (chn2 < 0) chn2 = 0
       chn2  = (wtd > 0) ? chn2 * 2 * 100 / wtd : 0
       ctl   = (cy > 0) ? R[i,27] / cy : 0
+      # Short, per session: what opening the window cost, as a share of what
+      # the session spent. The week grades whole short sessions; one session
+      # can only say how much of itself went on the floor.
+      held  = (HPW[R[i,1]] > 0) ? HHB[R[i,1]] * 100 / HPW[R[i,1]] : 0
+      shrt  = (wtd > 0) ? FLOOR * 2000 * 100 / wtd : 0; if (shrt > 100) shrt = 100
       u = urank(i)
       # Keyed by the SHORT id, which is what the pane writes into the file.
       # This read the full sid until 2026-09-02, so a name typed in the pane
@@ -3191,8 +3222,12 @@ emit_json() {
       printf "\"pct_output\":%.1f,\"pct_write\":%.1f,\"pct_read\":%.1f,\"usd\":%.3f,\"agents\":%.0f,\"with_agents\":%.0f,\"usd_with_agents\":%.3f},", \
         (wtd ? cout * 100 / wtd : 0), (wtd ? cwrite * 100 / wtd : 0), (wtd ? cread * 100 / wtd : 0), wtd * price / 1000000, agc, wtd + agc, (wtd + agc) * price / 1000000
       printf "\"spend_per_cycle\":%.1f,\"production_pct\":%.0f,\"churn_pct\":%.1f,\"control\":%.3f,", spend, prod, chn2, ctl
-      printf "\"grades\":{\"spend\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\"},", \
-        (cy < 2 ? "" : grade(spend, p_wpc, 1)), (cy < 2 ? "" : churngrade(chn2)), (cy < 2 ? "" : ctlgrade(ctl))
+      printf "\"held_pct\":%.1f,\"short_pct\":%.1f,", held, shrt
+      # Spend stays in the object for token-scorecard.csv, whose g_spend column
+      # has rows since 2026-09-23; the card shows the other four.
+      printf "\"grades\":{\"held\":\"%s\",\"short\":\"%s\",\"churn\":\"%s\",\"control\":\"%s\",\"spend\":\"%s\"},", \
+        (cy < 2 ? "" : sheldgrade(held)), (cy < 2 ? "" : shortgrade(shrt)), (cy < 2 ? "" : churngrade(chn2)), (cy < 2 ? "" : ctlgrade(ctl)), \
+        (cy < 2 ? "" : grade(spend, p_wpc, 1))
       # Extension marks: how many times this window may be kept warm, and how
       # many of those are spent. The cost of one is the context at the cache
       # READ rate, against the same context at the write rate for letting it go.
@@ -3205,7 +3240,7 @@ emit_json() {
       exo = exu - exa; if (exo < 0) exo = 0
       printf "\"ext_allowed\":%d,\"ext_used\":%d,\"ext_over\":%d,\"ext_left\":%d,", \
         exa, (exu > exa ? exa : exu), exo, (exa - exu < 0 ? 0 : exa - exu)
-      printf "\"ext_cost\":%.0f,\"lapse_cost\":%.0f,", cx * 0.1, cx * 2
+      printf "\"ext_cost\":%.0f,\"lapse_cost\":%.0f,", cx * ENVIRON["TS_RW"], cx * 2
       # Whether the input block is armed on this window. A membership test on a
       # space-padded list rather than a stat per session: the answer is the same
       # and the whole list was one directory read.
@@ -3234,6 +3269,16 @@ emit_json() {
     printf '\n'
   fi
   printf '}\n'
+}
+
+# Per-session held for the listing, as "sid=pct" pairs. The JSON pass makes the
+# same row test over $HF; render has no history of its own, so it gets this.
+sess_held() {
+  hist_rows 2>/dev/null | awk -F, -v rpc="$RPC" -v cut="$CUT_K" '
+    NR > 1 && $2 != "" && $8 != "renew" && $8 != "park" {
+      w = $4 * 5 + $5 * 2 + $6 * (rpc + 0 > 0 ? rpc : 2.3) * ENVIRON["TS_RW"]
+      pw[$2] += w; if ($6 + 0 > cut * 1000) hb[$2] += w }
+    END { for (k in pw) if (pw[k] > 0) printf "%s=%.1f ", k, hb[k] * 100 / pw[k] }'
 }
 
 render() {
@@ -3270,7 +3315,7 @@ render() {
     -v OLL_CALLS="$OLL_CALLS" -v CL_OUT_7D="$CL_OUT_7D" \
     -v hud="$HUD" -v filt="${FILTER:-}" -v srtname="${SORTNAME:-}" \
     -v keytab="$KEYTAB" -v flash="${FLASH:-}" -v ollrows="$OLL_SESSIONS" \
-    -v upd="${UPDNEW:-}" -v tsver="$TSVER" '
+    -v upd="${UPDNEW:-}" -v tsver="$TSVER" -v sheld="$(sess_held)" '
   function rep(s, n,   i, o) { for (i = 0; i < n; i++) o = o s; return o }
   # Letter-spaced, for the panel titles only. A readout names itself with
   # room around its letters; a paragraph does not. length() stays honest
@@ -3423,7 +3468,9 @@ render() {
 
   BEGIN {
     split(sparks, SP, " ")
-    STOP = " the and are was were being does did done get got has had have this" \
+    nsh = split(sheld, SHP, " ")
+    for (j = 1; j <= nsh; j++) { split(SHP[j], kv, "="); HELD[kv[1]] = kv[2] + 0 }
+    STOP =" the and are was were being does did done get got has had have this" \
            " that these those you your our their its lets let not now new old" \
            " for from with into over under about again still just very much more" \
            " most some any all what which who how why when where want need please" \
@@ -3467,11 +3514,11 @@ render() {
     # Heat is the newest column and the first to go, because it is the only one
     # here that is also stated in words on the line underneath every row.
     HW = (avail >= 88) ? 6 : 0
-    # Three letters and a gutter, and only where there is room that the name
+    # Four letters and a gutter, and only where there is room that the name
     # column was not going to use anyway. On a narrow terminal the grades stay
     # in the detail panel rather than squeezing every other column - a summary
     # is the first thing that should give way, not the thing being summarised.
-    GW = (avail >= 90) ? 6 : 0        # three letters, and room for the header
+    GW = (avail >= 90) ? 6 : 0        # four letters, and room for the header
     # The cost column gives way in two steps rather than one: the split bar
     # first, then the figure. The figure is the part that survives, because
     # "1.4M" is the whole point and the bar is the gloss on it.
@@ -3542,8 +3589,8 @@ render() {
     PARK_AT  = (RESTART_PARK + 23) / 2
     CLEAR_PK = RESTART_PARK / 2
     CLEAR_NO = RESTART_NO / 2
-    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * 0.1)
-    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * 0.1)
+    CUT_PK   = FLOOR + RD_PARK + RESTART_PARK / (REM * RPC * ENVIRON["TS_RW"])
+    CUT_NO   = FLOOR + RD_NO   + RESTART_NO   / (REM * RPC * ENVIRON["TS_RW"])
     # The ceiling, same rule as the --json block: ctxcol() paints it red.
     MAX_AT = (m_max + 0 > 0) ? m_max + 0 : ctxmax * 0.85
     if (MAX_AT >= ctxmax) MAX_AT = ctxmax - 1
@@ -3928,7 +3975,7 @@ render() {
   # MODELLED (this window x requests per cycle) because nothing on disk records
   # them per cycle. That is also why the column is deliberately coarse.
   function cparts(i, p) {
-    p[1] = ot[i] * 5; p[2] = rt[i] * 2; p[3] = cx[i] * RPC * 0.1 * cy[i]
+    p[1] = ot[i] * 5; p[2] = rt[i] * 2; p[3] = cx[i] * RPC * ENVIRON["TS_RW"] * cy[i]
     p[0] = p[1] + p[2] + p[3]
     return (cy[i] > 0 && p[0] > 0) }
 
@@ -3993,7 +4040,7 @@ render() {
     if (cy[i] < 3 || ot[i] <= 0 || cx[i] / 1000 < FLOOR) return 0
     work = ot[i] / cy[i] * 5
     if (work <= 0) return 0
-    return (cx[i] - FLOOR * 1000) * RPC * 0.1 / work }
+    return (cx[i] - FLOOR * 1000) * RPC * ENVIRON["TS_RW"] / work }
   function hotcol(h) {
     return (h >= 1.5) ? RED : (h >= 1.0) ? ORG : (h >= 0.7) ? YEL : GRN }
   function hcell(i,   h) {
@@ -4297,7 +4344,7 @@ render() {
   # number that was true at one review and never again.
   function tip(i, slot,   c, carry, be) {
     c = cx[i] / 1000
-    carry = (c - FLOOR - RD_NO) * RPC * 0.1; if (carry < 0.05) carry = 0.05
+    carry = (c - FLOOR - RD_NO) * RPC * ENVIRON["TS_RW"]; if (carry < 0.05) carry = 0.05
     be = int(RESTART_NO / carry + 0.5)
     if (al[i] != 1)
       return (slot == 1) ? "the process is gone - nothing here is being paid for any more." : ""
@@ -4350,7 +4397,7 @@ render() {
   # against a target someone picked. All three come off the same history rows
   # the alerts do, so a session cannot look good here and bad there.
   #
-  #   spend       weighted cost per cycle (output x5, cache write x2, read x0.1).
+  #   spend       weighted cost per cycle (output x5, cache write x2, read x TS_RW, 0.05).
   #               This is what the session cost, NOT what it was worth - no tool
   #               can see the second one, so it is named for what it measures.
   #   production  output as a share of that spend. High means the tokens went
@@ -4382,7 +4429,7 @@ render() {
   # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
     return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
-  # Held and short grade the aggregates only (7d, per day), never one session:
+  # The aggregate ladders (7d, per day; one session gets sheldgrade for held):
   # the share of spend past the cut bar, and the share spent in sessions that
   # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
   # on C (held 45 percent, short 12.5).
@@ -4390,28 +4437,24 @@ render() {
     return (v <= 10) ? "A" : (v <= 25) ? "B" : (v <= 45) ? "C" : (v <= 65) ? "D" : "E" }
   function shortgrade(v) {
     return (v <= 5) ? "A" : (v <= 10) ? "B" : (v <= 20) ? "C" : (v <= 35) ? "D" : "E" }
+  # Per session, the same ladder the JSON pass uses - see the note there.
+  function sheldgrade(v) {
+    return (v <= 10) ? "A" : (v <= 40) ? "B" : (v <= 65) ? "C" : (v <= 80) ? "D" : "E" }
 
   function gcol(g) {
     return (g == "A") ? GRN : (g == "B") ? GRN : (g == "C") ? BLU : (g == "D") ? YEL : RED }
 
-  # Fills g[1..3] with the letters and g[4..6] with the figures behind them, so
-  # the table cell and the panel line can never disagree about a session.
-  function gvals(i, g,   wtd, ctl, dis, chn) {
+  # Fills g[1..4] with the letters - held, short, churn, control - and g[5..7]
+  # with the figures behind the first three, so the table cell and the panel
+  # line can never disagree about a session.
+  function gvals(i, g,   wtd, ctl, chn) {
     if (cy[i] < 2) return 0
-    wtd = ot[i] * 5 + rt[i] * 2 + cx[i] * RPC * 0.1 * cy[i]
+    wtd = ot[i] * 5 + rt[i] * 2 + cx[i] * RPC * ENVIRON["TS_RW"] * cy[i]
     if (wtd <= 0) return 0
-    # Spend is graded ABOVE the floor. The ~FLOOR of cache write every session
-    # pays before it has done anything is not a choice, and dividing that
-    # one-off by a small cycle count is why a young session graded a letter
-    # worse than identical work later on: measured across 91 sessions the raw
-    # figure ran 254k/cycle at cycle 1 and settled at 168k by cycle 8, purely
-    # from the amortisation. Discounted it sits at 135-150k throughout, so the
-    # letter now says how the session was DRIVEN rather than how old it is.
-    # Production is deliberately NOT rebased - it measured flat (35% at cycle 1,
-    # 35% at cycle 8), so there was nothing there to correct.
-    dis = wtd - FLOOR * 2000
-    if (dis < wtd * 0.15) dis = wtd * 0.15
-    g[4] = dis / cy[i] / 1000
+    g[5] = HELD[sid[i]] + 0
+    # Short: the cold floor write as a share of the session - the one cost a
+    # session pays for being opened, which only more cycles amortise.
+    g[6] = FLOOR * 2000 * 100 / wtd; if (g[6] > 100) g[6] = 100
     # Churn share: of everything this session paid, the part that went on
     # rewriting a window rather than on new material or on output. gt[] is the
     # growth already accumulated per session, so the rest of the re-cache is
@@ -4419,31 +4462,33 @@ render() {
     # because cycle 1 is defined to have zero growth and would otherwise land
     # the entire opening window in churn.
     chn = rt[i] - gt[i] - FLOOR * 1000; if (chn < 0) chn = 0
-    g[5] = chn * 2 * 100 / wtd
+    g[7] = chn * 2 * 100 / wtd
     ctl  = fb[i] / cy[i]
-    g[1] = grade(g[4], p_wpc, 1)
-    g[2] = churngrade(g[5])
-    g[3] = ctlgrade(ctl)
+    g[1] = sheldgrade(g[5])
+    g[2] = shortgrade(g[6])
+    g[3] = churngrade(g[7])
+    g[4] = ctlgrade(ctl)
     return 1 }
 
-  # The table cell: three letters, spend / churn / control, in that order.
+  # The table cell: four letters, held / short / churn / control, in that order.
   function gcell(i,   g) {
     if (GW == 0) return ""
     if (!gvals(i, g)) return rep(" ", GW)
     # Padded by glyph count, like the sparkline: the colour escapes are bytes
     # the terminal never shows, so anything downstream that counts them lands
     # the rest of the row in the wrong column.
-    if (al[i] == 0) return sprintf("%s%s%s%s%s", GRY, g[1] g[2] g[3], R, "", rep(" ", GW - 3))
-    return sprintf("%s%s%s%s%s%s%s%s", gcol(g[1]), g[1], gcol(g[2]), g[2], gcol(g[3]), g[3], R, rep(" ", GW - 3)) }
+    if (al[i] == 0) return sprintf("%s%s%s%s", GRY, g[1] g[2] g[3] g[4], R, rep(" ", GW - 4))
+    return sprintf("%s%s%s%s%s%s%s%s%s%s", gcol(g[1]), g[1], gcol(g[2]), g[2], gcol(g[3]), g[3], \
+                   gcol(g[4]), g[4], R, rep(" ", GW - 4)) }
 
-  function scorecard(i,   g, wpc, prod, g1, g2, g3, s) {
+  function scorecard(i,   g, s) {
     if (!gvals(i, g)) return ""
-    wpc = g[4]; prod = g[5]; g1 = g[1]; g2 = g[2]; g3 = g[3]
     # Kept short on purpose - this line sits inside a panel 74 columns wide on
-    # a default terminal, and it is the only one here carrying three figures.
-    s = sprintf("%s%s%s spend %s%.0fk%s%s/cyc (med %.0f)%s  ", gcol(g1), g1, R, B, wpc, R, D, p_wpc, R)
-    s = s sprintf("%s%s%s churn %s%.0f%%%s%s (med %.0f)%s  ", gcol(g2), g2, R, B, prod, R, D, p_churn, R)
-    s = s sprintf("%s%s%s control %s%db %dgap%s", gcol(g3), g3, R, B, fb[i], gp[i], R)
+    # a default terminal, and it is the only one here carrying four figures.
+    s = sprintf("%s%s%s held %s%.0f%%%s  ", gcol(g[1]), g[1], R, B, g[5], R)
+    s = s sprintf("%s%s%s short %s%.0f%%%s  ", gcol(g[2]), g[2], R, B, g[6], R)
+    s = s sprintf("%s%s%s churn %s%.0f%%%s  ", gcol(g[3]), g[3], R, B, g[7], R)
+    s = s sprintf("%s%s%s control %s%db %dgap%s", gcol(g[4]), g[4], R, B, fb[i], gp[i], R)
     return s }
 
   # cmp: the short-window panel. The three-row header box becomes one row and
@@ -4949,7 +4994,7 @@ analytics() {
   # 79 percent of sessions sit at 2 or under, so most A letters are real.
   function churngrade(v) {
     return (v <= 2) ? "A" : (v <= 5) ? "B" : (v <= 10) ? "C" : (v <= 33) ? "D" : "E" }
-  # Held and short grade the aggregates only (7d, per day), never one session:
+  # The aggregate ladders (7d, per day; one session gets sheldgrade for held):
   # the share of spend past the cut bar, and the share spent in sessions that
   # stopped at two cycles. Target zero; cut so the median day of 2026-09 lands
   # on C (held 45 percent, short 12.5).
@@ -5034,7 +5079,7 @@ analytics() {
     g = (($2 in pv) ? $6 - pv[$2] : 0); if (g < 0) g = 0
     ch = $5 - g; if (ch < 0) ch = 0
     pv[$2] = $6
-    w = $4 * 5 + $5 * 2 + $6 * rpc * 0.1
+    w = $4 * 5 + $5 * 2 + $6 * rpc * ENVIRON["TS_RW"]
     # Two weights, deliberately. w is what the cycle actually cost and is what
     # every total and every dollar figure below is built from. wg is the same
     # number with the cold floor taken off cycle 1, and it is what the GRADES
@@ -5054,7 +5099,7 @@ analytics() {
     hld = ($8 == "renew" || $8 == "park") ? 1 : 0
     N++
     if (hld) { HN++; HW += w; HK[$8]++ }
-    TW += w; TO += $4 * 5; TWR += $5 * 2; TRD += $6 * rpc * 0.1
+    TW += w; TO += $4 * 5; TWR += $5 * 2; TRD += $6 * rpc * ENVIRON["TS_RW"]
     if (!hld) { NP++; WV[NP] = w; OV[NP] = $4; GV[NP] = g }
     # A running top-8 by weighted cost, kept here rather than sorted at the end
     # so the whole history never has to be held twice. Only 5 are printed; the
@@ -5088,7 +5133,7 @@ analytics() {
     # one that admits it cannot place it.
     pj = ($2 in PJ) ? PJ[$2] : "(unplaced)"
     PJW[pj] += w; PJN[pj]++; PJO[pj] += $4 * 5; PJR[pj] += $5 * 2
-    PJD[pj] += $6 * rpc * 0.1
+    PJD[pj] += $6 * rpc * ENVIRON["TS_RW"]
     if (!(($2 SUBSEP pj) in PJSEEN)) { PJSEEN[$2 SUBSEP pj] = 1; PJS[pj]++ }
     if (age <= 604800) PJ7[pj] += w
     dk = substr($1, 1, 10); if (!(dk in dayseen)) { dayseen[dk] = 1; NDAYS++ }
@@ -5128,8 +5173,8 @@ analytics() {
     printf "\n%s\n", box(hb rep(" ", hgap) D clock R, length(hv) + hgap + length(clock))
     if (N == 0) { printf "  %sno history yet - the Stop hook writes one row per cycle%s\n\n", D, R; exit }
 
-    printf "%s%s%s weighted%s   %s~$%.0f at $%d/MTok in, output x5 write x2 read x0.1%s\n", \
-      lab("spend"), B, hum(TW), R, D, usd(TW), price, R
+    printf "%s%s%s weighted%s   %s~$%.0f at $%d/MTok in, output x5 write x2 read x%g%s\n", \
+      lab("spend"), B, hum(TW), R, D, usd(TW), price, ENVIRON["TS_RW"] + 0, R
     printf "%s%s   %s%s%s %.0f%% output   %s%s%s %.0f%% cache writes   %s%s%s %.0f%% cache reads\n", \
       lab(""), splitbar(TO, TWR, TRD, 16), \
       GRN, full, R, TO * 100 / TW, ORG, full, R, TWR * 100 / TW, \
@@ -6725,6 +6770,7 @@ parked_json() {
         if (index(ln, "\"display\":\"/unpark ") == 0) continue
         if (!match(ln, /"display":"\/unpark [^"]*"/)) continue
         a = tolower(trim(substr(ln, RSTART + 19, RLENGTH - 20)))
+        sub(/ +--handoff$/, "", a)
         if (a == "" || !match(ln, /"timestamp":[0-9]+/)) continue
         ts = int(substr(ln, RSTART + 12, RLENGTH - 12) / 1000)
         if (!match(ln, /"sessionId":"[^"]*"/)) continue
@@ -6955,7 +7001,7 @@ arrange() {
         if (index(hay, tolower(f)) == 0) next }
       k = 0
       if      (s == 1) k = 99999999 - $5
-      else if (s == 2) k = 99999999 - ($12 * 5 + $25 * 2 + $5 * rpc * 0.1 * $11)
+      else if (s == 2) k = 99999999 - ($12 * 5 + $25 * 2 + $5 * rpc * ENVIRON["TS_RW"] * $11)
       else if (s == 3) k = $3
       if (k < 0) k = 0
       # Closed sessions stay under the live ones whatever the key is. They are a
@@ -6997,6 +7043,19 @@ open_row() {
   elif command -v open     >/dev/null 2>&1; then open "$f" >/dev/null 2>&1 &
   else FLASH="cannot open: $f"; return; fi
   FLASH="opened ${f##*/}"
+}
+
+# Enter: the widget's route, token-open.ps1, so the two cannot disagree about
+# where a session lives. Its one line of output is the flash. The cwd field is
+# JSON-escaped in the snapshot, hence the \\ -> \.
+open_session() {
+  local sid cwd pid alive ps1="$CL/token-open.ps1"
+  sid=$(row_field "$1" 15); [ -n "$sid" ] || { FLASH="nothing to open"; return; }
+  [ -f "$ps1" ] || { FLASH="token-open.ps1 is not installed"; return; }
+  cwd=$(row_field "$1" 30); cwd=$(printf '%s' "$cwd" | sed 's/\\\\/\\/g')
+  pid=$(row_field "$1" 8); alive=$(row_field "$1" 2)
+  FLASH=$(powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$ps1")" \
+            "$sid" "$cwd" "${pid:-0}" "${alive:-0}" 2>&1 | tr -d '\r' | tail -n 1)
 }
 
 term_cols() {
@@ -7142,9 +7201,11 @@ if [ "$WATCH" = 1 ]; then
     GOT=0; WAIT=1
     [ "$ANYRUN" -gt 0 ] && WAIT=0.25
     while true; do
-      key=""
-      IFS= read -rsn1 -t "$WAIT" key || true
-      [ -n "$key" ] || break
+      key=""; rc=0
+      IFS= read -rsn1 -t "$WAIT" key || rc=$?
+      # Enter is the delimiter read stops on, so it arrives as an empty key with
+      # a clean exit; a timeout is the same empty key with a status over 128.
+      if [ -z "$key" ]; then [ "$rc" = 0 ] || break; key=ENTER; fi
       # An arrow key arrives as ESC [ A; a bare ESC has no tail and means "back
       # to the overview", so the follow-up read must be able to time out.
       if [ "$key" = "$ESC" ]; then
@@ -7265,6 +7326,7 @@ if [ "$WATCH" = 1 ]; then
         "["|"$ESC[5~") VIEW=1; APAGE=$((APAGE - 1)); [ "$APAGE" -lt 1 ] && APAGE=1 ;;
         y)          [ "$SEL" -gt 0 ] && { VIEW=0; copy_resume "$SEL"; } ;;
         o)          [ "$SEL" -gt 0 ] && { VIEW=0; open_row "$SEL"; } ;;
+        ENTER)      [ "$SEL" -gt 0 ] && { VIEW=0; open_session "$SEL"; } ;;
         # Muting re-primes rather than just going quiet, so unmuting later does
         # not immediately ring for every window that lapsed while it was off.
         b)          BELL=$((1 - BELL)); BELL_PRIMED=0; RUNG=() ;;

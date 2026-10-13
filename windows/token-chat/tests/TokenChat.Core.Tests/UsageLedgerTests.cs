@@ -38,6 +38,7 @@ public class UsageLedgerTests
 
         Assert.Equal(new TokenUsage(2, 100, 1000, 196), ledger.Snapshot.Session);
         Assert.Equal(1102, ledger.Snapshot.Context);
+        Assert.Equal(1, ledger.Snapshot.Requests);
     }
 
     [Fact]
@@ -52,6 +53,7 @@ public class UsageLedgerTests
         Assert.Equal(50103, ledger.Snapshot.Context);
         Assert.Equal(50001, ledger.Snapshot.Floor);
         Assert.Equal(new TokenUsage(5, 9000, 100100, 19), ledger.Snapshot.Session);
+        Assert.Equal(2, ledger.Snapshot.Requests);
     }
 
     [Fact]

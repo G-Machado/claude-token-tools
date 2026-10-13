@@ -201,7 +201,7 @@ REDERIVE="${TOKEN_REDERIVE_COST:-6700}"   # was 34,000 (n=29, 2026-08-24); 15,00
 # sessions run on; set W_WRITE=1.25 for a 5-minute TTL.
 W_OUT="${TOKEN_W_OUTPUT:-5}"
 W_WRITE="${TOKEN_W_CACHE_WRITE:-2}"
-W_READ="${TOKEN_W_CACHE_READ:-0.1}"
+W_READ="${TOKEN_W_CACHE_READ:-0.05}"   # opus-5-5 measured 0.05x; older models 0.1x
 
 # Full-window reads per cycle: the carry multiplier. Scales the weighted
 # break-even linearly. It was a 2.3 requests/cycle guess from one session; the
@@ -859,8 +859,14 @@ fi
 # ~29.5k cold start and were the entire "half-floor" minimum in --stats, and
 # every one counted as a one-cycle session. Same reasoning as TOKEN_RENEWAL:
 # keep them out of the history everything is measured from.
+#
+# Except TokenChat's: it is headless too, but it is where the work happens, and
+# dropping its rows left every chat tab at cycles 0 with no growth split. It
+# marks its claude.exe with TOKEN_CHAT=1 (ClaudeLauncher.Build), which the hook
+# inherits.
 ROWHIST="$HIST"
-if [ "$MODE" = "alert" ] && head -c 20000 "$F" 2>/dev/null | grep -q '"entrypoint":"sdk-cli"'; then
+if [ "$MODE" = "alert" ] && [ "${TOKEN_CHAT:-}" != 1 ] &&
+   head -c 20000 "$F" 2>/dev/null | grep -q '"entrypoint":"sdk-cli"'; then
   ROWHIST=""
 fi
 

@@ -1,0 +1,165 @@
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Text.Json.Nodes;
+using System.Windows.Media;
+using System.Windows.Threading;
+using TokenChat.Core;
+
+namespace TokenChat.App;
+
+/// <summary>One sidebar row: a session in this window (its tab) or one the widget's collect lists elsewhere, a terminal
+/// or another front end. Updated in place, so the selection and the scroll survive every collect.</summary>
+public sealed class SidebarItem(object key) : INotifyPropertyChanged
+{
+    /// <summary>The tab for a session in this window, else the session id.</summary>
+    public object Key { get; } = key;
+    public SessionTab? Tab => Key as SessionTab;
+    public bool Here => Tab is not null;
+    public string Name { get; private set; } = "";
+    public string Project { get; private set; } = "";
+    public Brush? ProjectBrush { get; private set; }
+    /// <summary>The tab's State (starting, idle, working, exited); a session elsewhere is idle or working.</summary>
+    public string State { get; private set; } = "";
+    /// <summary>The widget's figures for the session, null until a collect has it.</summary>
+    public FooterRow? Row { get; private set; }
+    /// <summary>The session's entry in the last collect, which the controls read and patch; null until a collect has it.</summary>
+    public JsonObject? Session { get; private set; }
+    public string Sid => Tab?.SessionId ?? Key as string ?? "";
+    public bool Blocked => Num(Session, "blocked") == 1;
+    public bool HasSession => Session is not null;
+    /// <summary>A session elsewhere has a window to bring forward; one here is its tab.</summary>
+    public bool CanOpen => !Here && Session is not null;
+    public string Cwd => Tab?.Options.WorkingDirectory ?? Str(Session, "cwd");
+    /// <summary>Heads the sessions elsewhere, so the template draws the label between the two groups.</summary>
+    public bool FirstElsewhere { get; private set; }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    internal static string Str(JsonObject? o, string k) => o?[k] is JsonValue v && v.TryGetValue(out string? s) ? s : "";
+    /// <summary>A parsed number reads as any numeric type, but one a control patched in keeps its own: an int written by
+    /// Patch does not read as a double, and read as 0 it made the next mark click count up from nothing.</summary>
+    internal static double Num(JsonObject? o, string k) => o?[k] is not JsonValue v ? 0
+        : v.TryGetValue(out double d) ? d : v.TryGetValue(out int i) ? i : v.TryGetValue(out long l) ? l : 0;
+
+    internal void Set(string name, string project, Brush? brush, string state, FooterRow? row, JsonObject? session, bool firstElsewhere)
+    {
+        (Name, Project, ProjectBrush, State, Row, Session, FirstElsewhere) = (name, project, brush, state, row, session, firstElsewhere);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null)); // every binding re-reads
+    }
+}
+
+/// <summary>The sidebar's rows: this window's tabs in their order, then every other live session in the widget's last
+/// collect, in the collector's order. Rebuilt on a collect, a tab change and a clock tick, since the cache clock of a
+/// session elsewhere runs down between collects (a tab's own Row already does).</summary>
+public sealed class Sidebar
+{
+    readonly ObservableCollection<SessionTab> _tabs;
+    readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
+    bool _queued;
+
+    public ObservableCollection<SidebarItem> Items { get; } = [];
+    public UsageHeader Usage { get; } = new();
+    /// <summary>Every project's checkpoints, newest first; replaced whole by RefreshParkedAsync.</summary>
+    public ObservableCollection<Checkpoint> Parked { get; } = [];
+    bool _listingParked;
+    /// <summary>After every rebuild, on the UI thread.</summary>
+    public event Action? Refreshed;
+
+    public Sidebar(ObservableCollection<SessionTab> tabs)
+    {
+        _tabs = tabs;
+        tabs.CollectionChanged += OnTabs;
+        foreach (var t in tabs) t.PropertyChanged += OnTab;
+        SessionTab.Feed.Value.Changed += Schedule;
+        // a running timer is held by its dispatcher
+        _ = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) => Schedule(), _ui);
+        // the widget re-lists its Parked tab every five minutes and on opening it; the view asks for the second
+        _ = new DispatcherTimer(TimeSpan.FromMinutes(5), DispatcherPriority.Background, (_, _) => _ = RefreshParkedAsync(), _ui);
+        Refresh();
+        _ = RefreshParkedAsync();
+    }
+
+    /// <summary>One listing at a time. A failed one keeps the last list. UI thread.</summary>
+    public async Task RefreshParkedAsync()
+    {
+        if (_listingParked) return;
+        _listingParked = true;
+        try
+        {
+            if (await SessionControl.CheckpointsAsync() is not { } list) return;
+            Parked.Clear();
+            foreach (var c in list) Parked.Add(c);
+        }
+        finally { _listingParked = false; }
+    }
+
+    void OnTabs(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        foreach (var t in e.OldItems?.OfType<SessionTab>() ?? []) t.PropertyChanged -= OnTab;
+        foreach (var t in e.NewItems?.OfType<SessionTab>() ?? []) t.PropertyChanged += OnTab;
+        Schedule();
+    }
+
+    void OnTab(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(SessionTab.Row) or nameof(SessionTab.State)) Schedule();
+    }
+
+    /// <summary>Every tab sets its Row on its own clock and the feed lands on a pool thread: one rebuild per burst.</summary>
+    void Schedule()
+    {
+        if (_queued) return;
+        _queued = true;
+        _ui.BeginInvoke(DispatcherPriority.Background, () => { _queued = false; Refresh(); });
+    }
+
+    void Refresh()
+    {
+        var feed = SessionTab.Feed.Value.Snapshot;
+        Usage.Set(feed);
+        var want = new List<(object Key, string Name, string Project, Brush? Brush, string State, FooterRow? Row, JsonObject? Session)>();
+        var here = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in _tabs)
+        {
+            JsonObject? s = null;
+            if (t.SessionId is { } sid && here.Add(sid)) feed?.Sessions.TryGetValue(sid, out s);
+            // the topic names the session; the tab's title (its folder) is then the project
+            var nick = Str(s, "nick");
+            want.Add((t, nick.Length > 0 ? nick : t.Title, nick.Length > 0 ? t.Title : "", t.ProjectBrush, t.State, t.Row, s));
+        }
+        if (feed is not null)
+        {
+            var now = DateTimeOffset.Now;
+            // live windows only, as the widget's Get-Visible
+            foreach (var s in feed.Ordered.Where(s => Num(s, "alive") == 1 && !here.Contains(Str(s, "sid"))))
+            {
+                var nick = Str(s, "nick");
+                var cwd = Str(s, "cwd");
+                want.Add((Str(s, "sid"), nick.Length > 0 ? nick : Str(s, "name"), Str(s, "project"),
+                    cwd.Length > 0 ? SessionTab.ProjectBrushes[Project.Slot(cwd, SessionTab.ProjectBrushes.Length)] : null,
+                    Num(s, "running") == 1 ? "working" : "idle", FooterRow.From(s, feed, 0, now), s));
+            }
+        }
+
+        for (var i = 0; i < want.Count; i++)
+        {
+            var w = want[i];
+            var at = IndexOf(w.Key, i);
+            if (at < 0) Items.Insert(i, new SidebarItem(w.Key));
+            else if (at != i) Items.Move(at, i);
+            Items[i].Set(w.Name, w.Project, w.Brush, w.State, w.Row, w.Session, w.Key is string && (i == 0 || want[i - 1].Key is SessionTab));
+        }
+        while (Items.Count > want.Count) Items.RemoveAt(Items.Count - 1);
+        Refreshed?.Invoke();
+    }
+
+    int IndexOf(object key, int from)
+    {
+        for (var j = from; j < Items.Count; j++) if (Equals(Items[j].Key, key)) return j;
+        return -1;
+    }
+
+    static string Str(JsonObject? o, string k) => SidebarItem.Str(o, k);
+    static double Num(JsonObject? o, string k) => SidebarItem.Num(o, k);
+}

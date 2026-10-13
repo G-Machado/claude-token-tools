@@ -37,6 +37,7 @@ public sealed class ProcessTransport : IClaudeTransport
             StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var a in spec.Arguments) psi.ArgumentList.Add(a);
+        foreach (var k in psi.Environment.Keys.Where(ClaudeLauncher.IsSessionMarker).ToList()) psi.Environment.Remove(k);
         foreach (var (k, v) in spec.Environment) psi.Environment[k] = v;
         _process = Process.Start(psi) ?? throw new InvalidOperationException("claude.exe did not start: " + spec.Exe);
         _process.ErrorDataReceived += (_, e) => { if (e.Data is not null) StderrLine?.Invoke(e.Data); };

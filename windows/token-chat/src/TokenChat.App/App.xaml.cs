@@ -1,4 +1,3 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using ICSharpCode.AvalonEdit.Highlighting;
@@ -7,35 +6,29 @@ using TokenChat.Core;
 
 namespace TokenChat.App;
 
-/// <summary>TokenChat.App [--lite] [--model name] [directory]: opens a tab in directory, else the start screen.</summary>
+/// <summary>TokenChat.App [--lite] [--model name] [--effort level] [--resume sid] [--prompt text] [--preview fixture.jsonl]
+/// [directory]: opens a tab in directory (resuming sid, sending text first), or a replay of fixture, else the start screen. With TokenChat already running, the request goes to that window and this process exits.</summary>
 public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        var request = LaunchRequest.Parse(e.Args);
+        // --preview runs beside a live TokenChat: it neither claims the instance nor forwards to it.
+        var first = request.Preview is null && SingleInstance.Claim();
+        if (request.Preview is null && !first && SingleInstance.Forward(request))
+        {
+            Shutdown();
+            return;
+        }
         DispatcherUnhandledException += OnUnhandled;
         LiftCodeColours();
-        var (directory, lite, model) = Parse(e.Args);
-        var window = new MainWindow { Lite = lite, Model = model };
+        // A --prompt launch (the Parked tab's /unpark) carries that session's model: its own tab's, not the window's default.
+        var window = request.Prompt is null ? new MainWindow { Lite = request.Lite, Model = request.Model } : new MainWindow();
         MainWindow = window;
         window.Show();
-        if (directory is not null) window.Open(directory);
-    }
-
-    static (string? Directory, bool Lite, string? Model) Parse(string[] args)
-    {
-        string? directory = null, model = null;
-        var lite = false;
-        for (var i = 0; i < args.Length; i++)
-        {
-            switch (args[i])
-            {
-                case "--lite": lite = true; break;
-                case "--model" when i + 1 < args.Length: model = args[++i]; break;
-                default: directory = Path.GetFullPath(args[i]); break;
-            }
-        }
-        return (directory, lite, model);
+        window.Handle(request);
+        if (first) _ = Task.Run(() => SingleInstance.ServeAsync(r => Dispatcher.Invoke(() => window.Handle(r))));
     }
 
     /// <summary>AvalonEdit's syntax colours are chosen for white paper (navy keywords, dark green comments). Code blocks
