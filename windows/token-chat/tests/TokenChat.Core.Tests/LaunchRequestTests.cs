@@ -5,6 +5,16 @@ namespace TokenChat.Core.Tests;
 public class LaunchRequestTests
 {
     [Fact]
+    public void StandaloneIsAFlagAndNotADirectory()
+    {
+        var r = LaunchRequest.Parse(["--standalone"]);
+        Assert.True(r.Standalone);
+        Assert.Null(r.Directory);
+        Assert.Null(r.Preview);
+        Assert.False(LaunchRequest.Parse([]).Standalone);
+    }
+
+    [Fact]
     public void ParsesResumeWithAnAbsoluteDirectory()
     {
         var r = LaunchRequest.Parse(["--lite", "--resume", "9ec328d3", "--model", "haiku", "."]);

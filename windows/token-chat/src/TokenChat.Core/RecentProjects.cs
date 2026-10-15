@@ -35,7 +35,7 @@ public static class RecentProjects
         return byPath.Values.OrderByDescending(p => p.LastUsedUtc).Take(max).ToList();
     }
 
-    static string? Cwd(string transcript)
+    public static string? Cwd(string transcript)
     {
         try
         {

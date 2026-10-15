@@ -1,0 +1,2 @@
+{"type":"user","promptId":"3042fcbe-a477-453f-9b66-78071b59d5c5"}
+{"type":"assistant","isSidechain":false,"message":{"id":"msg_011CfarmKpmddKMeELx18UsD","usage":{"input_tokens":2,"cache_creation_input_tokens":10336,"cache_read_input_tokens":4914,"output_tokens":4}}}

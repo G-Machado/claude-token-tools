@@ -55,9 +55,17 @@ public sealed record AssistantEvent(string MessageId, string? Model, JsonArray C
 /// <summary>Tool results, interrupt markers, compact summaries and local command output.</summary>
 public sealed record UserEvent(JsonNode? Content, string? ParentToolUseId) : ClaudeEvent;
 
-/// <summary>End of a turn. Usage is the sum over the turn's requests; zero after an interrupt.</summary>
+/// <summary>One model's entry in result.modelUsage. Cumulative per claude.exe process, like total_cost_usd.</summary>
+public sealed record ModelUsage(TokenUsage Tokens, long ThinkingTokens, long WebSearchRequests, double CostUsd)
+{
+    public static ModelUsage operator -(ModelUsage a, ModelUsage b) => new(a.Tokens - b.Tokens,
+        a.ThinkingTokens - b.ThinkingTokens, a.WebSearchRequests - b.WebSearchRequests, a.CostUsd - b.CostUsd);
+}
+
+/// <summary>End of a turn. Usage is the sum over the turn's requests; zero after an interrupt.
+/// TotalCostUsd and ModelUsage are cumulative per process and also count side requests the stream never shows.</summary>
 public sealed record ResultEvent(string Subtype, bool IsError, string? Text, int NumTurns, TokenUsage Usage,
-    double TotalCostUsd, long DurationMs, string? TerminalReason) : ClaudeEvent;
+    double TotalCostUsd, long DurationMs, string? TerminalReason, IReadOnlyDictionary<string, ModelUsage> ModelUsage) : ClaudeEvent;
 
 public sealed record RateWindow(double Utilization, DateTimeOffset ResetsAt);
 

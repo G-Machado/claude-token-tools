@@ -95,7 +95,7 @@ public class TranscriptTests
         projector.Apply(new BlockStopEvent(0, null));
         var tool = Assert.Single(projector.Items.OfType<ToolUseItem>());
         Assert.False(tool.IsInterrupted);
-        projector.Apply(new ResultEvent("error_during_execution", true, null, 1, new TokenUsage(), 0, 10, null));
+        projector.Apply(new ResultEvent("error_during_execution", true, null, 1, new TokenUsage(), 0, 10, null, new Dictionary<string, ModelUsage>()));
         Assert.True(tool.IsInterrupted);
         var late = System.Text.Json.Nodes.JsonNode.Parse("""[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]""");
         projector.Apply(new UserEvent(late, null));
@@ -120,7 +120,7 @@ public class TranscriptTests
         Assert.Equal(QuestionState.Pending, projector.Items.OfType<QuestionItem>().Single().State);
 
         projector.Apply(new UserEvent(System.Text.Json.Nodes.JsonValue.Create("[Request interrupted by user]"), null));
-        projector.Apply(new ResultEvent("error_during_execution", true, null, 1, new TokenUsage(), 0, 10, "aborted_streaming"));
+        projector.Apply(new ResultEvent("error_during_execution", true, null, 1, new TokenUsage(), 0, 10, "aborted_streaming", new Dictionary<string, ModelUsage>()));
         Assert.Equal(PermissionState.Allowed, cards[1].State);
         Assert.Equal(QuestionState.Cancelled, projector.Items.OfType<QuestionItem>().Single().State);
         var turn = projector.Items.OfType<TurnItem>().Single();

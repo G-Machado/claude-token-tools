@@ -55,7 +55,7 @@ public static class EventParser
             case "result":
                 return new ResultEvent(sub ?? "", Json.Bool(o["is_error"]), Json.Str(o["result"]),
                     (int)Json.Long(o["num_turns"]), TokenUsage.From(o["usage"]), Json.Double(o["total_cost_usd"]),
-                    Json.Long(o["duration_ms"]), Json.Str(o["terminal_reason"]));
+                    Json.Long(o["duration_ms"]), Json.Str(o["terminal_reason"]), Models(o["modelUsage"]));
             case "rate_limit_event":
             {
                 var info = o["rate_limit_info"];
@@ -135,6 +135,12 @@ public static class EventParser
         return new PermissionRequest(requestId, tool, input, Json.Str(r["description"]), toolUseId,
             r["permission_suggestions"] as JsonArray);
     }
+
+    static IReadOnlyDictionary<string, ModelUsage> Models(JsonNode? n) => (n as JsonObject ?? []).ToDictionary(
+        kv => kv.Key, kv => new ModelUsage(
+            new TokenUsage(Json.Long(kv.Value?["inputTokens"]), Json.Long(kv.Value?["cacheCreationInputTokens"]),
+                Json.Long(kv.Value?["cacheReadInputTokens"]), Json.Long(kv.Value?["outputTokens"])),
+            Json.Long(kv.Value?["thinkingTokens"]), Json.Long(kv.Value?["webSearchRequests"]), Json.Double(kv.Value?["costUSD"])));
 
     static RateWindow? Window(JsonNode? w) => w is JsonObject
         ? new RateWindow(Json.Double(w["utilization"]), DateTimeOffset.FromUnixTimeSeconds(Json.Long(w["resetsAt"])))

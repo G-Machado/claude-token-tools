@@ -21,7 +21,7 @@ public class ReplyTextTests
     [Fact]
     public void DoneLineIsPlainWords()
     {
-        var turn = new TurnItem(new ResultEvent("success", false, null, 24, new TokenUsage(44, 76_156, 1_460_000, 15_100), 1.2, 218_300, null));
+        var turn = new TurnItem(new ResultEvent("success", false, null, 24, new TokenUsage(44, 76_156, 1_460_000, 15_100), 1.2, 218_300, null, new Dictionary<string, ModelUsage>()));
         Assert.Equal("done in 3m 38s · 24 steps · Claude wrote 15.1k tokens · re-read 1.46M from cache · added 76.2k · ≈$1.20", turn.Summary);
     }
 }

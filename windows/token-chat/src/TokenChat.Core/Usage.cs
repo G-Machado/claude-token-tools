@@ -43,6 +43,9 @@ public sealed class UsageLedger
 
     public UsageSnapshot Snapshot { get; private set; } = new(default, default, default, 0, 0, 0);
 
+    /// <summary>One message's usage as merged so far. Reader thread only, unlike <see cref="Snapshot"/>.</summary>
+    public TokenUsage Message(string messageId) => _messages.GetValueOrDefault(messageId);
+
     public void Apply(ClaudeEvent e)
     {
         switch (e)

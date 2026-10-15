@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using TokenChat.Core.Analytics;
 using TokenChat.Core.Protocol;
 
 namespace TokenChat.Core;
@@ -15,7 +16,7 @@ public sealed class ClaudeSession : IAsyncDisposable
     readonly Channel<ClaudeEvent> _events = Channel.CreateUnbounded<ClaudeEvent>(new UnboundedChannelOptions { SingleReader = true });
     readonly ConcurrentDictionary<string, TaskCompletionSource<ControlResponseEvent>> _pending = new();
     readonly ConcurrentDictionary<string, byte> _openPrompts = new(); // can_use_tool requests awaiting an answer
-    readonly UsageLedger _ledger = new();
+    readonly TurnRecorder _recorder = new();
     readonly SessionUsageFile? _usageFile;
     readonly CancellationTokenSource _cts = new();
     Task? _pump;
@@ -33,7 +34,9 @@ public sealed class ClaudeSession : IAsyncDisposable
     /// <summary>Single reader. Completes when the process exits, faulted if the pump failed.</summary>
     public ChannelReader<ClaudeEvent> Events => _events.Reader;
 
-    public UsageSnapshot Usage => _ledger.Snapshot;
+    public UsageSnapshot Usage => _recorder.Ledger.Snapshot;
+    /// <summary>One per result so far, for the Analytics tab; the list is swapped whole on each result.</summary>
+    public IReadOnlyList<TurnRecord> Turns => _recorder.Turns;
     public RateLimitEvent? RateLimit { get; private set; }
     public InitEvent? Init { get; private set; }
     /// <summary>initialize response: account, models, commands, agents, pid.</summary>
@@ -179,10 +182,11 @@ public sealed class ClaudeSession : IAsyncDisposable
 
     async ValueTask ObserveAsync(ClaudeEvent e)
     {
-        var requests = _ledger.Snapshot.Requests;
-        _ledger.Apply(e);
-        if (_ledger.Snapshot.Requests != requests && _usageFile is not null && Init is { } init)
-            _usageFile.Write(init.SessionId, init.Cwd, _ledger.Snapshot.Context, _ledger.Snapshot.Requests, DateTimeOffset.UtcNow);
+        var ledger = _recorder.Ledger;
+        var requests = ledger.Snapshot.Requests;
+        _recorder.Apply(e);
+        if (ledger.Snapshot.Requests != requests && _usageFile is not null && Init is { } init)
+            _usageFile.Write(init.SessionId, init.Cwd, ledger.Snapshot.Context, ledger.Snapshot.Requests, DateTimeOffset.UtcNow);
         switch (e)
         {
             case InitEvent i:

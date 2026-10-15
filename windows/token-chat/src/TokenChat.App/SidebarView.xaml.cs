@@ -57,7 +57,11 @@ public partial class SidebarView : UserControl
 
     static SidebarItem? ItemOf(object sender) => (sender as FrameworkElement)?.DataContext as SidebarItem;
 
+    /// <summary>The pinned analytics row: MainWindow swaps the chat for the analytics view.</summary>
+    public event Action? ShowAnalytics;
+
     void OnNew(object sender, RoutedEventArgs e) => NewSession?.Invoke();
+    void OnAnalytics(object sender, RoutedEventArgs e) => ShowAnalytics?.Invoke();
     void OnCloseRow(object sender, RoutedEventArgs e) { if (ItemOf(sender)?.Tab is { } tab) CloseSession?.Invoke(tab); }
 
     /// <summary>/park as a poke: the composer's text and attachments stay, and a session mid-turn says so.</summary>
