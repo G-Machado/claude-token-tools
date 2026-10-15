@@ -325,7 +325,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         switch (e)
         {
             case StatusEvent s: _activity = s.Status; break;
-            case ResultEvent: _activity = null; OfferHandoff(); break;
+            case ResultEvent: _activity = null; TurnEnded?.Invoke(); if (!HandedOff) OfferHandoff(); break;
         }
     }
 
@@ -334,6 +334,11 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     /// <summary>Per tab, from the model pill menu: "ask" (the card), "auto" (/handoff unasked) or "off". Not persisted;
     /// a new or resumed tab starts at ask.</summary>
     public string HandoffMode { get; set; } = "ask";
+
+    /// <summary>Its tab went to the session a /handoff opened: it finishes its turn out of sight, then goes.</summary>
+    public bool HandedOff { get; set; }
+    /// <summary>A turn's result has arrived; the handed-off session waits on this before it is disposed.</summary>
+    public event Action? TurnEnded;
 
     static readonly string AutoHandoffLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "token-auto-handoff.log");
 

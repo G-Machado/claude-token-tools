@@ -49,6 +49,14 @@ public partial class SessionView : UserControl
         if (_scroller is null || e.OriginalSource != _scroller) return; // markdown and text boxes scroll too
         if (e.ExtentHeightChange == 0) _stick = _scroller.VerticalOffset >= _scroller.ScrollableHeight - 4;
         else if (_stick) _scroller.ScrollToEnd();
+        ToBottom.Visibility = _stick ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    void OnToBottom(object sender, RoutedEventArgs e)
+    {
+        _stick = true;
+        _scroller?.ScrollToEnd();
+        ToBottom.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>Rows host their own scroll viewers, which swallow the wheel even with nothing to scroll.</summary>

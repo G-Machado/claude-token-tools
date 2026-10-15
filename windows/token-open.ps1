@@ -153,12 +153,13 @@ function Open-Session([string]$Sid, [string]$Cwd, [int]$ProcessId, [int]$Alive) 
 # Enter on the Parked tab: a new TokenChat tab in the checkpoint's folder whose
 # first message is the /unpark, on the model and effort it was parked on. Null
 # once launched, else the reason, so the caller can fall back to a terminal.
-function Open-Unpark([string]$Cwd, [string]$Prompt, [string]$Model, [string]$Effort) {
+function Open-Unpark([string]$Cwd, [string]$Prompt, [string]$Model, [string]$Effort, [string]$Replace) {
   $exe = Find-TokenChat
   if (-not $exe) { return 'TokenChat not found - build windows/token-chat or set TOKEN_CHAT_EXE' }
   $a = @()
   if ($Model) { $a += '--model', $Model }
   if ($Effort) { $a += '--effort', $Effort }
+  if ($Replace) { $a += '--replace', $Replace }   # a /handoff: the new session takes the old one's tab
   $a += '--prompt', ('"{0}"' -f $Prompt), ('"{0}"' -f ($Cwd -replace '\\$', '\\'))
   Start-Process -FilePath $exe -ArgumentList $a | Out-Null
   $null

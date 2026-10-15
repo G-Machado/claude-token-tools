@@ -27,6 +27,15 @@ public class LaunchRequestTests
     }
 
     [Fact]
+    public void ParsesAHandoffThatTakesOverTheOldTab()
+    {
+        var r = LaunchRequest.Parse(["--replace", "eb25c90a", "--prompt", "/unpark x --handoff", @"C:\work"]);
+        Assert.Equal("eb25c90a", r.Replace);
+        Assert.Equal(@"C:\work", r.Directory);
+        Assert.Null(r.Error);
+    }
+
+    [Fact]
     public void PromptWithoutADirectoryIsAnError() =>
         Assert.Contains("--prompt needs a directory", LaunchRequest.Parse(["--prompt", "/unpark"]).Error);
 

@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using TokenChat.Core;
+using TokenChat.Core.Transcript;
 
 namespace TokenChat.App;
 
@@ -105,6 +106,12 @@ public partial class MainWindow : Window
             Select(open);
             return null;
         }
+        if (r.Replace is { } old && r.Directory is { } dir
+            && _tabs.FirstOrDefault(t => string.Equals(t.SessionId, old, StringComparison.OrdinalIgnoreCase)) is { } prev)
+        {
+            HandOver(prev, Create(dir, null, false, r.Model, r.Effort, r.Prompt));
+            return null;
+        }
         if (r.Preview is { } fixtures)
             foreach (var fixture in fixtures)
                 Show(new SessionTab(new LaunchOptions { WorkingDirectory = Path.GetDirectoryName(fixture)! },
@@ -136,14 +143,47 @@ public partial class MainWindow : Window
     }
 
     void Open(string directory, string? resume, bool lite, string? model, string? effort, string? prompt) =>
-        Show(new SessionTab(new LaunchOptions
+        Show(Create(directory, resume, lite, model, effort, prompt));
+
+    SessionTab Create(string directory, string? resume, bool lite, string? model, string? effort, string? prompt) =>
+        new(new LaunchOptions
         {
             WorkingDirectory = directory,
             Profile = lite || Side.LiteBox.IsChecked == true ? Profile.Lite : Profile.Full,
             Model = model ?? Model,
             Effort = effort,
             ResumeSessionId = resume,
-        }, prompt));
+        }, prompt);
+
+    /// <summary>A /handoff's new session takes the old one's tab: the old transcript folds above it, earlier hand-offs
+    /// stay folds of their own. The old session finishes its /handoff turn out of sight (its --block and reply), then
+    /// goes; one that has not ended its turn in 2 minutes is closed anyway.</summary>
+    void HandOver(SessionTab prev, SessionTab tab)
+    {
+        while (prev.Items.Count > 0 && prev.Items[0] is SegmentItem earlier)
+        {
+            prev.Items.RemoveAt(0);
+            tab.Items.Add(earlier);
+        }
+        var segment = new SegmentItem(prev.SessionId ?? "unknown", prev.Items);
+        tab.Items.Add(segment);
+        prev.HandedOff = true;
+        _tabs[_tabs.IndexOf(prev)] = tab;
+        Select(tab);
+        _ = tab.StartAsync();
+        Retire(prev, segment);
+    }
+
+    async void Retire(SessionTab prev, SegmentItem segment)
+    {
+        var ended = new TaskCompletionSource();
+        prev.TurnEnded += () => ended.TrySetResult();
+        var done = prev.State != "working"
+            || await Task.WhenAny(ended.Task, Task.Delay(TimeSpan.FromMinutes(2))) == ended.Task;
+        prev.StopRendering();
+        await prev.DisposeAsync();
+        segment.State = done ? "ended" : "cut short after 2 min";
+    }
 
     /// <summary>After the last session of its project, else at the end.</summary>
     void Show(SessionTab tab)

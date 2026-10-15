@@ -21,9 +21,9 @@ if (-not (Test-Path $Cwd)) { Log "no dir $Cwd - abort"; Write-Output "no dir $Cw
 # (Open-Unpark): a running instance takes it as a new tab. The terminal is only
 # the fallback for a machine with no TokenChat build to find.
 . (Join-Path $cl 'token-open.ps1')
-$why = Open-Unpark $Cwd "/unpark $Topic --handoff" $Model $Effort
+$why = Open-Unpark $Cwd "/unpark $Topic --handoff" $Model $Effort $OldSid
 if ($null -eq $why) {
-  $where = 'a new TokenChat tab'
+  $where = if ($OldSid) { 'the old session''s TokenChat tab' } else { 'a new TokenChat tab' }
 } else {
   $flags = ''
   if ($Model)  { $flags += " --model $Model" }
@@ -45,4 +45,4 @@ if ($OldSid) {
   $out = & $bash (Join-Path $cl 'token-sessions.sh') --extend $OldSid 0 2>&1
   Log ("old session {0} --extend 0 exit={1} {2}" -f $OldSid, $LASTEXITCODE, (($out | Out-String).Trim() -replace "`r?`n", ' | '))
 }
-Write-Output "opened ${where}: /unpark $Topic in $Cwd - close the old one"
+Write-Output "opened ${where}: /unpark $Topic in $Cwd$(if ($OldSid) { ' - a TokenChat tab holding the old session is taken over; anywhere else, close it' } else { ' - close the old one' })"

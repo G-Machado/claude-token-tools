@@ -41,5 +41,6 @@ window something.
 
 ## 4. Reply
 
-One line: the checkpoint file, that the new window is running `/unpark <slug> --handoff`, and that this
-one is read-only now - close it, or `u` in the widget to consult it.
+One line: the checkpoint file, that the new session is running `/unpark <slug> --handoff`, and that this
+one is read-only now. In TokenChat the new session takes this tab over and folds this transcript above it, and this
+session closes once the turn ends: nothing to close. In a terminal: close it, or `u` in the widget to consult it.

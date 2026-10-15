@@ -244,6 +244,22 @@ public sealed class CardItem(string kind, string title, string text, IReadOnlyLi
     public bool IsOpen => Outcome is null;
 }
 
+/// <summary>A handed-off session's transcript, folded above the session that took its tab over. Items is the old tab's
+/// own collection, so the lines its /handoff turn still writes land here. Read only: its cards would act on the new
+/// session. The model of the new session sees none of it, only the checkpoint.</summary>
+public sealed class SegmentItem(string sessionId, ObservableCollection<TranscriptItem> items) : TranscriptItem
+{
+    bool _isExpanded;
+    string _state = "finishing its turn";
+
+    public string SessionId { get; } = sessionId;
+    public ObservableCollection<TranscriptItem> Items { get; } = items;
+    public bool IsExpanded { get => _isExpanded; set => Set(ref _isExpanded, value); }
+    /// <summary>finishing its turn, ended, or cut short (it never reached the end of its turn).</summary>
+    public string State { get => _state; set { if (Set(ref _state, value)) Notify(nameof(Header)); } }
+    public string Header => $"handed off · {SessionId[..Math.Min(8, SessionId.Length)]} · {State}";
+}
+
 public enum NoteKind { Info, Warning, Error, Command, Compact }
 
 public sealed class NoteItem(NoteKind kind, string text, string? detail = null) : TranscriptItem

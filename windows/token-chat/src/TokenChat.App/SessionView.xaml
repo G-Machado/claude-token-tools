@@ -532,6 +532,22 @@
             </DataTemplate.Triggers>
         </DataTemplate>
 
+        <!-- a handed-off session, folded; read only, its cards would act on this tab's session -->
+        <DataTemplate DataType="{x:Type t:SegmentItem}">
+            <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Margin="0,2,0,8" Padding="0,0,0,6">
+                <Expander IsExpanded="{Binding IsExpanded}">
+                    <Expander.Header>
+                        <TextBlock Text="{Binding Header}" Style="{StaticResource Small}"/>
+                    </Expander.Header>
+                    <StackPanel Margin="0,6,0,0">
+                        <TextBlock Text="this session's model sees none of this, only the checkpoint" Style="{StaticResource Meta}"
+                                   Margin="0,0,0,6"/>
+                        <ItemsControl ItemsSource="{Binding Items}" Focusable="False" IsHitTestVisible="False" Opacity="0.8"/>
+                    </StackPanel>
+                </Expander>
+            </Border>
+        </DataTemplate>
+
         <DataTemplate DataType="{x:Type t:NoteItem}">
             <Grid Margin="0,3">
                 <Expander x:Name="WithDetail">
@@ -614,6 +630,26 @@
                 </Style>
             </ItemsControl.ItemContainerStyle>
         </ItemsControl>
+
+        <!-- shown while the view is scrolled up from the bottom: back down, following new output again -->
+        <Button x:Name="ToBottom" Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,28,10"
+                Visibility="Collapsed" Cursor="Hand" ToolTip="jump to the bottom" Click="OnToBottom" Focusable="False">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Disc" Width="30" Height="30" CornerRadius="15" BorderThickness="1"
+                            Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}">
+                        <TextBlock x:Name="Glyph" Text="↓" FontSize="14" Foreground="{StaticResource Dim}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Disc" Property="BorderBrush" Value="{StaticResource Blue}"/>
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Blue}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
 
         <!-- messages sent while a turn runs: they go out together when it ends; stop hands them back to the input -->
         <ItemsControl Grid.Row="1" ItemsSource="{Binding Queued}" Margin="14,4,14,0" Focusable="False">

@@ -1,11 +1,12 @@
 namespace TokenChat.Core;
 
-/// <summary>TokenChat.App [--lite] [--model name] [--effort level] [--resume sid] [--prompt text] [--preview fixture.jsonl]...
+/// <summary>TokenChat.App [--lite] [--model name] [--effort level] [--resume sid] [--prompt text] [--replace sid] [--preview fixture.jsonl]...
 /// [directory]. Parsed in whichever instance was launched; a second instance hands it to the running one as JSON over the
 /// pipe, so Directory is already absolute. Prompt is the new tab's first message, sent once claude is up (the Parked tab's
-/// /unpark). Preview is a dev mode: a tab per fixture replaying recorded stdout, no claude process, in a window of its own.</summary>
+/// /unpark). Replace is a /handoff's old session: the new tab takes the slot of the tab holding it and carries its transcript
+/// folded above the new one. Preview is a dev mode: a tab per fixture replaying recorded stdout, no claude process, in a window of its own.</summary>
 public sealed record LaunchRequest(string? Directory, bool Lite = false, string? Model = null, string? ResumeSessionId = null,
-    string? Effort = null, string? Prompt = null, IReadOnlyList<string>? Preview = null, PokeRequest? Poke = null)
+    string? Effort = null, string? Prompt = null, IReadOnlyList<string>? Preview = null, PokeRequest? Poke = null, string? Replace = null)
 {
     /// <summary>Why the request cannot be carried out, or null. A resume needs the session's directory: claude looks the
     /// transcript up under the project folder of its working directory.</summary>
@@ -16,7 +17,7 @@ public sealed record LaunchRequest(string? Directory, bool Lite = false, string?
 
     public static LaunchRequest Parse(IReadOnlyList<string> args)
     {
-        string? directory = null, model = null, resume = null, effort = null, prompt = null;
+        string? directory = null, model = null, resume = null, effort = null, prompt = null, replace = null;
         List<string>? preview = null;
         var lite = false;
         for (var i = 0; i < args.Count; i++)
@@ -28,11 +29,12 @@ public sealed record LaunchRequest(string? Directory, bool Lite = false, string?
                 case "--effort" when i + 1 < args.Count: effort = args[++i]; break;
                 case "--resume" when i + 1 < args.Count: resume = args[++i]; break;
                 case "--prompt" when i + 1 < args.Count: prompt = args[++i]; break;
+                case "--replace" when i + 1 < args.Count: replace = args[++i]; break;
                 case "--preview" when i + 1 < args.Count: (preview ??= []).Add(Path.GetFullPath(args[++i])); break;
                 default: directory = Path.GetFullPath(args[i]); break;
             }
         }
-        return new LaunchRequest(directory, lite, model, resume, effort, prompt, preview);
+        return new LaunchRequest(directory, lite, model, resume, effort, prompt, preview, Replace: replace);
     }
 }
 
