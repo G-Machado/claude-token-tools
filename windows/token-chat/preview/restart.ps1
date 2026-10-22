@@ -17,6 +17,11 @@ $sessions = @(Get-CimInstance Win32_Process -Filter "Name='claude.exe' AND Paren
   }
 })
 if ($sessions.Count -eq 0) { Log 'no sessions found under TokenChat - nothing restarted'; exit 1 }
+# a session another one took over by /handoff (tokenchat-handoffs.tsv, written by the app) may still be finishing its
+# turn out of sight; it comes back as a fold of its successor, not as a tab of its own
+$chain = Join-Path $env:USERPROFILE '.claude\tokenchat-handoffs.tsv'
+$handed = if (Test-Path $chain) { @(Get-Content $chain | ForEach-Object { ($_ -split "`t")[1] -split ',' }) } else { @() }
+$sessions = @($sessions | Where-Object { $handed -notcontains $_.sid })
 foreach ($s in $sessions) { Log ("session $($s.sid) $($s.cwd)" + $(if (-not $s.transcript) { ' (no transcript yet - not resumed)' })) }
 
 # idle: the transcript quiet for 20 s and its last turn closed by the stop hooks; a tab with no

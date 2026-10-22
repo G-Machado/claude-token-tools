@@ -162,8 +162,9 @@ public partial class MainWindow : Window
     void Open(string directory, string? resume, bool lite, string? model, string? effort, string? prompt) =>
         Show(Create(directory, resume, lite, model, effort, prompt));
 
-    SessionTab Create(string directory, string? resume, bool lite, string? model, string? effort, string? prompt) =>
-        new(new LaunchOptions
+    SessionTab Create(string directory, string? resume, bool lite, string? model, string? effort, string? prompt)
+    {
+        var tab = new SessionTab(new LaunchOptions
         {
             WorkingDirectory = directory,
             Profile = lite || Side.LiteBox.IsChecked == true ? Profile.Lite : Profile.Full,
@@ -171,6 +172,16 @@ public partial class MainWindow : Window
             Effort = effort,
             ResumeSessionId = resume,
         }, prompt);
+        // a resumed session that took others over by /handoff gets their folds back, empty like its own history
+        if (resume is not null)
+        {
+            var olds = HandoffChain.Olds(HandoffChain.DefaultPath, resume);
+            for (var i = 0; i < olds.Count; i++)
+                tab.Items.Insert(i, new SegmentItem(olds[i],
+                    [new NoteItem(NoteKind.Info, "Resumed after a restart", "its turns are in the session but not shown here")]) { State = "ended" });
+        }
+        return tab;
+    }
 
     /// <summary>A /handoff's new session takes the old one's tab: the old transcript folds above it, earlier hand-offs
     /// stay folds of their own. The old session finishes its /handoff turn out of sight (its --block and reply), then
@@ -189,6 +200,14 @@ public partial class MainWindow : Window
         Select(tab);
         _ = tab.StartAsync();
         Retire(prev, segment);
+        // recorded once the new session has an id, which init brings before its first turn ends
+        var olds = tab.Items.OfType<SegmentItem>().Select(s => s.SessionId).Where(s => s != "unknown").ToList();
+        void Record()
+        {
+            tab.TurnEnded -= Record;
+            if (tab.SessionId is { } sid) HandoffChain.Record(HandoffChain.DefaultPath, sid, olds);
+        }
+        tab.TurnEnded += Record;
     }
 
     async void Retire(SessionTab prev, SegmentItem segment)
