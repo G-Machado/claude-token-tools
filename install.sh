@@ -91,6 +91,10 @@ One manual step left: the hooks and the status line.
 
 Merge this into ~/.claude/settings.json (keep any keys you already have):
 
+  "permissions": {
+    "deny": [ "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.claude/.credentials.json)",
+              "Read(**/.env)", "Read(**/.env.*)", "Read(**/*.pem)" ]
+  },
   "statusLine": {
     "type": "command",
     "command": "bash \"$HOME/.claude/token-cycles.sh\" --status"
@@ -107,11 +111,19 @@ Merge this into ~/.claude/settings.json (keep any keys you already have):
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
-          "command": "bash \"$HOME/.claude/token-cycles.sh\" --alert" } ] }
+          "command": "bash \"$HOME/.claude/token-cycles.sh\" --alert" } ] },
+      { "hooks": [ { "type": "command", "shell": "bash", "timeout": 240,
+          "command": "node \"$HOME/.claude/token-cs-gate.js\"" } ] }
     ],
     "PreToolUse": [
       { "matcher": "Read", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
-          "command": "node \"$HOME/.claude/token-readguard.js\"" } ] }
+          "command": "node \"$HOME/.claude/token-readguard.js\"" } ] },
+      { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
+          "command": "node \"$HOME/.claude/token-guard.js\"" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
+          "command": "node \"$HOME/.claude/token-cycle-nudge.js\"" } ] }
     ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "shell": "bash", "timeout": 10,
@@ -123,6 +135,10 @@ Merge this into ~/.claude/settings.json (keep any keys you already have):
           "command": "bash \"$HOME/.claude/token-warm-hint.sh\"" },
         { "type": "command", "shell": "bash", "timeout": 10,
           "command": "node \"$HOME/.claude/token-compact-reinject.js\"" } ] }
+    ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "shell": "bash", "timeout": 15,
+          "command": "node \"$HOME/.claude/token-precompact-park.js\"" } ] }
     ]
   }
 
