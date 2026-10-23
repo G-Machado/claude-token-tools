@@ -32,21 +32,37 @@ process.stdin.on('data', d => inp += d).on('end', () => {
       }
     } catch {}
   }
-  if (!file) { log(`${sid} MISS no checkpoint for this session`); return; }
+  // token-precompact-park.js supplement: checkpoints/autopark/, stamped autopark=<sid>, appended after the real
+  // checkpoint - only when newer than it; an older one describes a state the real checkpoint has replaced.
+  let auto = null;
+  try {
+    const ad = path.join(dir, 'autopark');
+    for (const f of fs.readdirSync(ad).filter(f => f.endsWith('.md'))) {
+      if (sid && fs.readFileSync(path.join(ad, f), 'utf8').slice(0, 200).includes('autopark=' + sid)) { auto = path.join(ad, f); break; }
+    }
+    if (auto && file && fs.statSync(auto).mtimeMs <= fs.statSync(file).mtimeMs) { log(`${sid} STALE ${path.basename(auto)} older than ${path.basename(file)}`); auto = null; }
+  } catch {}
+  if (!file && !auto) { log(`${sid} MISS no checkpoint for this session`); return; }
 
-  const txt = fs.readFileSync(file, 'utf8');
   const want = /^## (Next|Goal|Facts|Decided|Verified)/;
-  const out = []; let on = false;
-  for (const line of txt.split(/\r?\n/)) {
-    if (line.startsWith('## ')) on = want.test(line);
-    if (on) out.push(line);
+  const out = [], names = [];
+  for (const fp of [file, auto].filter(Boolean)) {
+    const got = []; let on = false;
+    for (const line of fs.readFileSync(fp, 'utf8').split(/\r?\n/)) {
+      if (line.startsWith('## ')) on = want.test(line);
+      if (on) got.push(line);
+    }
+    if (!got.length) { log(`${sid} EMPTY ${path.basename(fp)} has no Next/Goal/Facts/Decided/Verified`); continue; }
+    names.push(path.basename(fp));
+    if (out.length) out.push('', `(supplement: ${path.basename(fp)} - mechanical, assumed)`, '');
+    out.push(...got);
   }
-  if (!out.length) { log(`${sid} EMPTY ${path.basename(file)} has no Next/Goal/Facts/Decided/Verified`); return; }
-  log(`${sid} OK ${how} ${path.basename(file)} ${out.length} lines`);
-  const ctx = `[post-compact] Standing rules from checkpoint ${path.basename(file)} ` +
+  if (!out.length) return;
+  log(`${sid} OK ${file ? how : 'autopark'} ${names.join('+')} ${out.length} lines`);
+  const ctx = `[post-compact] Standing rules from checkpoint ${names.join(' + ')} ` +
     `(compaction may have dropped these; treat Decided as settled):\n\n` + out.join('\n');
   process.stdout.write(JSON.stringify({
-    systemMessage: `post-compact: re-injected ${path.basename(file)} (${out.length} lines)`,
+    systemMessage: `post-compact: re-injected ${names.join(' + ')} (${out.length} lines)`,
     hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx }
   }));
 });
