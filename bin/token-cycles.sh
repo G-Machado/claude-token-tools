@@ -150,7 +150,7 @@ if [ "$MODE" = "alert" ] || [ "$MODE" = "stats" ] || [ "$MODE" = "retune" ]; the
   # --stats uses the same number so its rates describe the hook as it actually
   # runs, rather than a tier the hook never applies.
   BUDGET="${TOKEN_ALERT_BUDGET:-20000}"
-  GROWTH="${TOKEN_ALERT_GROWTH:-40000}"   # raised from 25k with the display scale
+  GROWTH="${TOKEN_ALERT_GROWTH:-25000}"   # 2026-10-23: 40k -> 25k, back to the feature growth budget (retune: 17% of cycles)
 else
   BUDGET="${TOKEN_BUDGET:-$(resolve_budget "$ARG")}"
   GROWTH="${TOKEN_GROWTH_BUDGET:-$(resolve_growth "$ARG")}"
@@ -166,11 +166,13 @@ RESTART="${TOKEN_RESTART_THRESHOLD:-60000}"
 # restart still pays with only 3 cycles left. The old 100k/140k came from the raw
 # unweighted model on a minimum-not-median floor and were 2-3x too low - 100k was
 # firing on 31% of cycles, well outside the 5-25% band.
-CTXWARN="${TOKEN_CONTEXT_WARN:-150000}"
+CTXWARN="${TOKEN_CONTEXT_WARN:-235000}"
 # 2026-09-23: 200k -> 150k. Re-derived with 5.9 measured full-window reads per
 # cycle and 3 cycles remaining (median): the cut bar is ~150k (token-sessions.sh
 # cut_no 153k). The alert fires on the crossing only, so the rescored per-cycle
 # rate in --stats rises but the number of messages does not.
+# 2026-10-23: 150k -> 235k. Same derivation with cache reads at 0.05x (Opus 5.5):
+# the cut bar moved to ~235k (CLAUDE.md), so the warning follows it.
 
 # Statusline park hint. Not an alert band - it is the one signal that reaches
 # the user BEFORE they step away, which is the only moment the gap cost is
@@ -1172,14 +1174,22 @@ if [ "$MODE" = "alert" ] && [ -f "$HIST" ] && [ -f "$F" ]; then
   _row=$(tail -1 "$HIST" 2>/dev/null)
   case "$_row" in
     *",$_sid,"*)
+      _cy=$(printf '%s' "$_row" | cut -d, -f3)
       _fl=$(printf '%s' "$_row" | cut -d, -f7)
       _hd=$(printf '%s' "$_row" | cut -d, -f8)
       case "$_fl" in *o*)
         if [ -z "$_hd" ]; then
-          # Last human turn: a user record whose content is a plain string,
-          # not a tool_result array.
-          _p=$(grep '"type":"user"' "$F" 2>/dev/null | grep -v '"tool_result"' | grep -v '"isMeta":true' | tail -1 \
-               | sed -n 's/.*"content":"\(\([^"\]\|\.\)*\)".*/\1/p' | sed 's/\n.*//' | cut -c1-160)
+          # The prompt that opened this row's cycle: first plain-string user
+          # record of the _cy-th promptId run (same boundary rule as the main
+          # pass), not the last user record, which can be a later injection.
+          # The string is JSON-escaped, so the match must step over \" and \n;
+          # slash commands become "/name args"; cut at the first escaped newline.
+          _p=$(grep '"type":"user"' "$F" 2>/dev/null | awk -v want="$_cy" '
+                 match($0, /"promptId":"[a-f0-9-]+"/) { pid = substr($0, RSTART, RLENGTH); if (pid != last) { cy++; last = pid } }
+                 cy == want && !/"tool_result"/ && !/"isMeta":true/ && /"content":"/ { print; exit }' \
+               | sed -n 's/.*"content":"\(\([^"\\]\|\\.\)*\)".*/\1/p' \
+               | sed 's/.*<command-name>\([^<]*\)<\/command-name>\(\\n\)*\(<command-args>\([^<]*\)<\/command-args>\)\{0,1\}.*/\1 \4/' \
+               | sed 's/\\[rn].*//' | cut -c1-160)
           printf '%s\t%s\n' "$(printf '%s' "$_row" | cut -d, -f1-4)" "${_p:-<prompt not found>}" \
             >> "$HOME/.claude/token-breach-prompts.log" 2>/dev/null || true
         fi ;;
