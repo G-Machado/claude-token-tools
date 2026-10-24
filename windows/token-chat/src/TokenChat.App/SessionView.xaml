@@ -66,6 +66,47 @@
             </Border>
         </DataTemplate>
 
+        <!-- A reply's Done and Basis, cut from its markdown into folds under it: a header with its count ("3/4" ticked,
+             "3 refs"), then Done's checkboxes or Basis's list. Done lands open, Basis folded. -->
+        <DataTemplate DataType="{x:Type t:ReplySection}">
+            <StackPanel Margin="0,0,0,2">
+                <Button Style="{StaticResource QuestionFold}" Click="OnFoldQuestion">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="Chevron" Text="&#xE76C;" FontFamily="{StaticResource Icons}" FontSize="10" Width="14"
+                                   Foreground="{StaticResource Dim}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding Name, Mode=OneTime}" FontSize="12.5" FontWeight="SemiBold" Foreground="{StaticResource Dim}"/>
+                        <TextBlock Text="{Binding Count, Mode=OneWay}" Style="{StaticResource Meta}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <local:Reveal IsOpen="{Binding IsExpanded}">
+                    <StackPanel Margin="14,2,0,4">
+                        <ItemsControl x:Name="Checks" ItemsSource="{Binding Items, Mode=OneTime}" Focusable="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type t:CheckItem}">
+                                    <CheckBox Style="{StaticResource Tick}" IsChecked="{Binding IsChecked}">
+                                        <TextBlock local:InlineText.Markdown="{Binding Text, Mode=OneTime}" TextWrapping="Wrap"/>
+                                    </CheckBox>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <md:MarkdownScrollViewer x:Name="Refs" Markdown="{Binding Markdown, Mode=OneTime}" MarkdownStyle="{StaticResource Markdown}"
+                                                 VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"/>
+                    </StackPanel>
+                </local:Reveal>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                    <Setter TargetName="Chevron" Property="Text" Value="&#xE70D;"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsChecklist, Mode=OneTime}" Value="True">
+                    <Setter TargetName="Refs" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsChecklist, Mode=OneTime}" Value="False">
+                    <Setter TargetName="Checks" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
         <!-- A reply ending in ▶ asks gets a bar under it: each ask numbered, folding open on its options as
              chips and a box to type an answer instead, and a send that types "1 yes, 2 skip" for you. The ▶
              lines are cut from the markdown, so once anything is sent the bar stays, dimmed and folded to one
@@ -74,6 +115,10 @@
             <StackPanel>
                 <md:MarkdownScrollViewer Markdown="{Binding Body}" MarkdownStyle="{StaticResource Markdown}" Margin="0,4,0,2"
                                          VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"/>
+                <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+                    <ContentControl Content="{Binding Sections.Done}" Focusable="False"/>
+                    <ContentControl Content="{Binding Sections.Basis}" Focusable="False"/>
+                </StackPanel>
                 <!-- the card's yellow edge: this ground showing past the inner border's 3px left margin -->
                 <Border x:Name="OpenBar" DataContext="{Binding Open}" Background="{StaticResource Yellow}" CornerRadius="6,12,12,6"
                         Margin="0,2,0,6" MaxWidth="760" HorizontalAlignment="Left">
@@ -659,6 +704,8 @@
                             Padding="9,2,2,2" Margin="80,0,0,4" HorizontalAlignment="Right">
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Style="{StaticResource GlyphClose}" Content="✕" ToolTip="drop it" Click="OnUnqueue"/>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource GlyphClose}" Content="↳" Click="OnInject"
+                                    ToolTip="send now, into the running turn - claude reads it at its next tool result, no interrupt"/>
                             <TextBlock DockPanel.Dock="Left" Text="queued" Style="{StaticResource Meta}" Foreground="{StaticResource Blue}"
                                        Margin="0,2,8,0"/>
                             <TextBlock Text="{Binding Preview, Mode=OneTime}" Foreground="{StaticResource Dim}" FontSize="12"
@@ -688,6 +735,7 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -695,10 +743,10 @@
                     <RowDefinition/>
                 </Grid.RowDefinitions>
                 <!-- voice-nav's live preview while dictating: dim, because the final pass is what lands in the box -->
-                <TextBlock x:Name="VoicePreview" Grid.Row="1" Grid.ColumnSpan="4" Margin="0,0,0,4" Visibility="Collapsed"
+                <TextBlock x:Name="VoicePreview" Grid.Row="1" Grid.ColumnSpan="5" Margin="0,0,0,4" Visibility="Collapsed"
                            Foreground="{StaticResource Dim}" FontStyle="Italic" TextWrapping="Wrap"/>
                 <!-- attachments: a chip each with its token estimate, and the total; they go out with the next send -->
-                <DockPanel Grid.ColumnSpan="4" Margin="0,0,0,6">
+                <DockPanel Grid.ColumnSpan="5" Margin="0,0,0,6">
                     <DockPanel.Style>
                         <Style TargetType="DockPanel">
                             <Style.Triggers>
@@ -752,7 +800,11 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                <Button Grid.Row="2" Grid.Column="3" Margin="8,0,0,0" VerticalAlignment="Bottom" IsEnabled="{Binding IsReady}" Click="OnSend">
+                <!-- the input asked in a throwaway fork: answered here at cache-read price, never in this session's window -->
+                <Button Grid.Row="2" Grid.Column="3" Content="aside" Foreground="{StaticResource Dim}" Margin="8,0,0,0" VerticalAlignment="Bottom"
+                        IsEnabled="{Binding IsReady}" Focusable="False" Click="OnAside"
+                        ToolTip="Ask in a throwaway fork: the answer shows here, this session never sees it (cache read only)"/>
+                <Button Grid.Row="2" Grid.Column="4" Margin="8,0,0,0" VerticalAlignment="Bottom" IsEnabled="{Binding IsReady}" Click="OnSend">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource Primary}">
                             <Setter Property="Content" Value="send"/>

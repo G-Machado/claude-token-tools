@@ -110,7 +110,7 @@ public partial class MainWindow : Window
     public string? Handle(LaunchRequest r)
     {
         if (r.Poke is { } poke)
-            return _tabs.FirstOrDefault(t => t.SessionId == poke.SessionId) is { } tab ? tab.Poke(poke.Text) : "no-tab";
+            return _tabs.FirstOrDefault(t => t.SessionId == poke.SessionId) is { } tab ? tab.PokeMark(poke.Text) : "no-tab";
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();
         if (r.Error is { } error)

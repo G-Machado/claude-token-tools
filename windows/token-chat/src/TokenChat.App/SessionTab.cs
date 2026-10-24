@@ -41,6 +41,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     string? _activity;
     string _status = "starting claude…";
     string _state = "starting";
+    bool _waiting;
     string _mode = "";
     bool _isReady, _exitNoted, _disposed;
     volatile bool _readerDone;
@@ -63,6 +64,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         // the cache clock runs down between collects
         _clock = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) => UpdateStatus(), Dispatcher.CurrentDispatcher);
         Feed.Value.Changed += OnFeed;
+        DelegateReports.Landed += OnDelegateReport;
         // The stream starts at the next turn; claude has the history, this tab does not.
         if (options.ResumeSessionId is { } sid)
             Transcript.AddNote(NoteKind.Info, $"Resumed {sid[..Math.Min(8, sid.Length)]}", "earlier turns are in the session but not shown here");
@@ -79,7 +81,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     public string ProjectKey { get; }
     /// <summary>The stripe on the tab's top edge.</summary>
     public Brush ProjectBrush { get; }
-    public TranscriptProjector Transcript { get; } = new() { ReadFile = ReadFileOrNull };
+    public TranscriptProjector Transcript { get; } = new() { ReadFile = ReadFileOrNull, TicksPath = TickStore.DefaultPath };
     public ObservableCollection<TranscriptItem> Items => Transcript.Items;
     public string Status { get => _status; private set => Set(ref _status, value); }
     /// <summary>This session's row from the widget's collect; null until the widget has listed it.</summary>
@@ -87,6 +89,9 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     public bool IsReady { get => _isReady; private set => Set(ref _isReady, value); }
     /// <summary>starting, idle, working or exited: the colour of the tab's dot.</summary>
     public string State { get => _state; private set => Set(ref _state, value); }
+    /// <summary>Claude waits on the user (<see cref="TranscriptProjector.AwaitsAnswer"/>): the sidebar's yellow row.
+    /// Beside State, not in it, since a pending card can sit inside a turn that is still working.</summary>
+    public bool Waiting { get => _waiting; private set => Set(ref _waiting, value); }
     /// <summary>The permission mode as the footer shows it.</summary>
     public string Mode { get => _mode; private set => Set(ref _mode, value); }
 
@@ -123,6 +128,10 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
 
     /// <summary>Files dropped or pasted into the input, going out with the next message.</summary>
     public ObservableCollection<Attachment> Attachments { get; } = [];
+
+    /// <summary>What the composer held when the window last showed another tab; the view puts it back.</summary>
+    public string Draft { get; set; } = "";
+    public int DraftCaret { get; set; }
 
     /// <summary>"3 files ≈ 7.2k tokens" over the chips; empty with none.</summary>
     public string AttachmentsTotal => Attachments.Count == 0 ? ""
@@ -162,6 +171,44 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         return "ok";
     }
 
+    /// <summary>The aside button: the question goes to a throwaway fork (<see cref="Aside"/>), so the answer shows here
+    /// while this session's window, queue and turn stay untouched. Works mid-turn too: the fork reads the transcript.</summary>
+    public async Task AsideAsync(string question)
+    {
+        if (_session is not { Init: { } init }) { Transcript.AddNote(NoteKind.Warning, "aside: the session has not started yet"); return; }
+        Transcript.AddNote(NoteKind.Info, "aside: " + question);
+        var r = await Aside.AskAsync(Options, init, question);
+        if (r.Error is { } error) { Transcript.AddNote(NoteKind.Error, "aside failed", error); return; }
+        Transcript.AddAside(r.Text);
+        Transcript.AddNote(NoteKind.Info, $"aside · ${r.CostUsd:0.000} · cache read {r.CacheRead / 1000.0:0.#}k, written {r.CacheWrite / 1000.0:0.#}k" +
+                                          " · forked and discarded, not in this session's context");
+    }
+
+    /// <summary>A mark from token-sessions --poke-due. An open question or permission card holds the turn with no request
+    /// going out, so "busy" there let the cache lapse behind it. Decline the cards instead: claude's reply to the decline
+    /// is the renewal, so a renew mark ends there ("ok"); a /park stays "busy" and goes once the window is due again.</summary>
+    public string PokeMark(string text)
+    {
+        var said = Poke(text);
+        if (said != "busy" || _session is not { } s || Transcript.PendingPrompts is not { Count: > 0 } open) return said;
+        const string away = "The user is away: a cache keep-alive closed this unanswered. Don't act on an assumed answer - " +
+                            "end your reply by restating the question in one short line, then stop.";
+        foreach (var card in open)
+        {
+            if (card is QuestionItem q) { q.State = QuestionState.Declined; _ = DenyQuietlyAsync(s, q.Request.RequestId); }
+            else if (card is PermissionItem p) { p.State = PermissionState.Denied; _ = DenyQuietlyAsync(s, p.Request.RequestId); }
+        }
+        Transcript.AddNote(NoteKind.Info, $"Keep-alive mark: closed {open.Count} open question(s) so the cache renews - answer again when you're back.");
+        UpdateStatus();
+        return text.StartsWith('/') ? "busy" : "ok";
+
+        async Task DenyQuietlyAsync(ClaudeSession session, string requestId)
+        {
+            try { await session.DenyAsync(requestId, away); }
+            catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "keep-alive decline failed", ex.Message); }
+        }
+    }
+
     /// <summary>A card's button. A block: lift it the way the widget's u does, then send the refused prompt again; or
     /// /park or /compact, which pass it. One button per card; a poke refused as busy leaves the card open.</summary>
     public async Task ActAsync(CardItem card, string key)
@@ -181,8 +228,14 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
                 if (said == "ok") card.Outcome = $"/{key} sent";
                 else Transcript.AddNote(NoteKind.Warning, said == "busy" ? $"mid-turn - /{key} once the turn ends" : "claude has exited");
                 break;
+            case "read" when card.Payload is { } report:
+                card.Outcome = "sent";
+                DelegateReport.Log("read", Path.GetFileNameWithoutExtension(report), SessionId, null);
+                await SendAsync($"Read the delegate report at {report} and summarise it: what changed, what is verified, how to merge.");
+                break;
             case "dismiss":
                 card.Outcome = "dismissed";
+                if (card.Kind == "delegate") DelegateReport.Log("dismiss", Path.GetFileNameWithoutExtension(card.Payload), SessionId, null);
                 break;
         }
     }
@@ -216,6 +269,17 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     public void Detach(Attachment a) => Attachments.Remove(a);
 
     public void Unqueue(QueuedMessage m) => Queued.Remove(m);
+
+    /// <summary>Sends a queued message into the running turn instead of after it; claude reads it at its next tool result.</summary>
+    public async Task InjectAsync(QueuedMessage m)
+    {
+        if (_session is not { } s || !Queued.Remove(m)) return;
+        if (s.AtCleanPoint) { await SendNowAsync(s, m); return; } // the turn ended meanwhile
+        Transcript.AddInjected(m.Text, m.Files.Select(f => f.Label).ToList());
+        try { await s.InjectAsync(m.Text, m.Files.Count == 0 ? null : Core.Attachments.Blocks(m.Text, m.Files)); }
+        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "send failed", ex.Message); }
+        UpdateStatus();
+    }
 
     public async Task InterruptAsync()
     {
@@ -275,7 +339,19 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         _render.Stop();
         _clock.Stop();
         Feed.Value.Changed -= OnFeed;
+        DelegateReports.Landed -= OnDelegateReport;
     }
+
+    /// <summary>A /delegate this session launched has written its report: a card, one per report.</summary>
+    void OnDelegateReport(DelegateReport r) => _clock.Dispatcher.BeginInvoke(() =>
+    {
+        if (_disposed || SessionId is not { } sid || !string.Equals(r.For, sid, StringComparison.OrdinalIgnoreCase)) return;
+        var done = r.Done.Count == 0 ? "No Done list in the report." : string.Join("\n", r.Done.Select(d => "· " + d));
+        Transcript.Items.Add(new CardItem("delegate", "DELEGATE DONE",
+            $"{r.Topic ?? Path.GetFileNameWithoutExtension(r.Path)} on {r.Branch ?? "its branch"}:\n{done}",
+            [new CardAction("Read it in", "read", Primary: true), new CardAction("Later", "dismiss")], r.Path));
+        DelegateReport.Log("card", r.Topic, r.For, r.Sid);
+    });
 
     void OnFeed() => _clock.Dispatcher.BeginInvoke(UpdateStatus);
 
@@ -388,6 +464,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         if (_session is not { } s) return;
         var u = s.Usage;
         State = _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : "working";
+        Waiting = !_exitNoted && Transcript.AwaitsAnswer;
         Mode = (s.PermissionMode ?? Options.PermissionMode) switch { "acceptEdits" => "accept edits", var m => m } + " mode";
         Row = SessionId is { } sid && Feed.Value.Snapshot is { } feed && feed.Sessions.TryGetValue(sid, out var row)
             ? FooterRow.From(row, feed, u.Context, DateTimeOffset.Now)

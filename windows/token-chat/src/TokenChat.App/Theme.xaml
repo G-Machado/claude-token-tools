@@ -345,6 +345,43 @@
     </Style>
 
     <!-- A word that is a switch, like the widget's footer toggles: faint off, blue on. -->
+    <!-- A Done item's box: a hairline square, green with a tick once checked; a checked item's text dims. -->
+    <Style x:Key="Tick" TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Grid Background="{StaticResource Ghost}" Margin="0,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition/>
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="Box" Width="14" Height="14" CornerRadius="3" BorderThickness="1" BorderBrush="{StaticResource Thumb}"
+                                VerticalAlignment="Top" Margin="0,3,9,0">
+                            <TextBlock x:Name="Mark" Text="&#x2713;" FontFamily="{StaticResource Sym}" FontSize="10" FontWeight="Bold"
+                                       Foreground="{StaticResource Card}" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Border>
+                        <ContentPresenter Grid.Column="1"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource Dim}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Box" Property="Background" Value="{StaticResource Green}"/>
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource Green}"/>
+                            <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+                            <Setter Property="Foreground" Value="{StaticResource Dim}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="TextToggle" TargetType="CheckBox">
         <Setter Property="Foreground" Value="{StaticResource Faint}"/>
         <Setter Property="FontFamily" Value="{StaticResource Mono}"/>

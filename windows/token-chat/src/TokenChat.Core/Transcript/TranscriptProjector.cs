@@ -38,10 +38,26 @@ public sealed class TranscriptProjector
     /// <summary>The session's directory, from its init event; tool rows show paths relative to it.</summary>
     public string? Cwd { get; set; }
 
+    /// <summary>Claude is waiting on the user: a permission or question card still pending, or ▶ asks not replied past.</summary>
+    public bool AwaitsAnswer =>
+        _prompts.Any(c => c is PermissionItem { State: PermissionState.Pending } or QuestionItem { State: QuestionState.Pending })
+        || _open.Any(b => !b.IsClosed);
+
+    /// <summary>Permission and question cards still waiting on a click; the turn holds, with no request going out, until then.</summary>
+    public IReadOnlyList<TranscriptItem> PendingPrompts =>
+        _prompts.Where(c => c is PermissionItem { State: PermissionState.Pending } or QuestionItem { State: QuestionState.Pending }).ToList();
+
+    /// <summary>Where Done ticks are kept (<see cref="TickStore"/>); null keeps them for this tab only.</summary>
+    public string? TicksPath { get; set; }
+    Dictionary<string, bool>? _ticks;
+
     /// <summary>A file's text, or null if there is none; Write previews diff against it. Unset: every Write is a new file.</summary>
     public Func<string, string?>? ReadFile { get; init; }
 
     /// <summary>Any message answers the ▶ asks before it, so their buttons close. renewal: a poke's, dimmed to its turn's end.</summary>
+    /// <summary>A message folded into the running turn: shown where it was sent, none of a new turn's resets.</summary>
+    public void AddInjected(string text, IReadOnlyList<string>? files = null) => Items.Add(new UserItem(text, files));
+
     public void AddUser(string text, IReadOnlyList<string>? files = null, bool renewal = false)
     {
         _renewal = renewal;
@@ -52,6 +68,16 @@ public sealed class TranscriptProjector
     }
 
     public void AddNote(NoteKind kind, string text, string? detail = null) => Items.Add(new NoteItem(kind, text, detail));
+
+    /// <summary>An aside's answer (<see cref="Aside"/>): drawn as a reply, though it never reached the session.</summary>
+    public void AddAside(string text)
+    {
+        var item = new AssistantTextItem();
+        item.Append(text);
+        item.Flush();
+        item.IsStreaming = false;
+        Items.Add(item);
+    }
 
     public void Apply(ClaudeEvent e)
     {
@@ -231,6 +257,29 @@ public sealed class TranscriptProjector
         {
             a.Open = block;
             _open.Add(block);
+        }
+        if (s is AssistantTextItem { Sections: null } r && ReplySections.Parse(r.Open?.Body ?? r.Text) is { } sections)
+        {
+            if (sections.Done is { } done) Remember(done);
+            r.Sections = sections;
+        }
+    }
+
+    /// <summary>Puts back the ticks the user made, and keeps the ones they make next; nothing without a store.</summary>
+    void Remember(ReplySection done)
+    {
+        if (TicksPath is not { } path) return;
+        _ticks ??= TickStore.Load(path);
+        foreach (var item in done.Items)
+        {
+            if (_ticks.TryGetValue(item.Key, out var ticked)) item.IsChecked = ticked;
+            item.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName != nameof(CheckItem.IsChecked)) return;
+                _ticks[item.Key] = item.IsChecked;
+                try { TickStore.Record(path, item.Key, item.IsChecked); }
+                catch (IOException) { } // a lost tick, not a lost tab
+            };
         }
     }
 

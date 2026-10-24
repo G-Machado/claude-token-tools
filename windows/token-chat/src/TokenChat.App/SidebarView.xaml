@@ -167,6 +167,12 @@
                                     <Trigger SourceName="B" Property="IsMouseOver" Value="True">
                                         <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
                                     </Trigger>
+                                    <!-- waiting on the user: the whole row goes yellow, under the selection's grey -->
+                                    <DataTrigger Binding="{Binding State}" Value="waiting">
+                                        <Setter TargetName="B" Property="Background" Value="{StaticResource YellowTint}"/>
+                                        <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource Yellow}"/>
+                                        <Setter TargetName="B" Property="BorderThickness" Value="1"/>
+                                    </DataTrigger>
                                     <Trigger Property="IsSelected" Value="True">
                                         <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
                                     </Trigger>
@@ -200,12 +206,17 @@
                                         ToolTip="close the session" Click="OnCloseRow"
                                         Visibility="{Binding Here, Converter={StaticResource Shown}}"/>
                                 <TextBlock x:Name="Dot" Text="&#9679;" FontSize="9" Margin="0,1,7,0" Foreground="{StaticResource Faint}"
-                                           VerticalAlignment="Center"/>
+                                           VerticalAlignment="Center" Width="9" TextAlignment="Center" ToolTip="{Binding State}"/>
                                 <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
                                     <Run Text="{Binding Name, Mode=OneWay}" FontSize="12" FontWeight="SemiBold"/><Run
                                          Text="  "/><Run Text="{Binding Project, Mode=OneWay}" FontSize="10.5" Foreground="{StaticResource Faint}"/>
                                 </TextBlock>
-                                <StackPanel Grid.Column="2" Orientation="Horizontal" DataContext="{Binding Row}" Margin="8,0,0,0">
+                                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <Border x:Name="AnswerPill" Style="{StaticResource Pill}" Background="{StaticResource Yellow}" Margin="8,0,0,0"
+                                        Visibility="Collapsed" ToolTip="waiting for your answer">
+                                    <TextBlock Text="ANSWER" Foreground="{StaticResource Card}" Style="{StaticResource Fig}" FontSize="9" FontWeight="Bold"/>
+                                </Border>
+                                <StackPanel Orientation="Horizontal" DataContext="{Binding Row}" Margin="8,0,0,0">
                                     <TextBlock Text="{Binding Ctx}" Foreground="{Binding CtxBrush}" Style="{StaticResource Fig}" FontSize="11"/>
                                     <TextBlock Text="{Binding Clock}" Foreground="{Binding ClockBrush}" FontSize="11" MinWidth="34" TextAlignment="Right">
                                         <TextBlock.Style>
@@ -218,6 +229,7 @@
                                             </Style>
                                         </TextBlock.Style>
                                     </TextBlock>
+                                </StackPanel>
                                 </StackPanel>
                             </Grid>
 
@@ -322,13 +334,42 @@
                             </StackPanel>
                         </StackPanel>
                     </Grid>
-                    <!-- the dot as on a tab (a hollow one would read as the verdict mark below it) -->
+                    <!-- the dot as on a tab (a hollow one would read as the verdict mark below it): green idle, blue
+                         breathing while it works, yellow, bigger and blinking with the ANSWER pill while it waits on you -->
                     <DataTemplate.Triggers>
                         <DataTrigger Binding="{Binding State}" Value="idle">
                             <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Green}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding State}" Value="working">
                             <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Blue}"/>
+                            <DataTrigger.EnterActions>
+                                <BeginStoryboard x:Name="Breathe">
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Dot" Storyboard.TargetProperty="Opacity" From="1" To="0.3"
+                                                         Duration="0:0:0.9" AutoReverse="True" RepeatBehavior="Forever"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </DataTrigger.EnterActions>
+                            <DataTrigger.ExitActions>
+                                <StopStoryboard BeginStoryboardName="Breathe"/>
+                            </DataTrigger.ExitActions>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding State}" Value="waiting">
+                            <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Yellow}"/>
+                            <Setter TargetName="Dot" Property="FontSize" Value="12"/>
+                            <Setter TargetName="Dot" Property="Margin" Value="0,0,7,0"/>
+                            <Setter TargetName="AnswerPill" Property="Visibility" Value="Visible"/>
+                            <DataTrigger.EnterActions>
+                                <BeginStoryboard x:Name="Blink">
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="Dot" Storyboard.TargetProperty="Opacity" From="1" To="0.15"
+                                                         Duration="0:0:0.45" AutoReverse="True" RepeatBehavior="Forever"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </DataTrigger.EnterActions>
+                            <DataTrigger.ExitActions>
+                                <StopStoryboard BeginStoryboardName="Blink"/>
+                            </DataTrigger.ExitActions>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding State}" Value="exited">
                             <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Red}"/>

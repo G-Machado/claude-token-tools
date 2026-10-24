@@ -12,6 +12,17 @@ public class ChoicesTests
         new(text, null, multi, labels.Select(l => new QuestionOption(l, null)).ToList());
 
     [Fact]
+    public void PendingCardAwaitsAnswer()
+    {
+        var projector = new TranscriptProjector();
+        foreach (var e in Fixture.Lines("perm").Select(EventParser.Parse).Where(e => e is not ResultEvent)) projector.Apply(e);
+        Assert.True(projector.AwaitsAnswer);
+        foreach (var q in projector.Items.OfType<QuestionItem>()) q.State = QuestionState.Answered;
+        foreach (var p in projector.Items.OfType<PermissionItem>()) p.State = PermissionState.Allowed;
+        Assert.False(projector.AwaitsAnswer);
+    }
+
+    [Fact]
     public void QuestionRequestBecomesPendingCard()
     {
         var projector = new TranscriptProjector();

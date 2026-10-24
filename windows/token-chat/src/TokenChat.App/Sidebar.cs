@@ -19,7 +19,8 @@ public sealed class SidebarItem(object key) : INotifyPropertyChanged
     public string Name { get; private set; } = "";
     public string Project { get; private set; } = "";
     public Brush? ProjectBrush { get; private set; }
-    /// <summary>The tab's State (starting, idle, working, exited); a session elsewhere is idle or working.</summary>
+    /// <summary>The tab's State (starting, idle, working, exited), or waiting while it waits on the user; a session
+    /// elsewhere is idle or working.</summary>
     public string State { get; private set; } = "";
     /// <summary>The widget's figures for the session, null until a collect has it.</summary>
     public FooterRow? Row { get; private set; }
@@ -103,7 +104,7 @@ public sealed class Sidebar
 
     void OnTab(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(SessionTab.Row) or nameof(SessionTab.State)) Schedule();
+        if (e.PropertyName is nameof(SessionTab.Row) or nameof(SessionTab.State) or nameof(SessionTab.Waiting)) Schedule();
     }
 
     /// <summary>Every tab sets its Row on its own clock and the feed lands on a pool thread: one rebuild per burst.</summary>
@@ -126,7 +127,7 @@ public sealed class Sidebar
             if (t.SessionId is { } sid && here.Add(sid)) feed?.Sessions.TryGetValue(sid, out s);
             // the topic names the session; the tab's title (its folder) is then the project
             var nick = Str(s, "nick");
-            want.Add((t, nick.Length > 0 ? nick : t.Title, nick.Length > 0 ? t.Title : "", t.ProjectBrush, t.State, t.Row, s));
+            want.Add((t, nick.Length > 0 ? nick : t.Title, nick.Length > 0 ? t.Title : "", t.ProjectBrush, t.Waiting ? "waiting" : t.State, t.Row, s));
         }
         if (feed is not null)
         {

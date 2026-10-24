@@ -63,15 +63,19 @@ public abstract class StreamedItem : TranscriptItem
 public sealed class AssistantTextItem : StreamedItem
 {
     OpenBlock? _open;
+    ReplySections? _sections;
 
     public AssistantTextItem() => PropertyChanged += (_, e) => { if (e.PropertyName == nameof(Text)) Notify(nameof(Body)); };
 
     /// <summary>The reply's ▶ asks as buttons; parsed once the text stops streaming, null if it has none.</summary>
     public OpenBlock? Open { get => _open; internal set { if (Set(ref _open, value)) Notify(nameof(Body)); } }
 
-    /// <summary>What the markdown shows: the reply without its ▶ lines once the bar has them, so each ask shows once,
-    /// tidied for MdXaml (<see cref="ReplyText.Tidy"/>).</summary>
-    public string Body => ReplyText.Tidy(_open?.Body ?? Text);
+    /// <summary>The reply's Done and Basis folds; parsed once the text stops streaming, null if it has neither.</summary>
+    public ReplySections? Sections { get => _sections; internal set { if (Set(ref _sections, value)) Notify(nameof(Body)); } }
+
+    /// <summary>What the markdown shows: the reply without its ▶ lines and sections once the bar and folds have them,
+    /// so each shows once, tidied for MdXaml (<see cref="ReplyText.Tidy"/>).</summary>
+    public string Body => ReplyText.Tidy(_sections?.Body ?? _open?.Body ?? Text);
 }
 
 public sealed class ThinkingItem : StreamedItem;
@@ -233,7 +237,7 @@ public sealed class CardItem(string kind, string title, string text, IReadOnlyLi
 {
     string? _outcome;
 
-    /// <summary>"block" or "handoff"; what the tab dispatches the key on.</summary>
+    /// <summary>"block", "handoff" or "delegate"; what the tab dispatches the key on.</summary>
     public string Kind { get; } = kind;
     public string Title { get; } = title;
     public string Text { get; } = text;

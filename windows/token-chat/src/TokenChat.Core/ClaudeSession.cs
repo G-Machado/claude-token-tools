@@ -23,6 +23,7 @@ public sealed class ClaudeSession : IAsyncDisposable
     Task? _usageHeartbeat;
     int _nextRequest;
     int _turnsInFlight;
+    int _injected; // InjectAsync messages not yet absorbed by a tool boundary
 
     /// <summary>usageFile: written on every main-chain request. Null for replays, which must not look live.</summary>
     public ClaudeSession(IClaudeTransport transport, SessionUsageFile? usageFile = null)
@@ -134,6 +135,15 @@ public sealed class ClaudeSession : IAsyncDisposable
     public Task AnswerAsync(QuestionRequest q, IReadOnlyDictionary<string, string> answers, CancellationToken ct = default) =>
         ReplyAsync(q.RequestId, Outbound.Answer(q, answers), ct);
 
+    /// <summary>Writes a message into the running turn without interrupting it. The CLI folds it in at the next main-chain
+    /// tool result ("absorbed_mid_turn": one result for both); with no tool boundary left it runs as its own turn after
+    /// this one (second init and result) - probed on 2.1.287, 2026-10-23. Not counted until that is known.</summary>
+    public async Task InjectAsync(string text, JsonArray? blocks = null, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _injected);
+        await _transport.WriteLineAsync(blocks is null ? Outbound.UserText(text) : Outbound.User(blocks), ct);
+    }
+
     async Task SendLineAsync(string line, CancellationToken ct)
     {
         Interlocked.Increment(ref _turnsInFlight);
@@ -197,8 +207,15 @@ public sealed class ClaudeSession : IAsyncDisposable
             case PermissionRequest p: _openPrompts[p.RequestId] = 0; break;
             case QuestionRequest q: _openPrompts[q.RequestId] = 0; break;
             case PromptCancelledEvent c: _openPrompts.TryRemove(c.RequestId, out _); break;
+            case UserEvent { ParentToolUseId: null, Content: JsonArray blocks }
+                when blocks.Any(b => Json.Str(b?["type"]) == "tool_result"):
+                Interlocked.Exchange(ref _injected, 0); // a tool boundary: injected messages were absorbed into this turn
+                break;
             case ResultEvent:
                 if (Interlocked.Decrement(ref _turnsInFlight) < 0) Interlocked.Exchange(ref _turnsInFlight, 0);
+                // Not absorbed: the CLI runs them next as a turn of their own. Counted as one; a batch split into
+                // several turns only reopens AtCleanPoint early, which sends the app queue as an ordinary message.
+                if (Interlocked.Exchange(ref _injected, 0) > 0) Interlocked.Increment(ref _turnsInFlight);
                 _openPrompts.Clear(); // a prompt left open when its turn ends was withdrawn by an interrupt
                 break;
             case ControlResponseEvent c when _pending.TryGetValue(c.RequestId, out var tcs):

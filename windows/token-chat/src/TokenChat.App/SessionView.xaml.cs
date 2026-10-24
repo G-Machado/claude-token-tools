@@ -38,6 +38,14 @@ public partial class SessionView : UserControl
             ShowVoice(VoiceLink.Shared.Current, null);
         };
         Unloaded += (_, _) => UnhookVoice();
+        // one view serves every tab of the window: the composer's text is the tab's, kept as it was left
+        DataContextChanged += (_, e) =>
+        {
+            if (e.OldValue is SessionTab left) (left.Draft, left.DraftCaret) = (Input.Text, Input.CaretIndex);
+            var back = e.NewValue as SessionTab;
+            Input.Text = back?.Draft ?? "";
+            Input.CaretIndex = Math.Min(back?.DraftCaret ?? 0, Input.Text.Length);
+        };
         PreviewMouseDown += OnMouse4;
         PreviewMouseUp += OnMouse4;
     }
@@ -88,6 +96,14 @@ public partial class SessionView : UserControl
 
     void OnSend(object sender, RoutedEventArgs e) => Send();
 
+    /// <summary>The aside button: the typed text goes to a fork, not the session; attachments stay for the next send.</summary>
+    async void OnAside(object sender, RoutedEventArgs e)
+    {
+        if (Tab is not { } tab || Input.Text.Trim() is not { Length: > 0 } question) return;
+        Input.Clear();
+        await tab.AsideAsync(question);
+    }
+
     void OnStop(object sender, RoutedEventArgs e) => Stop();
 
     /// <summary>Interrupts the turn; queued messages come back into the input, ahead of anything typed since.</summary>
@@ -102,6 +118,11 @@ public partial class SessionView : UserControl
         }
         Input.Focus();
         _ = tab.InterruptAsync();
+    }
+
+    void OnInject(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is QueuedMessage m && Tab is { } tab) _ = tab.InjectAsync(m);
     }
 
     void OnUnqueue(object sender, RoutedEventArgs e)
