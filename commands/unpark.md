@@ -9,7 +9,8 @@ Resume the work a previous session parked. The checkpoints for this project are 
 first, with topic slug, age, and full path. The user typed: **$ARGUMENTS**
 
 A trailing `--handoff` is not part of the topic: drop it before matching. It means `/handoff` opened
-this window mid-flow; nobody cleared to go elsewhere.
+this window mid-flow; nobody cleared to go elsewhere. A trailing `--delegate` is dropped the same
+way: `/delegate` opened this window in a git worktree to do one task while the parent stays live.
 
 **Pick one, in this order.**
 
@@ -47,6 +48,16 @@ session, another developer, or the user's own hands.
   stands, then run the Next steps in order up to its `Stop after:` point, and report there.
 - **`--handoff` with anything waiting on the user, or a check failed:** report in three lines and
   stop, with the waiting items as the `▶` block.
+- **`--delegate`:** as `--handoff`, except the branch is expected to be `delegate/<topic>` at the
+  checkpoint's HEAD (that is not a failed check), and:
+  - Touch only what its Scope names; commit only on this branch, in this worktree, never push.
+  - At `Stop after:` (or when blocked), write `$HOME/.claude/checkpoints/reports/<checkpoint file name>`
+    (`mkdir -p` it; the subfolder keeps reports out of the Parked list) and stop. Its first line: `<!-- report: for=<delegate-of sid> sid=<this session id> topic=<slug>
+    branch=<branch> worktree=<cwd> -->` on one line (`echo $CLAUDE_CODE_SESSION_ID` gives this id;
+    the cost analysis joins on it), then a **Done** list (`file:line` — clause), **Basis** (verified vs
+    assumed), **Blocked** if any, and **Merge**: `git merge delegate/<slug>` from the parent tree,
+    then `git worktree remove <worktree>` and `git branch -d delegate/<slug>`.
+  - Reply with one line: the report path. The parent picks it up from there.
 
 **Working from it.** Read the Map ranges only when a Next step needs them, as ranged reads; skip the
 `not here:` places and use Facts instead of reading. An `open:` line comes with its check: run that

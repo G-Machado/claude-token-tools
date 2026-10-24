@@ -8,7 +8,9 @@ param(
   [string]$Cwd = (Get-Location).Path,
   [string]$OldSid = '',
   [string]$Model = '',
-  [string]$Effort = ''
+  [string]$Effort = '',
+  [ValidateSet('handoff', 'delegate')][string]$Mode = 'handoff',   # delegate: /delegate's worktree tab, parent left live
+  [string]$ParentSid = ''   # delegate only: logged, never touched
 )
 $cl  = Join-Path $env:USERPROFILE '.claude'
 $log = Join-Path $cl 'token-handoff.log'
@@ -21,7 +23,7 @@ if (-not (Test-Path $Cwd)) { Log "no dir $Cwd - abort"; Write-Output "no dir $Cw
 # (Open-Unpark): a running instance takes it as a new tab. The terminal is only
 # the fallback for a machine with no TokenChat build to find.
 . (Join-Path $cl 'token-open.ps1')
-$why = Open-Unpark $Cwd "/unpark $Topic --handoff" $Model $Effort $OldSid
+$why = Open-Unpark $Cwd "/unpark $Topic --$Mode" $Model $Effort $OldSid
 if ($null -eq $why) {
   $where = if ($OldSid) { 'the old session''s TokenChat tab' } else { 'a new TokenChat tab' }
 } else {
@@ -29,7 +31,7 @@ if ($null -eq $why) {
   if ($Model)  { $flags += " --model $Model" }
   if ($Effort) { $flags += " --effort $Effort" }
   $shim  = Join-Path $cl 'token-unpark-launch.cmd'
-  $inner = if (Test-Path $shim) { '"{0}"{1} "/unpark {2} --handoff"' -f $shim, $flags, $Topic } else { 'claude{0} "/unpark {1} --handoff"' -f $flags, $Topic }
+  $inner = if (Test-Path $shim) { '"{0}"{1} "/unpark {2} --{3}"' -f $shim, $flags, $Topic, $Mode } else { 'claude{0} "/unpark {1} --{2}"' -f $flags, $Topic, $Mode }
 
   $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
   if ($wt) { Start-Process -FilePath $wt.Source -ArgumentList @('-d', $Cwd, 'cmd.exe', '/k', $inner) | Out-Null }
@@ -37,6 +39,12 @@ if ($null -eq $why) {
   $where = "a new terminal ($why)"
 }
 Log "opened /unpark $Topic in $Cwd via $where (old $OldSid)"
+if ($Mode -eq 'delegate') {
+  # Raw events for fact-checking /delegate later (TokenChat's DelegateReport.Log appends report/card/read/dismiss):
+  # time, event, topic, parent sid, delegate sid (unknown yet), extra = cwd and the parent's HEAD.
+  $head = (& git -C $Cwd rev-parse --short HEAD 2>$null)
+  Add-Content -Path (Join-Path $cl 'token-delegate.log') -Value ("{0}`topen`t{1}`t{2}`t`t{3} {4}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Topic, $ParentSid, $Cwd, $head)
+}
 
 if ($OldSid) {
   # bash is not on PowerShell's PATH here; Git Bash's own is the one token-sessions.sh wants.
