@@ -7,6 +7,7 @@
              xmlns:md="clr-namespace:MdXaml;assembly=MdXaml"
              AllowDrop="True" PreviewDragEnter="OnDragOver" PreviewDragOver="OnDragOver" PreviewDrop="OnDrop">
     <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="Shown"/>
         <Style x:Key="Small" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11.5"/>
             <Setter Property="Foreground" Value="{StaticResource Dim}"/>
@@ -433,6 +434,18 @@
                 <Border Margin="3,0,0,0" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,1,1"
                         CornerRadius="0,6,6,0" Padding="14,11,14,12">
                     <StackPanel>
+                        <!-- master plan mode: where this question went, or whose it is -->
+                        <TextBlock Text="{Binding Relay}" FontSize="11" Foreground="{StaticResource Yellow}" Margin="0,0,0,6">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Relay}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                         <!-- one line per question, folded to its answer or open on its options; a pick folds it and
                              opens the next unanswered -->
                         <ItemsControl x:Name="List" ItemsSource="{Binding Questions, Mode=OneTime}" Focusable="False">
@@ -642,13 +655,60 @@
 
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ItemsControl x:Name="Transcript" ItemsSource="{Binding Items}" Padding="20,10,14,10"
+        <!-- master plan mode: the master's delegates open in this window, one row each; the header folds them -->
+        <Border Grid.Row="0" Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1"
+                Padding="20,5,14,5" Visibility="{Binding HasDelegates, Converter={StaticResource Shown}}">
+            <StackPanel>
+                <TextBlock Cursor="Hand" FontSize="11" Foreground="{StaticResource Dim}" MouseLeftButtonUp="OnFoldDelegates"
+                           ToolTip="fold the delegates"><Run x:Name="StripGlyph" Text="▾ "/><Run Text="DELEGATES" FontWeight="Bold"/><Run
+                           Text="  "/><Run Text="{Binding MasterSummary, Mode=OneWay}" Foreground="{StaticResource Faint}"/></TextBlock>
+                <ItemsControl x:Name="DelegateRows" ItemsSource="{Binding Delegates}" Focusable="False" Margin="0,3,0,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="12"><Run
+                                           Text="{Binding Topic, Mode=OneWay}" FontWeight="SemiBold"/><Run Text="  "/><Run
+                                           Text="{Binding Row.Model, Mode=OneWay}" FontSize="10.5" Foreground="{StaticResource Faint}"/><Run
+                                           Text="{Binding Row.Effort, Mode=OneWay}" FontSize="10.5" Foreground="{Binding Row.EffortBrush, Mode=OneWay}"/></TextBlock>
+                                <TextBlock Grid.Column="1" Text="{Binding DelegateState}" FontSize="11" Foreground="{StaticResource Dim}"
+                                           VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                <TextBlock Grid.Column="2" Text="{Binding Row.Ctx}" Foreground="{Binding Row.CtxBrush}" Style="{StaticResource Fig}"
+                                           FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0" MinWidth="34" TextAlignment="Right"/>
+                                <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="10,0,0,0">
+                                    <Button Content="open" Style="{StaticResource Quiet}" Click="OnOpenDelegate" ToolTip="go to its tab"/>
+                                    <Button Content="unlock" Style="{StaticResource Quiet}" Click="OnUnlockDelegate" Margin="6,0,0,0"
+                                            ToolTip="let it be typed into" Visibility="{Binding Locked, Converter={StaticResource Shown}}"/>
+                                    <Button Content="stop" Style="{StaticResource Quiet}" Click="OnStopDelegate" Margin="6,0,0,0"
+                                            ToolTip="interrupt its turn" Foreground="{StaticResource Red}"/>
+                                    <Button x:Name="ReadReport" Content="read report" Style="{StaticResource Quiet}" Click="OnReadDelegateReport"
+                                            Margin="6,0,0,0" ToolTip="read its report into this session"/>
+                                </StackPanel>
+                            </Grid>
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding ReportPath}" Value="{x:Null}">
+                                    <Setter TargetName="ReadReport" Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <ItemsControl x:Name="Transcript" Grid.Row="1" ItemsSource="{Binding Items}" Padding="20,10,14,10"
                       VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                       VirtualizingPanel.ScrollUnit="Pixel" PreviewMouseWheel="OnTranscriptWheel">
             <ItemsControl.Template>
@@ -677,7 +737,7 @@
         </ItemsControl>
 
         <!-- shown while the view is scrolled up from the bottom: back down, following new output again -->
-        <Button x:Name="ToBottom" Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,28,10"
+        <Button x:Name="ToBottom" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,28,10"
                 Visibility="Collapsed" Cursor="Hand" ToolTip="jump to the bottom" Click="OnToBottom" Focusable="False">
             <Button.Template>
                 <ControlTemplate TargetType="Button">
@@ -697,7 +757,7 @@
         </Button>
 
         <!-- messages sent while a turn runs: they go out together when it ends; stop hands them back to the input -->
-        <ItemsControl Grid.Row="1" ItemsSource="{Binding Queued}" Margin="14,4,14,0" Focusable="False">
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding Queued}" Margin="14,4,14,0" Focusable="False">
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type local:QueuedMessage}">
                     <Border Background="{StaticResource Inset}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="5"
@@ -717,7 +777,7 @@
         </ItemsControl>
 
         <!-- the input: an inset well that rings blue while it has the keyboard -->
-        <Border Grid.Row="2" Margin="14,4,14,12" CornerRadius="6" BorderThickness="1" Padding="11,7,7,7"
+        <Border Grid.Row="3" Margin="14,4,14,12" CornerRadius="6" BorderThickness="1" Padding="11,7,7,7"
                 Background="{StaticResource Inset}">
             <Border.Style>
                 <Style TargetType="Border">
@@ -816,12 +876,29 @@
                         </Style>
                     </Button.Style>
                 </Button>
+                <!-- master plan mode: a master's delegate takes its answers from the master; Unlock opens this tab only -->
+                <DockPanel Grid.Row="2" Grid.ColumnSpan="5" Background="{StaticResource Inset}" LastChildFill="False">
+                    <DockPanel.Style>
+                        <Style TargetType="DockPanel">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Locked}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DockPanel.Style>
+                    <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" FontSize="12.5" Foreground="{StaticResource Dim}"
+                               Margin="0,0,10,0"><Run Text="&#x1F512;&#xFE0E; " FontFamily="{StaticResource Sym}"/><Run Text="{Binding LockText, Mode=OneWay}"/></TextBlock>
+                    <Button DockPanel.Dock="Right" Content="Unlock" Style="{StaticResource Quiet}" VerticalAlignment="Center" Click="OnUnlock"
+                            ToolTip="Type into this delegate yourself. Its questions still go to the master."/>
+                </DockPanel>
             </Grid>
         </Border>
 
         <!-- the session's status line; its figures are on its sidebar row (FooterRow: the widget's rules and colours).
              Card ground so the Inset pills read as they do on the widget. -->
-        <Border Grid.Row="3" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
+        <Border Grid.Row="4" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
                 Padding="14,6,14,7">
             <StackPanel>
                 <StackPanel.Resources>

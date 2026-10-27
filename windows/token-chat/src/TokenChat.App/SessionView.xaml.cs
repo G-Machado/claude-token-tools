@@ -133,7 +133,7 @@ public partial class SessionView : UserControl
     void Send()
     {
         var text = Input.Text.Trim();
-        if (Tab is not { IsReady: true } tab || text.Length == 0 && tab.Attachments.Count == 0) return;
+        if (Tab is not { IsReady: true, Locked: false } tab || text.Length == 0 && tab.Attachments.Count == 0) return;
         Input.Clear();
         _stick = true;
         _ = tab.SendAsync(text);
@@ -306,6 +306,35 @@ public partial class SessionView : UserControl
     void OnSubmitAnswer(object sender, RoutedEventArgs e)
     {
         if (Owner<QuestionItem>(sender) is { } q) _ = Tab?.AnswerAsync(q);
+    }
+
+    void OnUnlock(object sender, RoutedEventArgs e)
+    {
+        Tab?.Unlock();
+        Input.Focus();
+    }
+
+    void OnFoldDelegates(object sender, MouseButtonEventArgs e)
+    {
+        var open = DelegateRows.Visibility == Visibility.Visible;
+        DelegateRows.Visibility = open ? Visibility.Collapsed : Visibility.Visible;
+        StripGlyph.Text = open ? "▸ " : "▾ ";
+    }
+
+    static SessionTab? DelegateOf(object sender) => (sender as FrameworkElement)?.DataContext as SessionTab;
+
+    void OnOpenDelegate(object sender, RoutedEventArgs e)
+    {
+        if (DelegateOf(sender) is { } d) SessionTab.Show(d);
+    }
+
+    void OnUnlockDelegate(object sender, RoutedEventArgs e) => DelegateOf(sender)?.Unlock();
+
+    void OnStopDelegate(object sender, RoutedEventArgs e) => _ = DelegateOf(sender)?.InterruptAsync();
+
+    void OnReadDelegateReport(object sender, RoutedEventArgs e)
+    {
+        if (DelegateOf(sender) is { } d && Tab is { } master) _ = master.ReadReportAsync(d);
     }
 
     void OnDeclineQuestion(object sender, RoutedEventArgs e)

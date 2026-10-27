@@ -45,6 +45,19 @@
             <Separator/>
             <MenuItem Header="park the session" IsEnabled="{Binding Here}" Click="OnPark"/>
             <MenuItem Header="close the session" IsEnabled="{Binding Here}" Click="OnCloseRow"/>
+            <Separator/>
+            <!-- filled as it opens: the named groups, a new one, back to the folder -->
+            <MenuItem Header="move to group" IsEnabled="{Binding HasSid}" SubmenuOpened="OnGroupMenu">
+                <MenuItem Header="new group…"/>
+            </MenuItem>
+        </ContextMenu>
+        <ContextMenu x:Key="GroupMenu" x:Shared="False" Background="{StaticResource Card}" Foreground="{StaticResource Text}"
+                     BorderBrush="{StaticResource Line}">
+            <MenuItem Header="rename the group" IsEnabled="{Binding Named}" Click="OnRenameGroup"/>
+            <MenuItem Header="ungroup its sessions" IsEnabled="{Binding Named}" Click="OnUngroup"/>
+            <Separator/>
+            <MenuItem Header="fold every group" Click="OnFoldAll"/>
+            <MenuItem Header="unfold every group" Click="OnUnfoldAll"/>
         </ContextMenu>
     </UserControl.Resources>
 
@@ -156,14 +169,51 @@
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="ListBoxItem">
-                                <StackPanel>
-                                    <TextBlock Text="other windows" Foreground="{StaticResource Faint}" FontSize="10" Margin="14,12,0,4"
-                                               Visibility="{Binding FirstElsewhere, Converter={StaticResource Shown}}"/>
+                                <Grid>
+                                    <!-- a group's header: click folds it; folded, it goes yellow while a session inside waits -->
+                                    <Border x:Name="H" Margin="6,8,6,1" Padding="6,2,10,3" CornerRadius="5" Background="Transparent"
+                                            Cursor="Hand" Visibility="Collapsed">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="Chev" Text="&#9662;" FontSize="10" Width="12" Foreground="{StaticResource Faint}"
+                                                       VerticalAlignment="Center"/>
+                                            <Ellipse Grid.Column="1" Width="6" Height="6" Margin="0,0,6,0" Fill="{Binding ProjectBrush}"
+                                                     VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding Name}" FontSize="10.5" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Dim}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding Count}" FontSize="10" Foreground="{StaticResource Faint}"
+                                                       VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
                                     <Border x:Name="B" Margin="6,1" Padding="9,6,10,7" CornerRadius="5" Background="Transparent" Cursor="Hand">
                                         <ContentPresenter/>
                                     </Border>
-                                </StackPanel>
+                                </Grid>
                                 <ControlTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsHeader}" Value="True">
+                                        <Setter TargetName="H" Property="Visibility" Value="Visible"/>
+                                        <Setter TargetName="B" Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Folded}" Value="True">
+                                        <Setter TargetName="Chev" Property="Text" Value="&#9656;"/>
+                                    </DataTrigger>
+                                    <Trigger SourceName="H" Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="H" Property="Background" Value="{StaticResource Ghost}"/>
+                                    </Trigger>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsHeader}" Value="True"/>
+                                            <Condition Binding="{Binding State}" Value="waiting"/>
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter TargetName="H" Property="Background" Value="{StaticResource YellowTint}"/>
+                                        <Setter TargetName="H" Property="BorderBrush" Value="{StaticResource Yellow}"/>
+                                        <Setter TargetName="H" Property="BorderThickness" Value="1"/>
+                                    </MultiDataTrigger>
                                     <Trigger SourceName="B" Property="IsMouseOver" Value="True">
                                         <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
                                     </Trigger>
@@ -180,12 +230,17 @@
                             </ControlTemplate>
                         </Setter.Value>
                     </Setter>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsHeader}" Value="True">
+                            <Setter Property="ContextMenu" Value="{StaticResource GroupMenu}"/>
+                        </DataTrigger>
+                    </Style.Triggers>
                 </Style>
             </ListBox.ItemContainerStyle>
 
             <ListBox.ItemTemplate>
                 <DataTemplate DataType="{x:Type local:SidebarItem}">
-                    <Grid>
+                    <Grid Margin="{Binding Indent}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="3"/>
                             <ColumnDefinition/>
@@ -208,10 +263,26 @@
                                 <TextBlock x:Name="Dot" Text="&#9679;" FontSize="9" Margin="0,1,7,0" Foreground="{StaticResource Faint}"
                                            VerticalAlignment="Center" Width="9" TextAlignment="Center" ToolTip="{Binding State}"/>
                                 <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
-                                    <Run Text="{Binding Name, Mode=OneWay}" FontSize="12" FontWeight="SemiBold"/><Run
+                                    <Run Text="{Binding Arrow, Mode=OneWay}" FontSize="11" Foreground="{StaticResource Faint}"/><Run Text="{Binding Name, Mode=OneWay}" FontSize="12" FontWeight="SemiBold"/><Run
                                          Text="  "/><Run Text="{Binding Project, Mode=OneWay}" FontSize="10.5" Foreground="{StaticResource Faint}"/>
                                 </TextBlock>
                                 <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <!-- master plan mode: a master's M and its delegates and asks -->
+                                <Border Style="{StaticResource Pill}" Background="{StaticResource Blue}" Margin="8,0,0,0"
+                                        Visibility="{Binding IsMaster, Converter={StaticResource Shown}}" ToolTip="master session">
+                                    <TextBlock Text="M" Foreground="{StaticResource Card}" Style="{StaticResource Fig}" FontSize="9" FontWeight="Bold"/>
+                                </Border>
+                                <TextBlock Text="{Binding MasterSummary}" FontSize="10" Foreground="{StaticResource Faint}" Margin="6,0,0,0"
+                                           VerticalAlignment="Center" Visibility="{Binding IsMaster, Converter={StaticResource Shown}}"/>
+                                <!-- a parent: its delegates' count, a click folds them under its row -->
+                                <TextBlock Text="{Binding ChildLabel}" FontSize="10" Foreground="{StaticResource Faint}" Margin="8,0,0,0"
+                                           VerticalAlignment="Center" Cursor="Hand" ToolTip="fold its delegates"
+                                           MouseLeftButtonUp="OnToggleChildren" Visibility="{Binding HasChildren, Converter={StaticResource Shown}}"/>
+                                <!-- a delegate whose report has landed: the parent has the card -->
+                                <Border Style="{StaticResource Pill}" Background="{StaticResource Green}" Margin="8,0,0,0"
+                                        Visibility="{Binding Reported, Converter={StaticResource Shown}}" ToolTip="its report has landed">
+                                    <TextBlock Text="REPORT" Foreground="{StaticResource Card}" Style="{StaticResource Fig}" FontSize="9" FontWeight="Bold"/>
+                                </Border>
                                 <Border x:Name="AnswerPill" Style="{StaticResource Pill}" Background="{StaticResource Yellow}" Margin="8,0,0,0"
                                         Visibility="Collapsed" ToolTip="waiting for your answer">
                                     <TextBlock Text="ANSWER" Foreground="{StaticResource Card}" Style="{StaticResource Fig}" FontSize="9" FontWeight="Bold"/>
@@ -373,6 +444,21 @@
                         </DataTrigger>
                         <DataTrigger Binding="{Binding State}" Value="exited">
                             <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Red}"/>
+                        </DataTrigger>
+                        <!-- a master's delegate, after State so these win: asking waits on the master, not on you -->
+                        <DataTrigger Binding="{Binding DelegateState}" Value="asking">
+                            <Setter TargetName="Dot" Property="Text" Value="&#9670;"/>
+                            <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Yellow}"/>
+                            <Setter TargetName="Dot" Property="ToolTip" Value="asked the master, waiting on its answer"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding DelegateState}" Value="done">
+                            <Setter TargetName="Dot" Property="Text" Value="&#10003;"/>
+                            <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Green}"/>
+                            <Setter TargetName="Dot" Property="ToolTip" Value="done: its report has landed"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding DelegateState}" Value="unlocked">
+                            <Setter TargetName="Dot" Property="Text" Value="&#9675;"/>
+                            <Setter TargetName="Dot" Property="ToolTip" Value="unlocked: you can type into it"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Row}" Value="{x:Null}">
                             <Setter TargetName="Figures" Property="Visibility" Value="Collapsed"/>

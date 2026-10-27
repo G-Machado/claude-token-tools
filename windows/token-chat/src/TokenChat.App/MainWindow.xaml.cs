@@ -25,11 +25,15 @@ public partial class MainWindow : Window
         _sidebar = new Sidebar(_tabs);
         _sidebar.Refreshed += SyncSidebar;
         Side.List.ItemsSource = _sidebar.Items;
+        Side.Model = _sidebar;
         Side.Usage.DataContext = _sidebar.Usage;
         Side.ParkedPane.DataContext = _sidebar;
         Side.OpenedParked += () => _ = _sidebar.RefreshParkedAsync();
         Side.Unpark += Unpark;
         // a row of this window shows its chat; a row elsewhere only opens to its controls
+        // the plan's steps open under the chip, right-aligned so they stay inside the window
+        PlanPopup.CustomPopupPlacementCallback = (popup, target, _) =>
+            [new System.Windows.Controls.Primitives.CustomPopupPlacement(new System.Windows.Point(target.Width - popup.Width, target.Height + 4), System.Windows.Controls.Primitives.PopupPrimaryAxis.Horizontal)];
         Side.List.SelectionChanged += (_, _) =>
         {
             if (!_syncing && Side.List.SelectedItem is SidebarItem { Tab: { } tab }) Select(tab);
@@ -37,6 +41,7 @@ public partial class MainWindow : Window
         Side.NewSession += ShowStart;
         Side.ShowAnalytics += ShowAnalytics;
         Side.CloseSession += CloseSession;
+        SessionTab.ShowRequested += t => { if (_tabs.Contains(t)) Select(t); };
         PreviewKeyDown += (_, e) =>
         {
             // ctrl+tab as the tab strip had it: the next session of this window, with shift the one before
@@ -54,6 +59,12 @@ public partial class MainWindow : Window
             MaxGlyph.ToolTip = max ? "restore" : "maximise";
         };
         ShowStart();
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () => SelfTest.RunIfPending((dir, model, prompt) =>
+        {
+            var tab = Create(dir, null, false, model, null, prompt);
+            Show(tab);
+            return tab;
+        }));
     }
 
     SessionTab? Current => Chat.Content as SessionTab;
@@ -85,7 +96,9 @@ public partial class MainWindow : Window
 
     void SyncSidebar()
     {
-        if (_syncTo is not { } tab || _sidebar?.Items.FirstOrDefault(i => i.Tab == tab) is not { } item) return;
+        if (_syncTo is not { } tab || _sidebar is null) return;
+        // its group folded: unfolding refreshes, and that refresh syncs it
+        if (_sidebar.Items.FirstOrDefault(i => i.Tab == tab) is not { } item) { _sidebar.Unfold(tab); return; }
         _syncTo = null;
         _syncing = true;
         Side.List.SelectedItem = item;
@@ -96,6 +109,16 @@ public partial class MainWindow : Window
     public string? Model { get; set; }
 
     public bool Lite { set => Side.LiteBox.IsChecked = value; }
+
+    void OnMasterPill(object sender, RoutedEventArgs e)
+    {
+        if (Chat.Content is SessionTab t) t.SetMaster(!t.IsMaster);
+    }
+
+    void OnLivePill(object sender, RoutedEventArgs e)
+    {
+        if (Chat.Content is SessionTab t) t.SetLive(!t.IsLive);
+    }
 
     void OnMinimise(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 

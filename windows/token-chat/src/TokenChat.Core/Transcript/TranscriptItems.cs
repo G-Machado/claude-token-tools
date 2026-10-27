@@ -194,6 +194,11 @@ public sealed class QuestionItem : TranscriptItem
     public QuestionRequest Request { get; }
     public IReadOnlyList<QuestionPick> Questions { get; }
 
+    /// <summary>Master plan mode: on a delegate's card "asked master · …", on the master's copy of it "delegate &lt;slug&gt; asks".
+    /// Null for an ordinary question. A relayed card is the master's to answer, so a keep-alive mark leaves it open.</summary>
+    public string? Relay { get => _relay; set => Set(ref _relay, value); }
+    string? _relay;
+
     /// <summary>A pick that answers a single-select question folds it and opens the next one still unanswered. A
     /// multi-select one stays open for more picks, until <paramref name="done"/> (Enter in its box) says it is finished.</summary>
     public void AdvanceFrom(QuestionPick picked, bool done = false)
@@ -221,6 +226,13 @@ public sealed class QuestionItem : TranscriptItem
             Notify(nameof(CanSubmit));
             Notify(nameof(Outcome));
         }
+    }
+
+    /// <summary>Answers given elsewhere (the master, or the master's copy of this card), shown as typed ones.</summary>
+    public void Show(IReadOnlyDictionary<string, string> answers)
+    {
+        foreach (var q in Questions)
+            if (answers.TryGetValue(q.Text, out var a)) q.Other = a;
     }
 
     /// <summary>Question text → answer, as <c>ClaudeSession.AnswerAsync</c> takes it.</summary>

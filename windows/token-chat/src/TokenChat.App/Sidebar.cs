@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.IO;
 using System.ComponentModel;
 using System.Text.Json.Nodes;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
 using TokenChat.Core;
@@ -32,8 +34,30 @@ public sealed class SidebarItem(object key) : INotifyPropertyChanged
     /// <summary>A session elsewhere has a window to bring forward; one here is its tab.</summary>
     public bool CanOpen => !Here && Session is not null;
     public string Cwd => Tab?.Options.WorkingDirectory ?? Str(Session, "cwd");
-    /// <summary>Heads the sessions elsewhere, so the template draws the label between the two groups.</summary>
-    public bool FirstElsewhere { get; private set; }
+    public bool HasSid => Sid.Length > 0;
+    /// <summary>The named group the session was moved into, "" under its folder.</summary>
+    public string Group { get; private set; } = "";
+    /// <summary>A group's header row: Name is the group's, Count its sessions, Folded hides them.</summary>
+    public bool IsHeader => Key is GroupKey;
+    public bool Named => Key is GroupKey { Id: ['#', ..] };
+    public int Count { get; private set; }
+    public bool Folded { get; private set; }
+    /// <summary>A delegate nests under the session that launched it: Depth levels in, its name led by an arrow.</summary>
+    public int Depth { get; private set; }
+    public Thickness Indent => new(Depth * 14, 0, 0, 0);
+    public string Arrow => Depth > 0 ? "↳ " : "";
+    /// <summary>The delegates nested under it, folded away or shown.</summary>
+    public int Children { get; private set; }
+    public bool HasChildren => Children > 0;
+    public bool ChildrenFolded { get; private set; }
+    public string ChildLabel => (ChildrenFolded ? "▸ " : "▾ ") + Children + (Children == 1 ? " delegate" : " delegates");
+    /// <summary>A delegate whose report has landed; its row stays until it is closed.</summary>
+    public bool Reported { get; private set; }
+    /// <summary>Master plan mode: a master's row carries an M and its summary ("2 delegates · 1 ask"); a delegate's dot
+    /// shows running / asking (waiting on the master) / done / unlocked.</summary>
+    public bool IsMaster { get; private set; }
+    public string MasterSummary { get; private set; } = "";
+    public string DelegateState { get; private set; } = "";
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -43,21 +67,37 @@ public sealed class SidebarItem(object key) : INotifyPropertyChanged
     internal static double Num(JsonObject? o, string k) => o?[k] is not JsonValue v ? 0
         : v.TryGetValue(out double d) ? d : v.TryGetValue(out int i) ? i : v.TryGetValue(out long l) ? l : 0;
 
-    internal void Set(string name, string project, Brush? brush, string state, FooterRow? row, JsonObject? session, bool firstElsewhere)
+    internal void Set(string name, string project, Brush? brush, string state, FooterRow? row, JsonObject? session, string group,
+        int depth = 0, int children = 0, bool childrenFolded = false, bool reported = false,
+        bool master = false, string masterSummary = "", string delegateState = "")
     {
-        (Name, Project, ProjectBrush, State, Row, Session, FirstElsewhere) = (name, project, brush, state, row, session, firstElsewhere);
+        (Name, Project, ProjectBrush, State, Row, Session, Group) = (name, project, brush, state, row, session, group);
+        (Depth, Children, ChildrenFolded, Reported) = (depth, children, childrenFolded, reported);
+        (IsMaster, MasterSummary, DelegateState) = (master, masterSummary, delegateState);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null)); // every binding re-reads
+    }
+
+    /// <summary>State is "waiting" only while folded with a session inside waiting, else "": the row's storyboards key
+    /// on State and a header has no dot to animate.</summary>
+    internal void SetHeader(string name, Brush? brush, string state, int count, bool folded)
+    {
+        (Name, ProjectBrush, State, Count, Folded) = (name, brush, state, count, folded);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
     }
 }
 
-/// <summary>The sidebar's rows: this window's tabs in their order, then every other live session in the widget's last
-/// collect, in the collector's order. Rebuilt on a collect, a tab change and a clock tick, since the cache clock of a
-/// session elsewhere runs down between collects (a tab's own Row already does).</summary>
+/// <summary>A header row's key: a SessionGroups id, "#name" or "P:" and the project key.</summary>
+public sealed record GroupKey(string Id);
+
+/// <summary>The sidebar's rows: a header per group, then its tabs in their order. Rebuilt on a collect (it names the
+/// sessions), a tab change and a clock tick.</summary>
 public sealed class Sidebar
 {
     readonly ObservableCollection<SessionTab> _tabs;
     readonly Dispatcher _ui = Dispatcher.CurrentDispatcher;
     bool _queued;
+    /// <summary>Delegate sids whose report has landed: those already in reports/ at start, then each one Landed.</summary>
+    readonly HashSet<string> _reported = new(StringComparer.OrdinalIgnoreCase);
 
     public ObservableCollection<SidebarItem> Items { get; } = [];
     public UsageHeader Usage { get; } = new();
@@ -73,6 +113,13 @@ public sealed class Sidebar
         tabs.CollectionChanged += OnTabs;
         foreach (var t in tabs) t.PropertyChanged += OnTab;
         SessionTab.Feed.Value.Changed += Schedule;
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(DelegateReport.Dir, "*.md"))
+                if (DelegateReport.Parse(f, File.ReadAllText(f))?.Sid is { } s) _reported.Add(s);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        DelegateReports.Landed += r => _ui.BeginInvoke(() => { if (r.Sid is { } s && _reported.Add(s)) Schedule(); });
         // a running timer is held by its dispatcher
         _ = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) => Schedule(), _ui);
         // the widget re-lists its Parked tab every five minutes and on opening it; the view asks for the second
@@ -104,7 +151,9 @@ public sealed class Sidebar
 
     void OnTab(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(SessionTab.Row) or nameof(SessionTab.State) or nameof(SessionTab.Waiting)) Schedule();
+        if (e.PropertyName is nameof(SessionTab.Row) or nameof(SessionTab.State) or nameof(SessionTab.Waiting)
+            or nameof(SessionTab.IsMaster) or nameof(SessionTab.MasterSummary) or nameof(SessionTab.DelegateState)
+            or nameof(SessionTab.HandedFrom)) Schedule();
     }
 
     /// <summary>Every tab sets its Row on its own clock and the feed lands on a pool thread: one rebuild per burst.</summary>
@@ -115,44 +164,156 @@ public sealed class Sidebar
         _ui.BeginInvoke(DispatcherPriority.Background, () => { _queued = false; Refresh(); });
     }
 
+    /// <summary>This window's tabs only: the rows of sessions in other windows never loaded right (2026-10-26). Grouped:
+    /// a session moved into a named group sits under it, the rest under their folder; groups in the order of their first
+    /// tab, so a new tab's project opens where its tabs already are. A folded group keeps its header. A delegate whose
+    /// parent is a tab here sits right under the parent's row, whatever its folder; the parent closed, it is back in its own.</summary>
     void Refresh()
     {
         var feed = SessionTab.Feed.Value.Snapshot;
         Usage.Set(feed);
-        var want = new List<(object Key, string Name, string Project, Brush? Brush, string State, FooterRow? Row, JsonObject? Session)>();
-        var here = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var t in _tabs)
+        Record();
+        var parents = ParentTabs();
+        var kids = _tabs.Where(parents.ContainsKey).ToLookup(t => parents[t]);
+        IEnumerable<SessionTab> Below(SessionTab t) => kids[t].SelectMany(c => Below(c).Prepend(c));
+        var want = new List<(object Key, Action<SidebarItem> Set)>();
+        foreach (var g in _tabs.Where(t => !parents.ContainsKey(t)).GroupBy(GroupOf))
         {
-            JsonObject? s = null;
-            if (t.SessionId is { } sid && here.Add(sid)) feed?.Sessions.TryGetValue(sid, out s);
-            // the topic names the session; the tab's title (its folder) is then the project
-            var nick = Str(s, "nick");
-            want.Add((t, nick.Length > 0 ? nick : t.Title, nick.Length > 0 ? t.Title : "", t.ProjectBrush, t.Waiting ? "waiting" : t.State, t.Row, s));
-        }
-        if (feed is not null)
-        {
-            var now = DateTimeOffset.Now;
-            // live windows only, as the widget's Get-Visible
-            foreach (var s in feed.Ordered.Where(s => Num(s, "alive") == 1 && !here.Contains(Str(s, "sid"))))
+            var first = g.First();
+            var named = g.Key.StartsWith('#');
+            var name = named ? g.Key[1..] : Path.GetFileName(first.Options.WorkingDirectory.TrimEnd('\\', '/'));
+            var folded = Groups.Folded.Contains(g.Key);
+            var all = g.SelectMany(t => Below(t).Prepend(t)).ToList();
+            var waits = folded && all.Any(t => t.Waiting);
+            var count = all.Count;
+            want.Add((new GroupKey(g.Key), i => i.SetHeader(name, named ? null : first.ProjectBrush, waits ? "waiting" : "", count, folded)));
+            if (folded) continue;
+            foreach (var t in g) Emit(t, 0);
+
+            void Emit(SessionTab t, int depth)
             {
+                JsonObject? s = null;
+                if (t.SessionId is { } sid) feed?.Sessions.TryGetValue(sid, out s);
+                // the topic names the session; the tab's title (its folder) is then the project
                 var nick = Str(s, "nick");
-                var cwd = Str(s, "cwd");
-                want.Add((Str(s, "sid"), nick.Length > 0 ? nick : Str(s, "name"), Str(s, "project"),
-                    cwd.Length > 0 ? SessionTab.ProjectBrushes[Project.Slot(cwd, SessionTab.ProjectBrushes.Length)] : null,
-                    Num(s, "running") == 1 ? "working" : "idle", FooterRow.From(s, feed, 0, now), s));
+                var children = kids[t].ToList();
+                var shut = children.Count > 0 && t.SessionId is { } id && Groups.Folded.Contains(SessionGroups.SubId(id));
+                // folded, the parent goes yellow while a delegate under it waits, as a folded group's header does; a card
+                // that went up to the master is the master's to answer, not the user's
+                bool Yours(SessionTab c) => c.Waiting && !c.AsksMaster;
+                var waiting = Yours(t) || (shut && Below(t).Any(Yours));
+                var reported = t.SessionId is { } rs && _reported.Contains(rs);
+                want.Add((t, i => i.Set(nick.Length > 0 ? nick : t.Title, nick.Length > 0 ? t.Title : "", t.ProjectBrush,
+                    waiting ? "waiting" : t.State, t.Row, s, named ? name : "", depth, children.Count, shut, reported,
+                    t.IsMaster, t.MasterSummary, t.DelegateState)));
+                if (!shut) foreach (var c in children) Emit(c, depth + 1);
             }
         }
 
         for (var i = 0; i < want.Count; i++)
         {
-            var w = want[i];
-            var at = IndexOf(w.Key, i);
-            if (at < 0) Items.Insert(i, new SidebarItem(w.Key));
+            var at = IndexOf(want[i].Key, i);
+            if (at < 0) Items.Insert(i, new SidebarItem(want[i].Key));
             else if (at != i) Items.Move(at, i);
-            Items[i].Set(w.Name, w.Project, w.Brush, w.State, w.Row, w.Session, w.Key is string && (i == 0 || want[i - 1].Key is SessionTab));
+            want[i].Set(Items[i]);
         }
         while (Items.Count > want.Count) Items.RemoveAt(Items.Count - 1);
         Refreshed?.Invoke();
+    }
+
+    public SessionGroups Groups { get; } = SessionGroups.Load(SessionGroups.DefaultPath);
+
+    /// <summary>Each tab's launching tab, when that is open here. A loop (never written, but the file is hand-editable)
+    /// is cut where it closes.</summary>
+    Dictionary<SessionTab, SessionTab> ParentTabs()
+    {
+        var map = new Dictionary<SessionTab, SessionTab>();
+        foreach (var t in _tabs)
+            if (t.SessionId is { } sid && Groups.Parents.TryGetValue(sid, out var p)
+                && _tabs.FirstOrDefault(o => o != t && string.Equals(o.SessionId, p, StringComparison.OrdinalIgnoreCase)) is { } parent)
+                map[t] = parent;
+        foreach (var t in map.Keys.ToList())
+        {
+            var seen = new HashSet<SessionTab> { t };
+            for (var p = map.GetValueOrDefault(t); p is not null; p = map.GetValueOrDefault(p))
+                if (!seen.Add(p)) { map.Remove(t); break; }
+        }
+        return map;
+    }
+
+    /// <summary>A tab's parent and topic come from its first prompt, which a --resume after a restart does not repeat:
+    /// kept by session id as soon as the tab has one.</summary>
+    void Record()
+    {
+        var changed = false;
+        foreach (var t in _tabs)
+        {
+            if (t.SessionId is not { } sid) continue;
+            // a master that handed off: its delegates nest under the window that took over
+            if (t.HandedFrom is { } old && !string.Equals(old, sid, StringComparison.OrdinalIgnoreCase))
+                foreach (var k in Groups.Parents.Where(p => string.Equals(p.Value, old, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToList())
+                {
+                    Groups.Parents[k] = sid;
+                    changed = true;
+                }
+            if (t.ParentSid is { } p0 && Heir(p0) is var p && Groups.Parents.GetValueOrDefault(sid) != p) { Groups.Parents[sid] = p; changed = true; }
+            if (t.Topic is null && Groups.Topics.TryGetValue(sid, out var known)) t.Topic = known;
+            else if (t.Topic is { } topic && Groups.Topics.GetValueOrDefault(sid) != topic) { Groups.Topics[sid] = topic; changed = true; }
+        }
+        if (changed) Write();
+    }
+
+    /// <summary>A parent sid, or the sid of the tab here that took it over by handover.</summary>
+    string Heir(string sid) => _tabs.FirstOrDefault(t => string.Equals(t.HandedFrom, sid, StringComparison.OrdinalIgnoreCase))?.SessionId ?? sid;
+
+    string GroupOf(SessionTab t) => t.SessionId is { } sid && Groups.Members.TryGetValue(sid, out var name)
+        ? SessionGroups.NamedId(name) : SessionGroups.ProjectId(t.Options.WorkingDirectory);
+
+    /// <summary>Into a named group, or back under its folder with null.</summary>
+    public void Move(string sid, string? name) { Groups.Move(sid, name); Save(); }
+    public void Rename(string from, string to) { Groups.Rename(from, to); Save(); }
+    public void Ungroup(string name) { Groups.Ungroup(name); Save(); }
+
+    public void Toggle(string id)
+    {
+        if (!Groups.Folded.Remove(id)) Groups.Folded.Add(id);
+        Save();
+    }
+
+    public void FoldAll(bool fold)
+    {
+        foreach (var h in Items.Select(i => i.Key).OfType<GroupKey>())
+            if (fold) Groups.Folded.Add(h.Id); else Groups.Folded.Remove(h.Id);
+        Save();
+    }
+
+    /// <summary>A tab picked while its group is folded: open the group so its row can be selected. False when it was
+    /// open, so a caller retrying on a missing row cannot loop.</summary>
+    public bool Unfold(SessionTab tab)
+    {
+        // a delegate's row is also hidden by a folded parent, and its group is its top parent's
+        var parents = ParentTabs();
+        var root = tab;
+        var any = false;
+        for (var p = parents.GetValueOrDefault(tab); p is not null; root = p, p = parents.GetValueOrDefault(p))
+            any |= p.SessionId is { } sid && Groups.Folded.Remove(SessionGroups.SubId(sid));
+        any |= Groups.Folded.Remove(GroupOf(root));
+        if (!any) return false;
+        Save();
+        return true;
+    }
+
+    void Save()
+    {
+        Write();
+        Refresh();
+    }
+
+    /// <summary>A file that will not write keeps the change for this run.</summary>
+    void Write()
+    {
+        try { Groups.Save(SessionGroups.DefaultPath); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     int IndexOf(object key, int from)
@@ -162,5 +323,4 @@ public sealed class Sidebar
     }
 
     static string Str(JsonObject? o, string k) => SidebarItem.Str(o, k);
-    static double Num(JsonObject? o, string k) => SidebarItem.Num(o, k);
 }

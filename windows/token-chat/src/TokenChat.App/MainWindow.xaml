@@ -54,6 +54,155 @@
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
                         Height="34" Margin="0,0,4,0">
+                <!-- master plan mode (commands/master.md): MASTER makes the session a master, LIVE keeps it warm for good;
+                     the summary counts its delegates open here and their questions waiting -->
+                <StackPanel DataContext="{Binding Content, ElementName=Chat}" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
+                    <StackPanel.Resources>
+                        <Style x:Key="CapPill" TargetType="Button">
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+                            <Setter Property="Margin" Value="0,0,4,0"/>
+                            <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+                            <Setter Property="Background" Value="{StaticResource Inset}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="B" CornerRadius="4" Padding="7,1,7,2" Background="{TemplateBinding Background}">
+                                            <TextBlock Text="{TemplateBinding Content}" FontSize="10.5" FontWeight="SemiBold" Foreground="{TemplateBinding Foreground}"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </StackPanel.Resources>
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SessionId}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                                <!-- a delegate has a master; it is not one -->
+                                <DataTrigger Binding="{Binding Locked}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <Button Content="MASTER" Click="OnMasterPill"
+                            ToolTip="Master plan mode: plan and document here, delegate the token-heavy work, answer the delegates' questions">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource CapPill}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsMaster}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource Yellow}"/>
+                                        <Setter Property="Background" Value="{StaticResource Sel}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="LIVE" Click="OnLivePill"
+                            ToolTip="Never goes cold: renewed every hour (~0.05x of the window each) while the machine is awake; leaves by /handoff">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource CapPill}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsMaster}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsLive}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource Green}"/>
+                                        <Setter Property="Background" Value="{StaticResource Sel}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <TextBlock Text="{Binding MasterSummary}" FontSize="10.5" Foreground="{StaticResource Dim}" VerticalAlignment="Center" Margin="2,0,0,1"/>
+                </StackPanel>
+                <!-- the selected session's plan: its checkpoint's Next, or its todo list; a click opens the steps -->
+                <Grid DataContext="{Binding Content, ElementName=Chat}" VerticalAlignment="Center" Margin="0,0,6,0">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Plan}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <ToggleButton x:Name="PlanChip" Content="{Binding Plan.Chip}" Cursor="Hand" Focusable="False" ToolTip="the session's plan"
+                                  WindowChrome.IsHitTestVisibleInChrome="True">
+                        <ToggleButton.Template>
+                            <ControlTemplate TargetType="ToggleButton">
+                                <Border x:Name="B" CornerRadius="4" Padding="7,1,7,2" Background="{StaticResource Inset}">
+                                    <TextBlock Text="{TemplateBinding Content}" FontSize="10.5" Foreground="{StaticResource Dim}"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </ToggleButton.Template>
+                    </ToggleButton>
+                    <Popup x:Name="PlanPopup" IsOpen="{Binding IsChecked, ElementName=PlanChip, Mode=TwoWay}" PlacementTarget="{Binding ElementName=PlanChip}"
+                           Placement="Custom" StaysOpen="False" AllowsTransparency="True">
+                        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="6"
+                                Padding="12,10" MinWidth="240" MaxWidth="440">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Plan.Source}" FontSize="10" Foreground="{StaticResource Faint}" Margin="0,0,0,6"/>
+                                <ItemsControl ItemsSource="{Binding Plan.Steps}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="16"/>
+                                                    <ColumnDefinition/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="M" Text="{Binding Mark}" FontSize="11" Foreground="{StaticResource Faint}"/>
+                                                <TextBlock x:Name="T" Grid.Column="1" Text="{Binding Text}" FontSize="11.5" TextWrapping="Wrap"
+                                                           Foreground="{StaticResource Dim}"/>
+                                            </Grid>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding State}" Value="now">
+                                                    <Setter TargetName="M" Property="Foreground" Value="{StaticResource Blue}"/>
+                                                    <Setter TargetName="T" Property="Foreground" Value="{StaticResource Text}"/>
+                                                    <Setter TargetName="T" Property="FontWeight" Value="SemiBold"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding State}" Value="done">
+                                                    <Setter TargetName="M" Property="Foreground" Value="{StaticResource Green}"/>
+                                                    <Setter TargetName="T" Property="Foreground" Value="{StaticResource Faint}"/>
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Margin="0,8,0,0" FontSize="10.5" Foreground="{StaticResource Faint}" TextWrapping="Wrap">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Plan.StopAfter}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                    <Run Text="Stop after: "/><Run Text="{Binding Plan.StopAfter, Mode=OneWay}"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
+                </Grid>
                 <Button Content="&#8211;" Style="{StaticResource Glyph}" FontSize="12" ToolTip="minimise" Click="OnMinimise"/>
                 <Button x:Name="MaxGlyph" Content="&#9633;" Style="{StaticResource Glyph}" FontSize="12" ToolTip="maximise" Click="OnMaximise"/>
                 <Button Content="&#10005;" Style="{StaticResource GlyphClose}" ToolTip="close" Click="OnClose"/>

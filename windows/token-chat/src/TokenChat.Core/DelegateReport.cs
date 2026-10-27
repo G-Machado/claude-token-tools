@@ -40,6 +40,28 @@ public sealed record DelegateReport(string Path, string For, string? Sid, string
     public static readonly string LogPath = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "token-delegate.log");
 
+    /// <summary>The parent sid in the newest <c>&lt;proj&gt;.&lt;topic&gt;.md</c> checkpoint's park header (delegate-of=),
+    /// null when there is none or no file reads.</summary>
+    public static string? ParentOf(string topic) => HeaderField(topic, "delegate-of");
+
+    /// <summary>A <c>name=value</c> from the park header of the newest <c>&lt;proj&gt;.&lt;topic&gt;.md</c> that has it:
+    /// delegate-of=, or master= on a master's delegate (commands/delegate.md).</summary>
+    public static string? HeaderField(string topic, string name)
+    {
+        var field = new Regex(@"(?:^|\s)" + Regex.Escape(name) + @"=([^\s>-][^\s>]*)");
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(Dir)!;
+            foreach (var f in new DirectoryInfo(dir).GetFiles("*." + topic + ".md").OrderByDescending(f => f.LastWriteTimeUtc))
+            {
+                using var r = f.OpenText();
+                if (field.Match(r.ReadLine() ?? "") is { Success: true } m) return m.Groups[1].Value;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        return null;
+    }
+
     public static void Log(string evt, string? topic, string? parent, string? sid, string? extra = null)
     {
         try { File.AppendAllText(LogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\t{evt}\t{topic}\t{parent}\t{sid}\t{extra}\n"); }

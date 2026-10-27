@@ -22,6 +22,13 @@ public partial class SidebarView : UserControl
         _flash.Tick += (_, _) => { _flash.Stop(); Note.Text = "sessions"; Note.Foreground = (Brush)FindResource("Faint"); };
         List.PreviewKeyDown += OnKey;
         List.MouseDoubleClick += (_, _) => { if (List.SelectedItem is SidebarItem item) Open(item); };
+        // a header folds on a click and is never selected
+        List.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (ItemsControl.ContainerFromElement(List, e.OriginalSource as DependencyObject) is not ListBoxItem { DataContext: SidebarItem { IsHeader: true } h }) return;
+            Toggle(h);
+            e.Handled = true;
+        };
         ParkedList.MouseDoubleClick += (_, _) => { if (ParkedList.SelectedItem is Checkpoint c) Unpark?.Invoke(c); };
         ParkedList.PreviewKeyDown += (_, e) =>
         {
@@ -36,6 +43,9 @@ public partial class SidebarView : UserControl
     public event Action<Checkpoint>? Unpark;
     /// <summary>The section opened: re-list, as the widget does on opening its Parked tab.</summary>
     public event Action? OpenedParked;
+
+    /// <summary>The rows' model, for the group actions; MainWindow sets it.</summary>
+    public Sidebar? Model { get; set; }
 
     /// <summary>The header's line, for what MainWindow's unpark has to say.</summary>
     public void Say(string text) => Flash(text);
@@ -83,9 +93,82 @@ public partial class SidebarView : UserControl
     void OnCopy(object sender, RoutedEventArgs e) { if (ItemOf(sender) is { } item) Copy(item); }
     void OnFolder(object sender, RoutedEventArgs e) { if (ItemOf(sender) is { } item) Folder(item); }
 
+    void Toggle(SidebarItem header) => Model?.Toggle(((GroupKey)header.Key).Id);
+
+    /// <summary>A parent's "N delegates": folds them under its row, or shows them.</summary>
+    void OnToggleChildren(object sender, MouseButtonEventArgs e)
+    {
+        if (ItemOf(sender) is not { Sid: { Length: > 0 } sid }) return;
+        Model?.Toggle(SessionGroups.SubId(sid));
+        e.Handled = true;
+    }
+
+    /// <summary>The row menu's "move to group", built as it opens so it lists the groups as they are now.</summary>
+    void OnGroupMenu(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource != sender || sender is not MenuItem menu || ItemOf(menu) is not { } item || Model is not { } model) return;
+        menu.Items.Clear();
+        foreach (var name in model.Groups.Names.Where(n => n != item.Group))
+        {
+            var to = name;
+            menu.Items.Add(Entry(to, () => model.Move(item.Sid, to)));
+        }
+        menu.Items.Add(Entry("new group…", () =>
+        {
+            if (AskName("new group", "") is { } name) model.Move(item.Sid, name);
+        }));
+        if (item.Group.Length > 0) menu.Items.Add(Entry("back to its folder", () => model.Move(item.Sid, null)));
+    }
+
+    static MenuItem Entry(string header, Action act)
+    {
+        var m = new MenuItem { Header = header };
+        m.Click += (_, _) => act();
+        return m;
+    }
+
+    void OnRenameGroup(object sender, RoutedEventArgs e)
+    {
+        if (ItemOf(sender) is { Named: true } h && AskName("rename the group", h.Name) is { } name && name != h.Name)
+            Model?.Rename(h.Name, name);
+    }
+
+    void OnUngroup(object sender, RoutedEventArgs e) { if (ItemOf(sender) is { Named: true } h) Model?.Ungroup(h.Name); }
+    void OnFoldAll(object sender, RoutedEventArgs e) => Model?.FoldAll(true);
+    void OnUnfoldAll(object sender, RoutedEventArgs e) => Model?.FoldAll(false);
+
+    /// <summary>A one-line prompt over the window: enter keeps the trimmed text, esc or an empty line is null.</summary>
+    string? AskName(string title, string initial)
+    {
+        var box = new TextBox { Text = initial, MinWidth = 220, Margin = new Thickness(12), Padding = new Thickness(4, 3, 4, 3),
+            Background = (Brush)FindResource("Inset"), Foreground = (Brush)FindResource("Text"), BorderBrush = (Brush)FindResource("Line"),
+            CaretBrush = (Brush)FindResource("Text") };
+        var win = new Window
+        {
+            Title = title, Content = box, Owner = Window.GetWindow(this), SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize,
+            WindowStyle = WindowStyle.ToolWindow, ShowInTaskbar = false, Background = (Brush)FindResource("Card"),
+        };
+        box.KeyDown += (_, k) =>
+        {
+            if (k.Key == Key.Enter) win.DialogResult = true;
+            else if (k.Key == Key.Escape) win.DialogResult = false;
+        };
+        win.Loaded += (_, _) => { box.Focus(); box.SelectAll(); };
+        return win.ShowDialog() == true && box.Text.Trim() is { Length: > 0 } name ? name : null;
+    }
+
     void OnKey(object sender, KeyEventArgs e)
     {
         if (List.SelectedItem is not SidebarItem item || (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0) return;
+        if (item.IsHeader)
+        {
+            if (e.Key is not (Key.Enter or Key.Space or Key.Left or Key.Right)) return;
+            // left folds, right unfolds, enter and space flip
+            if (e.Key switch { Key.Left => !item.Folded, Key.Right => item.Folded, _ => true }) Toggle(item);
+            e.Handled = true;
+            return;
+        }
         switch (e.Key)
         {
             case Key.E: Mark(item, (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? -1 : 1); break;

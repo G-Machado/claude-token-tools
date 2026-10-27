@@ -79,6 +79,10 @@ public sealed class TranscriptProjector
         Items.Add(item);
     }
 
+    /// <summary>The main chain's last TodoWrite list; TodosChanged fires on each.</summary>
+    public JsonArray? Todos { get; private set; }
+    public event Action? TodosChanged;
+
     public void Apply(ClaudeEvent e)
     {
         switch (e)
@@ -245,6 +249,11 @@ public sealed class TranscriptProjector
                 t.Input = Parse(json);
                 t.Summary = t.Input is { } input ? Summarize(input) : OneLine(json, 160);
                 t.Line = ToolText.Describe(t.ToolName, t.Input, Cwd);
+                if (t.ToolName == "TodoWrite" && t.Input?["todos"] is JsonArray todos)
+                {
+                    Todos = todos;
+                    TodosChanged?.Invoke();
+                }
                 if (t == _unplaced) PlaceUnplaced();
                 break;
         }

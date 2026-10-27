@@ -9,7 +9,7 @@ public static class RangeGrades
 {
     /// <summary>Output and growth past the feature tier: what the Stop hook flags on this machine (every 7d row with
     /// output over 20k carries "o", and none at or under it, 2026-10-13).</summary>
-    const long OutputBudget = 20000, GrowthBudget = 25000;
+    const long OutputBudget = 40000, GrowthBudget = 50000; // doubled 2026-10-26 with token-cycles.sh
 
     /// <summary>The raw figures for cycles that started in [from, until); from null = since the beginning.</summary>
     public sealed record Figures(double Held, double Short, double Churn, double Control, int Cycles);
