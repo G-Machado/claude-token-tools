@@ -3,10 +3,36 @@ using System.Text.RegularExpressions;
 
 namespace TokenChat.Core;
 
-/// <summary>One step of a session's plan: State is done, now (the one under way) or todo.</summary>
+/// <summary>One step of a session's plan: State is done, now (the one under way) or todo. The popup shows Title and
+/// folds Detail under it.</summary>
 public sealed record PlanStep(string Text, string State)
 {
     public string Mark => State switch { "done" => "✓", "now" => "▸", _ => "○" };
+    public string Title => Split(Text).Title;
+    public string Detail => Split(Text).Detail;
+
+    const int TitleChars = 80;
+    static readonly Regex Done = new(@"^(DONE\b[\s:—-]*|\[x\]\s*)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>The lead clause: up to " — ", else to the first ". " or ": ", else the whole step; a lead over 80
+    /// characters is cut at a word and the whole step becomes the detail.</summary>
+    public static (string Title, string Detail) Split(string text)
+    {
+        var t = Done.Replace(text.Replace("~~", ""), "").Trim();
+        int at = t.IndexOf(" — ", StringComparison.Ordinal), skip = 3;
+        if (at < 0)
+        {
+            var dot = t.IndexOf(". ", StringComparison.Ordinal);
+            var colon = t.IndexOf(": ", StringComparison.Ordinal);
+            at = dot < 0 ? colon : colon < 0 ? dot : Math.Min(dot, colon);
+            skip = 2;
+        }
+        var (title, detail) = at < 0 ? (t, "") : (t[..at], t[(at + skip)..].Trim());
+        title = title.TrimEnd('.', ' ');
+        if (title.Length <= TitleChars) return (title, detail);
+        var cut = title.LastIndexOf(' ', TitleChars);
+        return (title[..(cut > 40 ? cut : TitleChars)] + "…", t);
+    }
 }
 
 /// <summary>The caption chip's plan for a tab: its checkpoint's ## Next (a numbered item starting DONE, [x] or ~~ is
@@ -38,7 +64,7 @@ public sealed record Plan(IReadOnlyList<PlanStep> Steps, string? StopAfter, stri
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
     }
 
-    /// <summary>Null when ## Next has no numbered item. An item is its first line.</summary>
+    /// <summary>Null when ## Next has no numbered item. An item is its first line and the indented lines under it.</summary>
     public static Plan? FromCheckpoint(string path, string text)
     {
         var steps = new List<PlanStep>();
@@ -61,6 +87,8 @@ public sealed record Plan(IReadOnlyList<PlanStep> Steps, string? StopAfter, stri
                     || item.StartsWith("~~", StringComparison.Ordinal);
                 steps.Add(new(item, done ? "done" : "todo"));
             }
+            else if (steps.Count > 0 && raw.Length > 0 && char.IsWhiteSpace(raw[0]) && raw.Trim() is { Length: > 0 } more)
+                steps[^1] = steps[^1] with { Text = steps[^1].Text + " " + more };
         }
         return steps.Count == 0 ? null : new(UnderWay(steps), stop, Path.GetFileName(path));
     }

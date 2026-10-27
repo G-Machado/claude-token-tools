@@ -37,8 +37,8 @@ exist to cut that: hand over the plan, the exact ranges and the facts, not a sum
 # <project> — <topic> — <YYYY-MM-DD HH:MM>
 
 ## Next
-1. <first action: file:line or command, and the edit or answer it leads to>
-2. <...the plan as far as this window already knows it>
+1. <short title> — <first action: file:line or command, and the edit or answer it leads to>
+2. <short title> — <...the plan as far as this window already knows it>
 Stop after: <the point where the cold session reports back>
 
 ## Goal
@@ -70,7 +70,9 @@ Stop after: <the point where the cold session reports back>
 
 - **Next** is the plan, not a hint: the steps this window would take next, in order, each concrete
   enough to start cold. After a `/handoff` the cold session runs them unasked unless Waiting on the
-  user has items, so a step that needs the user's say belongs there, not in Next.
+  user has items, so a step that needs the user's say belongs there, not in Next. Each step opens
+  with a title of a few words, then ` — ` and the detail: TokenChat's plan popup shows the title
+  and folds the rest.
 - **Map**: only what the Next steps touch, as line ranges seen in this window, at most 8 rows.
   `not here:` saves the cold session from searching the same places again.
 - **Facts**: at most 10 lines, copied from the window, never recalled.

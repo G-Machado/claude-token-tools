@@ -262,10 +262,18 @@
                                         Visibility="{Binding Here, Converter={StaticResource Shown}}"/>
                                 <TextBlock x:Name="Dot" Text="&#9679;" FontSize="9" Margin="0,1,7,0" Foreground="{StaticResource Faint}"
                                            VerticalAlignment="Center" Width="9" TextAlignment="Center" ToolTip="{Binding State}"/>
-                                <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
-                                    <Run Text="{Binding Arrow, Mode=OneWay}" FontSize="11" Foreground="{StaticResource Faint}"/><Run Text="{Binding Name, Mode=OneWay}" FontSize="12" FontWeight="SemiBold"/><Run
-                                         Text="  "/><Run Text="{Binding Project, Mode=OneWay}" FontSize="10.5" Foreground="{StaticResource Faint}"/>
-                                </TextBlock>
+                                <!-- the name trims first; the project keeps its own cell so it stays readable -->
+                                <Grid Grid.Column="1" VerticalAlignment="Center">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}">
+                                        <Run Text="{Binding Arrow, Mode=OneWay}" FontSize="11" Foreground="{StaticResource Faint}"/><Run Text="{Binding Name, Mode=OneWay}" FontSize="12" FontWeight="SemiBold"/>
+                                    </TextBlock>
+                                    <TextBlock Grid.Column="1" Text="{Binding Project}" FontSize="10.5" Foreground="{StaticResource Faint}" Margin="6,0,0,0"
+                                               MaxWidth="110" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip="{Binding Project}"/>
+                                </Grid>
                                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                                 <!-- master plan mode: a master's M and its delegates and asks -->
                                 <Border Style="{StaticResource Pill}" Background="{StaticResource Blue}" Margin="8,0,0,0"

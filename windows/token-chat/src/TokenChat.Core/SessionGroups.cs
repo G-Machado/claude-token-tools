@@ -16,6 +16,8 @@ public sealed class SessionGroups
     public HashSet<string> Folded { get; set; } = [];
     public Dictionary<string, string> Parents { get; set; } = [];
     public Dictionary<string, string> Topics { get; set; } = [];
+    /// <summary>A session's sidebar title from <see cref="Titler"/>, sid to title.</summary>
+    public Dictionary<string, string> Titles { get; set; } = [];
 
     public static string NamedId(string name) => "#" + name;
     /// <summary>A parent's delegates folded under its row.</summary>

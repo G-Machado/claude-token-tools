@@ -153,7 +153,7 @@ public sealed class Sidebar
     {
         if (e.PropertyName is nameof(SessionTab.Row) or nameof(SessionTab.State) or nameof(SessionTab.Waiting)
             or nameof(SessionTab.IsMaster) or nameof(SessionTab.MasterSummary) or nameof(SessionTab.DelegateState)
-            or nameof(SessionTab.HandedFrom)) Schedule();
+            or nameof(SessionTab.HandedFrom) or nameof(SessionTab.AutoTitle)) Schedule();
     }
 
     /// <summary>Every tab sets its Row on its own clock and the feed lands on a pool thread: one rebuild per burst.</summary>
@@ -194,8 +194,8 @@ public sealed class Sidebar
             {
                 JsonObject? s = null;
                 if (t.SessionId is { } sid) feed?.Sessions.TryGetValue(sid, out s);
-                // the topic names the session; the tab's title (its folder) is then the project
-                var nick = Str(s, "nick");
+                // Haiku's title, else the topic, names the session; the tab's title (its folder) is then the project
+                var nick = t.AutoTitle ?? Str(s, "nick");
                 var children = kids[t].ToList();
                 var shut = children.Count > 0 && t.SessionId is { } id && Groups.Folded.Contains(SessionGroups.SubId(id));
                 // folded, the parent goes yellow while a delegate under it waits, as a folded group's header does; a card
@@ -259,6 +259,8 @@ public sealed class Sidebar
             if (t.ParentSid is { } p0 && Heir(p0) is var p && Groups.Parents.GetValueOrDefault(sid) != p) { Groups.Parents[sid] = p; changed = true; }
             if (t.Topic is null && Groups.Topics.TryGetValue(sid, out var known)) t.Topic = known;
             else if (t.Topic is { } topic && Groups.Topics.GetValueOrDefault(sid) != topic) { Groups.Topics[sid] = topic; changed = true; }
+            if (t.AutoTitle is null && Groups.Titles.TryGetValue(sid, out var title)) t.AutoTitle = title;
+            else if (t.AutoTitle is { } at && Groups.Titles.GetValueOrDefault(sid) != at) { Groups.Titles[sid] = at; changed = true; }
         }
         if (changed) Write();
     }

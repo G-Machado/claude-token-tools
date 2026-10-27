@@ -170,10 +170,31 @@
                                                     <ColumnDefinition/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock x:Name="M" Text="{Binding Mark}" FontSize="11" Foreground="{StaticResource Faint}"/>
-                                                <TextBlock x:Name="T" Grid.Column="1" Text="{Binding Text}" FontSize="11.5" TextWrapping="Wrap"
-                                                           Foreground="{StaticResource Dim}"/>
+                                                <!-- the title; a click folds the detail open, two lines at most, the rest in its tooltip -->
+                                                <StackPanel Grid.Column="1">
+                                                    <ToggleButton x:Name="Fold" Cursor="Hand" Focusable="False">
+                                                        <ToggleButton.Template>
+                                                            <ControlTemplate TargetType="ToggleButton">
+                                                                <ContentPresenter/>
+                                                            </ControlTemplate>
+                                                        </ToggleButton.Template>
+                                                        <TextBlock x:Name="T" FontSize="11.5" TextWrapping="Wrap" Foreground="{StaticResource Dim}"
+                                                                   Background="Transparent"><Run Text="{Binding Title, Mode=OneWay}"/><Run
+                                                                   x:Name="Chev" Text=" &#9662;" FontSize="9" Foreground="{StaticResource Faint}"/></TextBlock>
+                                                    </ToggleButton>
+                                                    <TextBlock x:Name="D" Text="{Binding Detail}" ToolTip="{Binding Detail}" FontSize="10.5" Foreground="{StaticResource Faint}"
+                                                               TextWrapping="Wrap" TextTrimming="CharacterEllipsis" LineHeight="14"
+                                                               LineStackingStrategy="BlockLineHeight" MaxHeight="28" Margin="0,1,0,0" Visibility="Collapsed"/>
+                                                </StackPanel>
                                             </Grid>
                                             <DataTemplate.Triggers>
+                                                <Trigger SourceName="Fold" Property="IsChecked" Value="True">
+                                                    <Setter TargetName="D" Property="Visibility" Value="Visible"/>
+                                                </Trigger>
+                                                <DataTrigger Binding="{Binding Detail}" Value="">
+                                                    <Setter TargetName="Chev" Property="Text" Value=""/>
+                                                    <Setter TargetName="Fold" Property="IsHitTestVisible" Value="False"/>
+                                                </DataTrigger>
                                                 <DataTrigger Binding="{Binding State}" Value="now">
                                                     <Setter TargetName="M" Property="Foreground" Value="{StaticResource Blue}"/>
                                                     <Setter TargetName="T" Property="Foreground" Value="{StaticResource Text}"/>

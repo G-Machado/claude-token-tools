@@ -61,6 +61,30 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     string? _topic;
     public string? ParentSid { get; }
 
+    /// <summary>Haiku's name for what the session works on now (<see cref="Titler"/>); the sidebar keeps it by session id.</summary>
+    public string? AutoTitle { get => _autoTitle; internal set => Set(ref _autoTitle, value); }
+    string? _autoTitle;
+    readonly List<string> _prompts = [];
+    int _sinceAsk;
+    bool _titling;
+
+    /// <summary>Typed prompts feed the title; slash commands and pokes do not.</summary>
+    void NotePrompt(string text)
+    {
+        if (text.TrimStart().StartsWith('/') || text.Trim().Length == 0) return;
+        _prompts.Add(text);
+        _sinceAsk++;
+    }
+
+    async Task RetitleAsync()
+    {
+        if (_titling || _replay is not null || !Titler.Due(AutoTitle, _sinceAsk)) return;
+        _titling = true;
+        _sinceAsk = 0;
+        try { if (await Titler.AskAsync(AutoTitle, Topic, _prompts) is { } t) AutoTitle = t; }
+        finally { _titling = false; }
+    }
+
     /// <summary>firstPrompt goes out as the first message once claude is up: the Parked tab's /unpark. replay stands in
     /// for claude (--preview).</summary>
     public SessionTab(LaunchOptions options, string? firstPrompt = null, IClaudeTransport? replay = null)
@@ -185,6 +209,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     async Task SendNowAsync(ClaudeSession s, QueuedMessage m)
     {
         Transcript.AddUser(m.Text, m.Files.Select(f => f.Label).ToList());
+        NotePrompt(m.Text);
         try { await (m.Files.Count == 0 ? s.SendAsync(m.Text) : s.SendAsync(Core.Attachments.Blocks(m.Text, m.Files))); }
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "send failed", ex.Message); }
         UpdateStatus();
@@ -708,7 +733,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         {
             case StatusEvent s: _activity = s.Status; break;
             case QuestionRequest q when MasterSid is not null: RouteToMaster(q.RequestId); break;
-            case ResultEvent: _activity = null; TurnEnded?.Invoke(); if (!HandedOff) OfferHandoff(); break;
+            case ResultEvent: _activity = null; TurnEnded?.Invoke(); _ = RetitleAsync(); if (!HandedOff) OfferHandoff(); break;
         }
     }
 
