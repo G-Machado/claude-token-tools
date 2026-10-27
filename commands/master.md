@@ -45,7 +45,24 @@ You are the planner and the integrator. The token-heavy, decision-free work goes
    Decided. **Escalate to the user only** what changes direction, scope or a Decided item: batch
    those on one AskUserQuestion card, then answer the delegate with what the user chose.
 5. **Merge** a delegate's branch when its report lands: read the report, check the stop
-   criteria, `git merge delegate/<slug>` or send it back with a new `/delegate`.
+   criteria, `git merge delegate/<slug>` or send it back with a new `/delegate`. A `--shared`
+   delegate has no branch: review its changes in this checkout (`git diff -- <its Scope>`), then
+   commit them with an explicit pathspec (`git commit -- <paths>`), never anything outside Scope.
+
+## Unity: one Editor, ever
+
+In a Unity project (`Assets/` + `ProjectSettings/`) there is exactly one Editor open. Never
+suggest a second one, a worktree Editor, or a Library copy/junction.
+
+- Editor work goes to `/delegate --shared`; worktree delegates only for Editor-free work.
+- Scopes are disjoint per `.unity` scene and prefab across all live delegates.
+- **Lease**: `node "$HOME/.claude/token-master.js" lease take|release|status`. This session holds
+  it by default (`lease take` at `master on` in a Unity project) and **lends** it per step:
+  when a delegate asks for it, `lease release`, answer "go", and take it back when the delegate
+  reports the step done. Several askers queue: one at a time, in ask order, note the queue in
+  the plan doc. The lease covers writes under `Assets/` (a recompile disturbs everyone), scene
+  open/switch, play mode, builds and tests; Unity CLI reads are free.
+- Lease waits are answered here, never passed to the user.
 6. **Leave the window by handoff.** Past `TOKEN_MASTER_HANDOFF_AT` (default 200k), at the next
    clean point, rewrite the plan doc and offer `/handoff <topic>`. The new window takes the master
    over (`/unpark` runs `token-master.js handover`). `/compact` only if the user asks.

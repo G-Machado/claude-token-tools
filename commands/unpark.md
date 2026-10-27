@@ -65,6 +65,14 @@ session, another developer, or the user's own hands.
     assumed), **Blocked** if any, and **Merge**: `git merge delegate/<slug>` from the parent tree,
     then `git worktree remove <worktree>` and `git branch -d delegate/<slug>`.
   - Reply with one line: the report path. The parent picks it up from there.
+  - **Header has `shared=1`** (a `/delegate --shared` delegate in the master's checkout): the
+    branch is the master's, not `delegate/<topic>` (not a failed check). **No commits**; the
+    report's Merge line is "review + commit by the master: `git commit -- <Scope paths>`".
+    Before any write under `Assets/`, scene open/switch, play mode, build or test, run
+    `node "$HOME/.claude/token-master.js" lease take --slug <topic>`; exit 1 (held) means ask the
+    master on an AskUserQuestion card ("Editor lease for <step>?", options `go` / `wait`), wait
+    for `go`, take it, do the step, then `lease release`. Unity CLI reads need no lease. Touch only
+    the scenes and prefabs Scope names.
 
 **Working from it.** Read the Map ranges only when a Next step needs them, as ranged reads; skip the
 `not here:` places and use Facts instead of reading. An `open:` line comes with its check: run that

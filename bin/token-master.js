@@ -19,6 +19,13 @@
 //   token-master.js answer <slug> <text...> [--sid S]
 //   token-master.js handover <old sid> [--sid NEW]   (handoff: the new window becomes the master)
 //   token-master.js status [--sid S] | list
+//   token-master.js lease take|release|status [--slug S] [--proj P] [--sid S]
+//
+// Editor lease (one Unity Editor shared by a master and its --shared delegates):
+// ~/.claude/leases/<proj>.json { sid, slug, since }, <proj> = basename of cwd unless --proj.
+// take: exit 0 if free, stale (holder sid not a live process) or already ours; exit 1 and the
+// holder on stdout if another live session holds it. release: only the holder (exit 1 otherwise).
+// Live = some ~/.claude/sessions/<pid>.json names the sid and that pid still runs.
 'use strict';
 const fs = require('fs'), path = require('path'), os = require('os');
 
@@ -138,6 +145,45 @@ switch (cmd) {
     if (!n) console.log('no masters');
     break;
   }
+  case 'lease': {
+    const sub = argv.shift();
+    const slug = flag('--slug');
+    const proj = flag('--proj') || path.basename(process.cwd());
+    const lf = path.join(os.homedir(), '.claude', 'leases', proj + '.json');
+    let cur = null;
+    try { cur = JSON.parse(fs.readFileSync(lf, 'utf8')); } catch { }
+    const desc = l => `${l.sid.slice(0, 8)}${l.slug ? ' (' + l.slug + ')' : ''} since ${l.since}`;
+    const live = l => {
+      const sd = path.join(os.homedir(), '.claude', 'sessions');
+      for (const f of (fs.existsSync(sd) ? fs.readdirSync(sd) : []).filter(f => f.endsWith('.json'))) {
+        let r; try { r = JSON.parse(fs.readFileSync(path.join(sd, f), 'utf8')); } catch { continue; }
+        if (r.sessionId !== l.sid) continue;
+        try { process.kill(r.pid, 0); return true; } catch (e) { if (e.code === 'EPERM') return true; }
+      }
+      return false;
+    };
+    if (sub === 'status') {
+      if (!cur) console.log(`free ${proj}`);
+      else console.log(`held ${proj} by ${desc(cur)}${live(cur) ? '' : ' (stale: holder not live)'}`);
+      break;
+    }
+    const s = needSid();
+    if (sub === 'take') {
+      if (cur && cur.sid !== s && live(cur)) { console.log(`held ${proj} by ${desc(cur)}`); process.exit(1); }
+      const l = { sid: s, slug: slug || (cur && cur.sid === s ? cur.slug : null), since: cur && cur.sid === s ? cur.since : now() };
+      writeJson(lf, l);
+      console.log(`taken ${proj} by ${desc(l)}${cur && cur.sid !== s ? ' (was stale: ' + desc(cur) + ')' : ''}`);
+      break;
+    }
+    if (sub === 'release') {
+      if (!cur) { console.log(`free ${proj}`); break; }
+      if (cur.sid !== s) { console.log(`held ${proj} by ${desc(cur)} - not yours`); process.exit(1); }
+      fs.unlinkSync(lf);
+      console.log(`released ${proj}`);
+      break;
+    }
+    die('lease takes take|release|status');
+  }
   default:
-    die('usage: on|off|live on|off|add-delegate <slug>|answer <slug> <text>|handover <old sid>|status|list');
+    die('usage: on|off|live on|off|add-delegate <slug>|answer <slug> <text>|handover <old sid>|status|list|lease take|release|status');
 }
