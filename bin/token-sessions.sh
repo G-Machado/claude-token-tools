@@ -265,7 +265,7 @@ BELL_MIN="${TOKEN_BELL_MIN:-5}"          # minutes of cache life left that rings
 POPUP="${TOKEN_POPUP:-1}"                # desktop notification alongside the bell
 TTL="${TOKEN_CACHE_TTL_MIN:-60}"
 CTXMAX="${TOKEN_CTX_FULL_K:-300}"        # context bar full-scale, thousands
-OBUD="${TOKEN_ALERT_BUDGET:-20000}"      # output budget per cycle, for the trend colour
+OBUD="${TOKEN_ALERT_BUDGET:-40000}"      # output budget per cycle, for the trend colour
 GBUD="${TOKEN_GROWTH_BUDGET:-40000}"     # growth budget per cycle, for the trend scale
 # Full scale for the DAILY spend sparkline. It used to scale to the tallest
 # bucket in the series, so one 22M day (2026-09-02) flattened every other day
@@ -2660,12 +2660,20 @@ read_limits() {
       /"aheadOfPace":/      { AH[n] = ($0 ~ /true/) ? 1 : 0; next }
       /"willLastToReset":/  { WL[n] = ($0 ~ /false/) ? 0 : 1; next }
       /"usageAgeSeconds":/  { AG[n] = num($0); blk = ""; next }
+      # relogin_required: "usage" is null and the bars above came from
+      # lastGoodUsage, so their age is the last good read, not -1.
+      /"lastGoodAgeSeconds":/ { AG[n] = num($0); blk = ""; next }
+      # Refresh-token expiry (cswap 0.27+), raw ISO; the widget turns it into
+      # hours left. Its own L row, because merge_live_usage appends columns
+      # to A rows and a new A column would move them.
+      /"loginExpiresAt":/   { LX[n] = str($0); next }
       END {
         printf "S\tcswap\t%d\n", act
-        for (i = 1; i <= n; i++)
+        for (i = 1; i <= n; i++) {
           printf "A\t%d\t%s\t%d\t%s\t%.1f\t%s\t%.1f\t%s\t%.1f\t%d\t%d\t%d\n", \
             N[i], E[i], A[i], (U[i] == "" ? "ok" : U[i]), P5[i], C5[i], \
-            P7[i], C7[i], X[i], AH[i], WL[i], AG[i] }' "$cj" >> "$LIMF" 2>/dev/null
+            P7[i], C7[i], X[i], AH[i], WL[i], AG[i]
+          if (LX[i] != "") printf "L\t%d\t%s\n", N[i], LX[i] } }' "$cj" >> "$LIMF" 2>/dev/null
     # The percentages cswap just handed over are as fresh as its last poll of
     # each account, which is not the same thing as fresh.
     if [ -s "$LIMF" ]; then merge_live_usage; return 0; fi
@@ -2868,6 +2876,7 @@ emit_json() {
     while ((getline ll < limf) > 0) {
       nlf = split(ll, lf, "\t")
       if (lf[1] == "S") { LSRC = lf[2]; LACT = lf[3] + 0; continue }
+      if (lf[1] == "L") { LLX[lf[2] + 0] = lf[3]; continue }
       if (lf[1] != "A" || nlf < 13) continue
       LN++
       # 13 fields is a cswap row; merge_live_usage appends two more, and a row
@@ -3059,8 +3068,8 @@ emit_json() {
       # live: how many windows on this machine are spending the account right
       # now. usage_src: whether the two percentages above came from one of
       # those windows or from the last cswap poll.
-      printf "\"live\":%d,\"usage_src\":%s}", \
-        LA[i,13] + 0, jstr(LA[i,14] == "" ? "cswap" : LA[i,14]) }
+      printf "\"live\":%d,\"usage_src\":%s,\"login_expires\":%s}", \
+        LA[i,13] + 0, jstr(LA[i,14] == "" ? "cswap" : LA[i,14]), jstr(LLX[LA[i,1] + 0]) }
     printf "]},\n"
 
     # What to DO about the above, worked out here rather than in each reader, so
@@ -5830,8 +5839,25 @@ pokes_of() {  # pokes_of <short>  ->  count|minutes since the most recent
   printf '%s' "$out"
 }
 
+# Master plan mode (token-master.js): a live master never runs out of marks and
+# has no context floor, so the renewer keeps it warm all day and the lapse-park
+# and its block never fire. It leaves its window by /handoff or /compact only.
+# Read straight from ~/.claude/token-master/<full sid>.json, no node on this path.
+MASTERD="$CL/token-master"
+is_live() {  # is_live <short>
+  local f
+  for f in "$MASTERD/$1"*.json; do
+    [ -f "$f" ] && grep -q '"live": *true' "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+min_ctx() {  # min_ctx <short>
+  if is_live "$1"; then printf '0'; else printf '%s' "$EXT_MIN_CTX"; fi
+}
+
 ext_allowed() {  # ext_allowed <short>
   local v=""
+  if is_live "$1"; then printf '%s' $(( $(ext_used "$1") + 99 )); return; fi
   [ -f "$EXTF" ] && v=$(awk -F'\t' -v s="$1" '$1 == s { print $2; exit }' "$EXTF" 2>/dev/null)
   case "${v:-}" in ''|*[!0-9]*) printf '%s' "$EXT_DEFAULT" ;; *) printf '%s' "$v" ;; esac
 }
@@ -6020,7 +6046,7 @@ renew_session() {  # renew_session <sid> [dry]
     printf '  refused: no extension marks left - add one with --extend %s +1\n' "$short" >&2
     return 3
   fi
-  if [ $(( ctx / 1000 )) -lt "$EXT_MIN_CTX" ]; then
+  if [ $(( ctx / 1000 )) -lt "$(min_ctx "$short")" ]; then
     printf '  refused: %dk is under the %sk floor - rebuilding it costs less than holding it\n' \
       $(( ctx / 1000 )) "$EXT_MIN_CTX" >&2
     return 3
@@ -6303,7 +6329,7 @@ poke_due() {  # poke_due [dry]
     #
     # The one case that does want a short alarm is a renewal typed that did not
     # go out, and that is armed further down, where it is known.
-    if [ "$mins" -gt "$EXT_DUE_MIN" ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; then
+    if [ "$mins" -gt "$EXT_DUE_MIN" ] && [ $(( ctx / 1000 )) -ge "$(min_ctx "$short")" ]; then
       case "$pidset" in
         *" ${PIDOF[$sid]:-nopid} "*)
           due_at=$(( exp - EXT_DUE_MIN * 60 ))
@@ -6321,7 +6347,7 @@ poke_due() {  # poke_due [dry]
     # Bounded to windows worth holding, that lapsed recently, whose process is
     # still alive - anything else is a dead payload on disk.
     if [ "$mins" -le 0 ]; then
-      if [ "$mins" -gt -60 ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; then
+      if [ "$mins" -gt -60 ] && [ $(( ctx / 1000 )) -ge "$(min_ctx "$short")" ]; then
         pid="${PIDOF[$sid]:-}"
         case "$pidset" in
           *" ${pid:-nopid} "*)
@@ -6352,7 +6378,7 @@ poke_due() {  # poke_due [dry]
       # PowerShell spawn (~0.8s), so it runs at most once a sweep and only once a
       # window has actually qualified.
       { { [ "${SAFEPARK:-}" ] || [ "${KEEPAWAKE:-}" ]; } && [ "$(ext_allowed "$short")" -gt 0 ] &&
-        [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; } || continue
+        [ $(( ctx / 1000 )) -ge "$(min_ctx "$short")" ]; } || continue
       case "$pidset" in *" ${PIDOF[$sid]:-nopid} "*) ;; *) continue ;; esac
       if [ "${KEEPAWAKE:-}" ] && { { [ "$left" -gt 0 ] && [ ! -f "$(block_file "$sid")" ]; } || ! park_fresh "$sid"; }; then
         # A crossing is still coming for this window: a renewal, or the park
@@ -6428,7 +6454,7 @@ poke_due() {  # poke_due [dry]
     # post-budget request is /park only if the checkpoint has gone stale since -
     # otherwise it is a plain renewal ("final"), and the block arms behind either.
     if [ "$mode" = renew ] && [ "${PARK_ON_LAPSE:-}" ] &&
-       [ "$(ext_allowed "$short")" -gt 0 ] && [ $(( ctx / 1000 )) -ge "$EXT_MIN_CTX" ]; then
+       [ "$(ext_allowed "$short")" -gt 0 ] && [ $(( ctx / 1000 )) -ge "$(min_ctx "$short")" ]; then
       if ! park_fresh "$sid"; then
         # Warm is the whole premise of any park, so it is asserted here
         # rather than assumed from having got this far - see EXT_PARK_MIN.
@@ -6457,7 +6483,7 @@ poke_due() {  # poke_due [dry]
         "$(park_fresh "$sid" && printf ', and its checkpoint is current' || printf " - /park it, the budget is the point")"
       continue
     fi
-    if [ $(( ctx / 1000 )) -lt "$EXT_MIN_CTX" ]; then
+    if [ $(( ctx / 1000 )) -lt "$(min_ctx "$short")" ]; then
       printf '  skipped: %dk is under the %sk floor - rebuilding it costs less than holding it\n' \
         $(( ctx / 1000 )) "$EXT_MIN_CTX"; continue
     fi

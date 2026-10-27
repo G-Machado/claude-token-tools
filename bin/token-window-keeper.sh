@@ -134,9 +134,14 @@ ACCTS=$(awk '
   function num(l,   r) { if (match(l, /: *-?[0-9.]+/)) { r = substr(l, RSTART, RLENGTH)
       sub(/^:[ ]*/, "", r); return r + 0 } return -1 }
   /"activeAccountNumber"/ { next }
-  /"number":/ { n++; N[n] = num($0); blk = ""; R5[n] = ""; P5[n] = -1; P7[n] = -1
+  /"number":/ { n++; N[n] = num($0); blk = ""; lg = 0; R5[n] = ""; P5[n] = -1; P7[n] = -1
                 A[n] = 0; AG[n] = -1; U[n] = "ok"; next }
   n == 0 { next }
+  # A relogin_required account carries "usage": null and its old numbers under
+  # lastGoodUsage. Read as live, its days-old resetsAt became a running window
+  # and a phase in play. Nothing after lastGoodUsage belongs to a live read.
+  /"lastGoodUsage"/    { lg = 1; next }
+  lg { next }
   /"email":/           { E[n] = str($0); next }
   /"active":/          { A[n] = ($0 ~ /true/) ? 1 : 0; next }
   /"usageStatus":/     { U[n] = str($0); next }

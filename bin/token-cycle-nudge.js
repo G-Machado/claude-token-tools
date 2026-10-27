@@ -8,9 +8,10 @@
 // a cycle is a change in promptId on user lines; usage repeats per message id.
 // TOKEN_CYCLE_NUDGE=0 turns it off; TOKEN_CYCLE_NUDGE=<n> sets the bar.
 // --retune 2026-10-23: 15k output fires on 22% of cycles (top of band).
+// 2026-10-26: 15k -> 30k with the doubled cycle budgets (user: it stopped between tasks they had asked for).
 'use strict';
 const fs = require('fs'), path = require('path'), os = require('os');
-const BAR = +(process.env.TOKEN_CYCLE_NUDGE ?? 15000);
+const BAR = +(process.env.TOKEN_CYCLE_NUDGE ?? 30000);
 if (!BAR) process.exit(0);
 
 let p;

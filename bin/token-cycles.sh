@@ -106,11 +106,11 @@ fi
 # Tier name -> output budget. A bare number passes through unchanged.
 resolve_budget() {
   case "$1" in
-    recon|read|qa|q)              echo 5000 ;;
-    change|fix|edit|"")           echo 10000 ;;
-    feature|plan|investigate|big) echo 20000 ;;
-    scene|merge|unity)            echo 20000 ;;
-    *[!0-9]*)                     echo 10000 ;;   # unrecognised word -> default
+    recon|read|qa|q)              echo 10000 ;;
+    change|fix|edit|"")           echo 20000 ;;
+    feature|plan|investigate|big) echo 40000 ;;
+    scene|merge|unity)            echo 40000 ;;
+    *[!0-9]*)                     echo 20000 ;;   # unrecognised word -> default
     *)                            echo "$1" ;;
   esac
 }
@@ -135,12 +135,12 @@ resolve_budget() {
 # opted into per cycle, so the lazy path still trips the normal ceiling.
 resolve_growth() {
   case "$1" in
-    recon|read|qa|q)              echo 8000 ;;
-    change|fix|edit|"")           echo 15000 ;;
-    feature|plan|investigate|big) echo 25000 ;;
+    recon|read|qa|q)              echo 15000 ;;
+    change|fix|edit|"")           echo 30000 ;;
+    feature|plan|investigate|big) echo 50000 ;;
     scene|merge|unity)            echo 60000 ;;
-    *[!0-9]*)                     echo 15000 ;;
-    *)                            echo 25000 ;;   # explicit output number: growth stays at the loosest tier
+    *[!0-9]*)                     echo 30000 ;;
+    *)                            echo 50000 ;;   # explicit output number: growth stays at the loosest tier
   esac
 }
 
@@ -149,8 +149,8 @@ if [ "$MODE" = "alert" ] || [ "$MODE" = "stats" ] || [ "$MODE" = "retune" ]; the
   # Anything under that is somebody's legitimate feature cycle, not a breach.
   # --stats uses the same number so its rates describe the hook as it actually
   # runs, rather than a tier the hook never applies.
-  BUDGET="${TOKEN_ALERT_BUDGET:-20000}"
-  GROWTH="${TOKEN_ALERT_GROWTH:-25000}"   # 2026-10-23: 40k -> 25k, back to the feature growth budget (retune: 17% of cycles)
+  BUDGET="${TOKEN_ALERT_BUDGET:-40000}"
+  GROWTH="${TOKEN_ALERT_GROWTH:-50000}"   # 2026-10-26: doubled with the tiers (user: stops between asked tasks cost more than they save)
 else
   BUDGET="${TOKEN_BUDGET:-$(resolve_budget "$ARG")}"
   GROWTH="${TOKEN_GROWTH_BUDGET:-$(resolve_growth "$ARG")}"

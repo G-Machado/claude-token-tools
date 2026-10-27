@@ -3221,6 +3221,9 @@ function Update-View {
   foreach ($a in $accts) {
     $on = ([int]$a.active -eq 1)
     $stale = ([int]$a.age_sec -gt 1800 -or [string]$a.status -ne 'ok')
+    # Refresh token dead: cswap cannot poll it until you log in again, and the
+    # bars are its last good read. Says so instead of a bare 'stale'.
+    $relog = ([string]$a.status -eq 'relogin_required')
     $row = New-Object Windows.Controls.StackPanel
     $row.Orientation = 'Horizontal'; $row.Margin = '0,0,0,3'
     if (-not $on) { $row.Opacity = 0.62 }
@@ -3255,7 +3258,7 @@ function Update-View {
       # on the row to say which. A percentage is only half the fact; the other
       # half is how long you have to spend it in.
       $rs = $null
-      if ($L[2]) {
+      if ($L[2] -and -not $relog) {
         # "3h 37m" -> "3h37m". The space costs a character in a row that has
         # four numbers on it already, and buys nothing back.
         $rs = Text-Block ([string]$L[2] -replace ' ', '') 9 $Pal.faint
@@ -3272,7 +3275,7 @@ function Update-View {
     # Pace, which is the part a bare percentage cannot tell you: 30% used is
     # fine on day five of seven and not fine on day one. cswap works it out;
     # this only has to say when the answer is no.
-    if ([int]$a.ahead_of_pace -eq 1 -or [int]$a.lasts_to_reset -eq 0) {
+    if (-not $relog -and ([int]$a.ahead_of_pace -eq 1 -or [int]$a.lasts_to_reset -eq 0)) {
       $wr = Text-Block $([string][char]0x25B2) 8 `
                        $(if ([int]$a.lasts_to_reset -eq 0) { $Pal.red } else { $Pal.orange })
       $wr.Margin = '0,0,8,0'; $wr.VerticalAlignment = 'Center'
@@ -3295,13 +3298,31 @@ function Update-View {
     # account has a stopped clock, and switching to it starts a fresh window
     # from that moment rather than inheriting one.
     $tail = ''
-    if ($stale) { $tail = 'stale' }
+    if ($relog) { $tail = 're-login' }
+    # A day before the refresh token dies, so the re-login can happen on your
+    # schedule instead of the first time cswap fails to read it.
+    $lxH = -1
+    if (-not $relog -and $a.login_expires) {
+      try { $lxH = ([datetime]::Parse([string]$a.login_expires, $null,
+                      [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() - [datetime]::UtcNow).TotalHours }
+      catch { $lxH = -1 }
+    }
+    $loginSoon = ($lxH -ge 0 -and $lxH -lt 24)
+    if ($relog) { $tail = 're-login' }
+    elseif ($loginSoon) { $tail = 'login {0}h' -f [math]::Floor($lxH) }
+    elseif ($stale) { $tail = 'stale' }
     elseif (-not $a.five_hour_in) { $tail = 'idle' }
     if ($tail) {
-      $tl = Text-Block $tail 9 $(if ($stale) { $Pal.orange }
+      $tl = Text-Block $tail 9 $(if ($stale -or $loginSoon) { $Pal.orange }
                                  elseif (-not $on) { $Pal.faint } else { $Pal.dim })
       $tl.VerticalAlignment = 'Center'
-      Tip $tl $(if ($stale) {
+      Tip $tl $(if ($relog) {
+        "{0}: refresh token dead, so cswap cannot read or use this account. Bars are the last good read, {1:N0}h ago. Fix (cswap's own advice): /login in Claude Code as this account, then cswap add." -f `
+          $a.email, ([int]$a.age_sec / 3600) }
+        elseif ($loginSoon) {
+        "{0}: login expires {1:ddd HH:mm} (in {2:N0}h). Re-login before then: /login in Claude Code as this account, then cswap add." -f `
+          $a.email, ([datetime]::Parse([string]$a.login_expires).ToLocalTime()), $lxH }
+        elseif ($stale) {
         "{0}: last read {1} minutes ago ({2})" -f $a.email, [math]::Floor([int]$a.age_sec / 60), $a.status }
         else {
         "{0}: the five-hour clock is not running, so switching here starts a fresh window from that moment. token-window-keeper.sh normally keeps it ticking - check its log if this persists." -f $a.email })

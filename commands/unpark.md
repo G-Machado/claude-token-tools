@@ -46,11 +46,18 @@ session, another developer, or the user's own hands.
   want to go elsewhere.
 - **`--handoff`, Waiting on the user empty or absent, the checks above clean:** one line on where it
   stands, then run the Next steps in order up to its `Stop after:` point, and report there.
+- **`--handoff` from a master** (`node "$HOME/.claude/token-master.js" status --sid <the header's
+  session=>` says `master`): first run `node "$HOME/.claude/token-master.js" handover <that sid>`.
+  This window is the master now, live if the old one was, and its delegates answer to it.
+  Follow `commands/master.md` from here.
 - **`--handoff` with anything waiting on the user, or a check failed:** report in three lines and
   stop, with the waiting items as the `▶` block.
 - **`--delegate`:** as `--handoff`, except the branch is expected to be `delegate/<topic>` at the
   checkpoint's HEAD (that is not a failed check), and:
   - Touch only what its Scope names; commit only on this branch, in this worktree, never push.
+  - Header has `master=`: an open question goes to the master as an AskUserQuestion card (one
+    question, options first). Wait for its answer, which arrives as the card's answer, and carry
+    on. Never ask what the brief or Decided already settles.
   - At `Stop after:` (or when blocked), write `$HOME/.claude/checkpoints/reports/<checkpoint file name>`
     (`mkdir -p` it; the subfolder keeps reports out of the Parked list) and stop. Its first line: `<!-- report: for=<delegate-of sid> sid=<this session id> topic=<slug>
     branch=<branch> worktree=<cwd> -->` on one line (`echo $CLAUDE_CODE_SESSION_ID` gives this id;

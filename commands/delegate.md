@@ -12,7 +12,10 @@ left to lapse. The user typed: **$ARGUMENTS**
 
 Glue over pieces that already exist - do not reimplement any of them. If the task is not clear
 from the argument and this window, or it is not self-contained (it needs decisions only this
-window can make as it goes), say so and stop: a delegate cannot ask back.
+window can make as it goes), say so and stop: a delegate cannot ask back. **Exception: this
+session is a master** (`node "$HOME/.claude/token-master.js" status` says `master`). Its delegates
+ask with AskUserQuestion, TokenChat routes the question here, and `/answer` replies, so a task that
+may need a question or two is fine.
 
 ## 1. Pick the names
 
@@ -30,12 +33,15 @@ window can make as it goes), say so and stop: a delegate cannot ask back.
 `$HOME/.claude/commands/park.md` section 2 (read it now; it is the one source), with these changes:
 
 - First line: `<!-- park: session=<this session id> topic=<slug> cwd=<delegate cwd> delegate-of=<this session id> -->`.
+  From a master, append ` master=<this session id>` before ` -->`.
 - **Next**: the task as concrete steps; **Stop after**: the done-criteria, checkable.
 - **Goal** adds `Scope:` the files and dirs it may touch; everything else is read-only.
 - **Decided** carries the constraints from this window the delegate must not reopen.
 - **State**: `git: delegate/<slug> @ <HEAD short>`. The worktree starts at HEAD: **uncommitted
   work here is not in it.** If the task depends on it, say so and stop rather than delegate.
 - **Waiting on the user**: none; a delegate that needs the user writes its report and stops.
+  From a master: `none - ask the master with AskUserQuestion (one question per card, options
+  first); it answers in this tab. Ask only what the brief and Decided leave open.`
 
 ## 3. Make the worktree
 
@@ -53,8 +59,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME/.claude/token-unpark-
 
 No `-OldSid`: this tab is not taken over and this session is not set to lapse. `-ParentSid` only
 logs the `open` event in `$HOME/.claude/token-delegate.log`. Add `-Model <id>`
-only if the user named one. **Exit 2** means nothing opened: remove the worktree and branch
+only if the user named one, or this is a master picking one by its routing table
+(`commands/master.md`). **Exit 2** means nothing opened: remove the worktree and branch
 (`git worktree remove`, `git branch -D`), delete the brief, report its output.
+
+From a master, also run `node "$HOME/.claude/token-master.js" add-delegate <slug>`.
 
 ## 5. Reply
 
