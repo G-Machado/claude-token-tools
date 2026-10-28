@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<title>TokenChat</title>
+<style>
+  :root { --bg:#1e1f22; --panel:#2b2d31; --line:#3a3c42; --text:#e6e6e6; --dim:#9a9ca3; --faint:#6b6e75;
+          --blue:#5aa0ff; --green:#5fc27a; --yellow:#e5c45a; --orange:#e8964a; --red:#e86a6a; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+               font:16px/1.45 system-ui, "Segoe UI", sans-serif; }
+  body { display:flex; flex-direction:column; }
+  button { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line);
+           border-radius:8px; padding:10px 14px; min-height:44px; cursor:pointer; }
+  button.primary { border-color:var(--blue); color:var(--blue); }
+  button.on { background:#2f4a6e; border-color:var(--blue); }
+  button:disabled { opacity:.4; }
+  #tabs { display:flex; gap:6px; overflow-x:auto; padding:8px; border-bottom:1px solid var(--line); flex:none; }
+  #tabs button { white-space:nowrap; display:flex; align-items:center; gap:8px; }
+  #tabs button.sel { border-color:var(--text); }
+  .dot { width:10px; height:10px; border-radius:50%; flex:none; }
+  .wait { color:var(--yellow); }
+  #log { flex:1; overflow-y:auto; padding:10px 12px 20px; }
+  .row { margin:10px 0; }
+  .user { background:var(--panel); border-radius:10px; padding:10px 12px; white-space:pre-wrap; }
+  .text { overflow-wrap:anywhere; }
+  .text pre, .result { background:#17181a; border-radius:6px; padding:8px; overflow-x:auto; white-space:pre; font:13px/1.4 Consolas, monospace; }
+  .text code { background:#17181a; border-radius:4px; padding:0 4px; font-family:Consolas, monospace; }
+  .text h1, .text h2, .text h3 { font-size:1.05em; margin:12px 0 4px; }
+  .text p { margin:6px 0; }
+  details { border-left:2px solid var(--line); padding-left:10px; color:var(--dim); }
+  summary { cursor:pointer; padding:6px 0; min-height:32px; }
+  .thinking { color:var(--faint); font-style:italic; white-space:pre-wrap; }
+  .err { color:var(--red); } .big { color:var(--orange); } .faint { color:var(--faint); }
+  .note { color:var(--dim); font-size:14px; } .note.Error { color:var(--red); } .note.Warning { color:var(--orange); }
+  .turn { color:var(--faint); font-size:13px; border-top:1px solid var(--line); padding-top:6px; }
+  .card { border:1px solid var(--yellow); border-left-width:4px; border-radius:8px; padding:10px 12px; }
+  .card .title { font-weight:600; margin-bottom:6px; }
+  .card .acts { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .card input { width:100%; font:inherit; padding:10px; margin-top:6px; background:var(--bg); color:var(--text);
+                border:1px solid var(--line); border-radius:8px; }
+  .opt small { display:block; color:var(--dim); font-size:13px; }
+  .diff { font:13px/1.35 Consolas, monospace; white-space:pre; overflow-x:auto; background:#17181a; padding:6px; border-radius:6px; }
+  .Added { color:var(--green); } .Removed { color:var(--red); } .Gap { color:var(--faint); }
+  .renewal { opacity:.5; }
+  #bar { flex:none; display:flex; gap:8px; padding:8px; border-top:1px solid var(--line); align-items:flex-end; }
+  #input { flex:1; font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line);
+           border-radius:10px; padding:10px; min-height:44px; max-height:40vh; resize:none; }
+  #status { flex:none; color:var(--dim); font-size:13px; padding:2px 12px; }
+  #pair { display:none; margin:auto; text-align:center; }
+  #pair input { font-size:28px; width:8ch; text-align:center; letter-spacing:4px; padding:8px; margin:12px;
+                background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; }
+  body.pairing > :not(#pair) { display:none; } body.pairing #pair { display:block; }
+</style>
+</head>
+<body>
+<div id="tabs"></div>
+<div id="log"></div>
+<div id="status"></div>
+<div id="bar">
+  <textarea id="input" rows="1" placeholder="Message"></textarea>
+  <button id="stop">Stop</button>
+  <button id="send" class="primary">Send</button>
+</div>
+<form id="pair">
+  <div>Enter the code from TokenChat's tray menu</div>
+  <input name="code" inputmode="numeric" autocomplete="off" maxlength="6"><br>
+  <button class="primary">Pair</button>
+  <div id="pairmsg" class="err"></div>
+</form>
+<script>
+const $ = s => document.querySelector(s);
+const log = $('#log'), input = $('#input');
+let ws, tabs = [], tab = +localStorage.tab || 0, rows = new Map(), order = [], opened = false;
+const open = new Set();           // details kept open across re-renders: "<id>/<n>"
+const picks = new Map();          // question row id -> { questionText: Set(labels) | other text }
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {}))
+    if (k === 'on') for (const [ev, f] of Object.entries(v)) e.addEventListener(ev, f);
+    else if (v !== null && v !== undefined && v !== false) e.setAttribute(k, v);
+  for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) e.append(k.nodeType ? k : String(k));
+  return e;
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+
+// Enough markdown for replies: fences, headings, inline code, bold, links as text.
+function md(src) {
+  const out = []; let fence = null, para = [];
+  const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  const flush = () => { if (para.length) out.push('<p>' + para.map(inline).join('<br>') + '</p>'); para = []; };
+  for (const line of src.split('\n')) {
+    if (line.startsWith('```')) {
+      if (fence === null) { flush(); fence = []; } else { out.push('<pre>' + esc(fence.join('\n')) + '</pre>'); fence = null; }
+    } else if (fence !== null) fence.push(line);
+    else if (/^#{1,6} /.test(line)) { flush(); out.push('<h3>' + inline(line.replace(/^#+ /, '')) + '</h3>'); }
+    else if (!line.trim()) flush();
+    else para.push(line);
+  }
+  if (fence !== null) out.push('<pre>' + esc(fence.join('\n')) + '</pre>');
+  flush();
+  return out.join('');
+}
+
+function fold(id, n, summary, ...body) {
+  const key = id + '/' + n;
+  const d = el('details', { open: open.has(key) }, el('summary', null, summary), ...body);
+  d.addEventListener('toggle', () => d.open ? open.add(key) : open.delete(key));
+  return d;
+}
+
+function send(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ tab, ...op })); }
+
+function tool(r, n) {
+  const head = [r.verb, ' ', r.subject, r.outcome ? ' · ' + r.outcome : '', r.tokens ? ' · ' + r.tokens : '',
+                r.running ? ' · running…' : '', r.interrupted ? ' · stopped' : ''].join('');
+  const s = el('span', { class: r.error ? 'err' : r.big ? 'big' : null }, head);
+  return fold(r.id, n, s, r.command ? el('div', { class: 'result' }, r.command) : null,
+              r.result ? el('div', { class: 'result' }, r.result) : null);
+}
+
+function question(r) {
+  const mine = picks.get(r.id) || new Map(); picks.set(r.id, mine);
+  if (r.state !== 'Pending') return el('div', { class: 'card' }, el('div', { class: 'faint' }, r.outcome || r.state));
+  const box = el('div', { class: 'card' }, r.relay ? el('div', { class: 'faint' }, r.relay) : null);
+  for (const q of r.questions) {
+    const chosen = mine.get(q.text) || new Set(); mine.set(q.text, chosen);
+    box.append(el('div', { class: 'title' }, q.header ? q.header + ': ' : '', q.text));
+    const acts = el('div', { class: 'acts' });
+    for (const o of q.options) {
+      const b = el('button', { class: 'opt' + (chosen.has(o.label) ? ' on' : '') + (o.recommended ? ' primary' : '') },
+                   o.label, o.description ? el('small', null, o.description) : null);
+      b.onclick = () => {
+        if (!q.multi) chosen.clear();
+        chosen.has(o.label) ? chosen.delete(o.label) : chosen.add(o.label);
+        if (!q.multi && r.questions.length === 1) return submit(r);
+        render(r);
+      };
+      acts.append(b);
+    }
+    const other = el('input', { placeholder: 'Other…', value: mine.get('other:' + q.text) || '' });
+    other.oninput = () => mine.set('other:' + q.text, other.value);
+    box.append(acts, other);
+  }
+  const ok = el('button', { class: 'primary' }, 'Submit'); ok.onclick = () => submit(r);
+  const no = el('button', null, 'Decline'); no.onclick = () => send({ op: 'decline', id: r.id });
+  box.append(el('div', { class: 'acts' }, ok, no));
+  return box;
+}
+
+function submit(r) {
+  const mine = picks.get(r.id), answers = {};
+  for (const q of r.questions) {
+    const parts = [...(mine.get(q.text) || [])], typed = (mine.get('other:' + q.text) || '').trim();
+    if (typed) parts.push(typed);
+    if (!parts.length) return status('answer every question first');
+    answers[q.text] = parts.join(', ');
+  }
+  send({ op: 'answer', id: r.id, answers });
+}
+
+function permission(r) {
+  const box = el('div', { class: 'card' }, el('div', { class: 'title' }, r.tool), el('div', null, r.summary));
+  if (r.diff) box.append(el('div', { class: 'diff' }, r.diff.map(([k, t]) => el('div', { class: k }, t))));
+  if (r.diffNote) box.append(el('div', { class: 'faint' }, r.diffNote));
+  if (r.state !== 'Pending') { box.append(el('div', { class: 'faint' }, r.state)); return box; }
+  const b = (label, decision, cls) => { const x = el('button', { class: cls }, label); x.onclick = () => send({ op: 'permission', id: r.id, decision }); return x; };
+  box.append(el('div', { class: 'acts' }, b('Allow', 'Allowed', 'primary'),
+    r.sessionLabel ? b(r.sessionLabel, 'AllowedForSession') : null, b('Deny', 'Denied')));
+  return box;
+}
+
+function card(r) {
+  const box = el('div', { class: 'card' }, el('div', { class: 'title' }, r.title), el('div', null, r.text));
+  if (r.outcome) box.append(el('div', { class: 'faint' }, r.outcome));
+  else box.append(el('div', { class: 'acts' }, r.actions.map(a => {
+    const x = el('button', { class: a.primary ? 'primary' : null }, a.label);
+    x.onclick = () => send({ op: 'card', id: r.id, key: a.key }); return x;
+  })));
+  return box;
+}
+
+function body(r, n = 0) {
+  switch (r.k) {
+    case 'user': return el('div', { class: 'user' }, r.text, r.files.length ? el('div', { class: 'faint' }, r.files.join(' · ')) : null);
+    case 'text': { const d = el('div', { class: 'text' }); d.innerHTML = md(r.text); return d; }
+    case 'thinking': return fold(r.id, n, el('span', { class: 'faint' }, r.streaming ? 'thinking…' : 'thought'), el('div', { class: 'thinking' }, r.text));
+    case 'tool': return tool(r, n);
+    case 'group': return fold(r.id, n, el('span', { class: r.failed ? 'err' : r.big ? 'big' : null },
+                                [r.title, r.aside, r.tokens, r.state].filter(Boolean).join(' · ')),
+                              r.children.map((c, i) => body(c, i + 1)));
+    case 'permission': return permission(r);
+    case 'question': return question(r);
+    case 'card': return card(r);
+    case 'segment': return fold(r.id, n, r.header, r.children.map((c, i) => body(c, i + 1)));
+    case 'note': return el('div', { class: 'note ' + r.kind }, r.text, r.detail ? el('div', { class: 'faint' }, r.detail) : null);
+    case 'turn': return el('div', { class: 'turn' + (r.error ? ' err' : '') }, r.summary, r.detail ? el('div', null, r.detail) : null);
+    default: return el('div', { class: 'faint' }, r.k);
+  }
+}
+
+function render(r) {
+  const node = el('div', { class: 'row' + (r.renewal ? ' renewal' : ''), 'data-id': r.id }, body(r));
+  const old = rows.get(r.id)?.node;
+  rows.set(r.id, { r, node });
+  if (old) old.replaceWith(node);
+}
+
+function layout() {
+  const nodes = order.map(id => rows.get(id)?.node).filter(Boolean);
+  if (nodes.length !== log.children.length || nodes.some((n, i) => log.children[i] !== n)) log.replaceChildren(...nodes);
+}
+
+function status(s) { $('#status').textContent = s; }
+
+function drawTabs() {
+  if (!tabs.some(t => t.id === tab) && tabs.length) select(tabs[0].id);
+  $('#tabs').replaceChildren(...tabs.map(t => {
+    const b = el('button', { class: t.id === tab ? 'sel' : null }, el('span', { class: 'dot', style: 'background:' + (t.color || '#888') }),
+                 t.title, t.waiting ? el('span', { class: 'wait' }, '●') : null);
+    b.onclick = () => select(t.id);
+    return b;
+  }));
+  const t = tabs.find(t => t.id === tab);
+  status(t ? [t.project, t.state, t.status].filter(Boolean).join(' · ') : 'no sessions open');
+}
+
+function select(id) {
+  tab = id; localStorage.tab = id;
+  rows.clear(); order = []; log.replaceChildren();
+  send({ op: 'select' });
+  drawTabs();
+}
+
+function onMessage(m) {
+  if (m.type === 'tabs') { tabs = m.tabs; drawTabs(); return; }
+  if (m.type === 'error') { status(m.text); return; }
+  if (m.type === 'snapshot' && m.tab !== tab) return;
+  const near = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  if (m.type === 'snapshot') { rows.clear(); order = m.items.map(r => r.id); }
+  for (const r of m.items || []) render(r);
+  if (m.order) order = m.order;
+  layout();
+  if (near || m.type === 'snapshot') log.scrollTop = log.scrollHeight;
+}
+
+function connect() {
+  opened = false;
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.onopen = () => { opened = true; document.body.classList.remove('pairing'); send({ op: 'select' }); };
+  ws.onmessage = e => onMessage(JSON.parse(e.data));
+  ws.onclose = () => {
+    if (!opened) { document.body.classList.add('pairing'); $('#pair input').focus(); return; }
+    status('disconnected, retrying…'); setTimeout(connect, 2000);
+  };
+}
+
+$('#pair').onsubmit = async e => {
+  e.preventDefault();
+  const r = await fetch('/pair', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
+  if (r.ok) connect(); else $('#pairmsg').textContent = r.status === 429 ? 'too many tries, wait a minute' : 'wrong code';
+};
+$('#send').onclick = () => { const t = input.value.trim(); if (!t) return; send({ op: 'send', text: t }); input.value = ''; grow(); };
+$('#stop').onclick = () => send({ op: 'stop' });
+const grow = () => { input.style.height = 'auto'; input.style.height = input.scrollHeight + 'px'; };
+input.addEventListener('input', grow);
+input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer:fine)').matches) { e.preventDefault(); $('#send').click(); } });
+connect();
+</script>
+</body>
+</html>

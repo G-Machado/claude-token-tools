@@ -223,6 +223,17 @@ public sealed class Sidebar
 
     public SessionGroups Groups { get; } = SessionGroups.Load(SessionGroups.DefaultPath);
 
+    public SessionDefaults Defaults { get; } = SessionDefaults.Load(SessionDefaults.DefaultPath);
+
+    /// <summary>A null model or effort is the account default.</summary>
+    public void SetDefaults(string? model, string? effort)
+    {
+        Defaults.Model = model;
+        Defaults.Effort = effort;
+        try { Defaults.Save(SessionDefaults.DefaultPath); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
     /// <summary>Each tab's launching tab, when that is open here. A loop (never written, but the file is hand-editable)
     /// is cut where it closes.</summary>
     Dictionary<SessionTab, SessionTab> ParentTabs()

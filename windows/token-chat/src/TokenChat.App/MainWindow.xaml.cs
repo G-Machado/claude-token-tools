@@ -20,8 +20,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        var tray = new Tray(this);
-        Closed += (_, _) => tray.Dispose();
+        var remote = new RemoteServer(_tabs, Dispatcher);
+        var tray = new Tray(this, remote);
+        Closed += (_, _) => { tray.Dispose(); _ = remote.StopAsync(); };
         _sidebar = new Sidebar(_tabs);
         _sidebar.Refreshed += SyncSidebar;
         Side.List.ItemsSource = _sidebar.Items;
@@ -191,8 +192,9 @@ public partial class MainWindow : Window
         {
             WorkingDirectory = directory,
             Profile = lite || Side.LiteBox.IsChecked == true ? Profile.Lite : Profile.Full,
-            Model = model ?? Model,
-            Effort = effort,
+            // a new session starts on the sidebar's defaults; a resumed one keeps what it ran on
+            Model = model ?? Model ?? (resume is null ? _sidebar.Defaults.Model : null),
+            Effort = effort ?? (resume is null ? _sidebar.Defaults.Effort : null),
             ResumeSessionId = resume,
         }, prompt);
         // a resumed session that took others over by /handoff gets their folds back, empty like its own history

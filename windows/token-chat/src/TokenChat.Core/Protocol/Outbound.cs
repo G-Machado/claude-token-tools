@@ -16,6 +16,13 @@ public static class Outbound
     public static string SetPermissionMode(string requestId, string mode) =>
         ControlRequest(requestId, new JsonObject { ["subtype"] = "set_permission_mode", ["mode"] = mode });
 
+    /// <summary>apply_flag_settings with effortLevel only; a null level clears it back to the account default.</summary>
+    public static string SetEffort(string requestId, string? level) =>
+        ControlRequest(requestId, new JsonObject
+        {
+            ["subtype"] = "apply_flag_settings", ["settings"] = new JsonObject { ["effortLevel"] = level },
+        });
+
     public static string UserText(string text) => User(JsonValue.Create(text));
 
     /// <summary>content is a string or an array of content blocks (text, image, document).</summary>

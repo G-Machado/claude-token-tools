@@ -14,11 +14,15 @@
             <Setter Property="Padding" Value="6,1,6,2"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
-        <!-- one limit window: label, bar, percentage and the time to its reset; the label rides in on Tag -->
+        <!-- one limit window: bar, percentage and the time to its reset; the 5h/7d heads sit once above the column,
+             and the shared sizes line the figures up across accounts -->
         <DataTemplate DataType="{x:Type local:LimitGauge}">
-            <StackPanel Orientation="Horizontal" Margin="0,0,8,0">
-                <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=ContentControl}}"
-                           Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,0,5,0"/>
+            <Grid Margin="0,0,10,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="Pct"/>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="Reset"/>
+                </Grid.ColumnDefinitions>
                 <Grid Width="40" Height="4" Margin="0,0,5,0" VerticalAlignment="Center">
                     <Border Background="{StaticResource Track}" CornerRadius="2"/>
                     <Border Background="{Binding Brush}" CornerRadius="2" RenderTransformOrigin="0,0.5">
@@ -27,10 +31,11 @@
                         </Border.RenderTransform>
                     </Border>
                 </Grid>
-                <TextBlock Text="{Binding Pct}" Style="{StaticResource Fig}" FontSize="9.5" FontWeight="SemiBold"
-                           Foreground="{Binding Brush}" Margin="0,0,4,0"/>
-                <TextBlock Text="{Binding ResetsIn}" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"/>
-            </StackPanel>
+                <TextBlock Grid.Column="1" Text="{Binding Pct}" Style="{StaticResource Fig}" FontSize="9.5" FontWeight="SemiBold"
+                           Foreground="{Binding Brush}" TextAlignment="Right" Margin="0,0,5,0"/>
+                <TextBlock Grid.Column="2" Text="{Binding ResetsIn}" Style="{StaticResource Fig}" FontSize="9.5"
+                           Foreground="{StaticResource Faint}" TextAlignment="Right"/>
+            </Grid>
         </DataTemplate>
         <!-- the widget's keys for a row, as a menu; they work as keys while the list has focus -->
         <ContextMenu x:Key="RowMenu" x:Shared="False" Background="{StaticResource Card}" Foreground="{StaticResource Text}"
@@ -49,6 +54,14 @@
             <!-- filled as it opens: the named groups, a new one, back to the folder -->
             <MenuItem Header="move to group" IsEnabled="{Binding HasSid}" SubmenuOpened="OnGroupMenu">
                 <MenuItem Header="new group…"/>
+            </MenuItem>
+            <Separator/>
+            <!-- filled as it opens: what a new session starts on, the current pick checked -->
+            <MenuItem Header="new sessions: model" Tag="model" SubmenuOpened="OnDefaultsMenu">
+                <MenuItem Header="account default"/>
+            </MenuItem>
+            <MenuItem Header="new sessions: effort" Tag="effort" SubmenuOpened="OnDefaultsMenu">
+                <MenuItem Header="account default"/>
             </MenuItem>
         </ContextMenu>
         <ContextMenu x:Key="GroupMenu" x:Shared="False" Background="{StaticResource Card}" Foreground="{StaticResource Text}"
@@ -85,15 +98,29 @@
             </StackPanel>
         </Grid>
         <!-- the widget's limits block: a row per plan account, then today's spend against TOKEN_DAY_CAP -->
-        <StackPanel x:Name="Usage" Grid.Row="1" Margin="14,0,10,8">
+        <StackPanel x:Name="Usage" Grid.Row="1" Margin="14,0,10,8" Grid.IsSharedSizeScope="True">
+            <!-- the window heads, once, over their columns -->
+            <Grid Margin="0,0,0,2" Visibility="{Binding HasAccounts, Converter={StaticResource Shown}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="N"/>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="Gauge"/>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="Gauge"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="1" Text="5h" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"/>
+                <TextBlock Grid.Column="2" Text="7d" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"/>
+            </Grid>
             <ItemsControl ItemsSource="{Binding Accounts}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <!-- another account's row switches to it, on a second click: the widget's w -->
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3" Background="Transparent"
-                                    MouseLeftButtonUp="OnAccount">
-                            <StackPanel.Style>
-                                <Style TargetType="StackPanel">
+                        <Grid Margin="0,0,0,3" Background="Transparent" MouseLeftButtonUp="OnAccount">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="N"/>
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="Gauge"/>
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="Gauge"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.Style>
+                                <Style TargetType="Grid">
                                     <Setter Property="Opacity" Value="0.62"/>
                                     <Setter Property="Cursor" Value="Hand"/>
                                     <Setter Property="ToolTip" Value="{Binding Email, StringFormat={}{0} - click to switch to it}"/>
@@ -105,37 +132,15 @@
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
-                            </StackPanel.Style>
+                            </Grid.Style>
                             <TextBlock Text="{Binding N}" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}"
                                        MinWidth="7" Margin="0,0,8,0"/>
-                            <ContentControl Content="{Binding FiveHour}" Tag="5h" Focusable="False"/>
-                            <ContentControl Content="{Binding SevenDay}" Tag="7d" Focusable="False"/>
-                        </StackPanel>
+                            <ContentControl Grid.Column="1" Content="{Binding FiveHour}" Focusable="False"/>
+                            <ContentControl Grid.Column="2" Content="{Binding SevenDay}" Focusable="False"/>
+                        </Grid>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <Grid Margin="0,2,0,0" Visibility="{Binding HasDay, Converter={StaticResource Shown}}" ToolTip="{Binding DayTip}">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="today" Style="{StaticResource Fig}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,0,6,0"/>
-                <Grid Grid.Column="1" Width="66" Height="5" Margin="0,0,6,0" VerticalAlignment="Center">
-                    <Border Background="{StaticResource Track}" CornerRadius="2.5"/>
-                    <Border Background="{Binding DayBrush}" CornerRadius="2.5" RenderTransformOrigin="0,0.5">
-                        <Border.RenderTransform>
-                            <ScaleTransform ScaleX="{Binding DayFill}"/>
-                        </Border.RenderTransform>
-                    </Border>
-                </Grid>
-                <TextBlock Grid.Column="2" Text="{Binding DayText}" Style="{StaticResource Fig}" FontSize="9.5"
-                           Foreground="{StaticResource Dim}"/>
-                <TextBlock Grid.Column="3" Text="{Binding Account}" Style="{StaticResource Fig}" FontSize="9.5"
-                           Foreground="{StaticResource Faint}" HorizontalAlignment="Right" Margin="8,0,0,0"
-                           TextTrimming="CharacterEllipsis"/>
-            </Grid>
         </StackPanel>
         <StackPanel Grid.Row="2">
             <Border Height="1" Background="{StaticResource Line}"/>
@@ -246,7 +251,17 @@
                             <ColumnDefinition/>
                         </Grid.ColumnDefinitions>
                         <!-- the project's colour down the edge, as along the top of a tab -->
-                        <Border Background="{Binding ProjectBrush}" CornerRadius="1.5" Margin="0,1"/>
+                        <Border x:Name="Edge" Background="{Binding ProjectBrush}" CornerRadius="1.5" Margin="0,1"/>
+                        <!-- while it works: a bright band of the same colour eases up and down the dimmed edge -->
+                        <Border x:Name="Sweep" Background="{Binding ProjectBrush}" CornerRadius="1.5" Margin="0,1" Visibility="Collapsed">
+                            <Border.OpacityMask>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="Transparent" Offset="-0.35"/>
+                                    <GradientStop Color="Black" Offset="0"/>
+                                    <GradientStop Color="Transparent" Offset="0.35"/>
+                                </LinearGradientBrush>
+                            </Border.OpacityMask>
+                        </Border>
                         <StackPanel Grid.Column="1" Margin="8,0,0,0">
                             <!-- line 1: state, name, project; ctx and the hour on the right -->
                             <Grid>
@@ -359,7 +374,7 @@
                             </Grid>
 
                             <!-- line 3: model and effort; spend against the day's bands and the grades on the right -->
-                            <Grid x:Name="Detail" DataContext="{Binding Row}" Margin="16,5,0,0">
+                            <Grid x:Name="Detail" DataContext="{Binding Row}" Margin="16,5,0,0" Visibility="Collapsed">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition/>
                                     <ColumnDefinition Width="Auto"/>
@@ -414,18 +429,30 @@
                         </StackPanel>
                     </Grid>
                     <!-- the dot as on a tab (a hollow one would read as the verdict mark below it): green idle, blue
-                         breathing while it works, yellow, bigger and blinking with the ANSWER pill while it waits on you -->
+                         while it works (the edge sweeps), yellow, bigger and blinking with the ANSWER pill while it waits on you -->
                     <DataTemplate.Triggers>
                         <DataTrigger Binding="{Binding State}" Value="idle">
                             <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Green}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding State}" Value="working">
                             <Setter TargetName="Dot" Property="Foreground" Value="{StaticResource Blue}"/>
+                            <Setter TargetName="Edge" Property="Opacity" Value="0.3"/>
+                            <Setter TargetName="Sweep" Property="Visibility" Value="Visible"/>
                             <DataTrigger.EnterActions>
                                 <BeginStoryboard x:Name="Breathe">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="Dot" Storyboard.TargetProperty="Opacity" From="1" To="0.3"
-                                                         Duration="0:0:0.9" AutoReverse="True" RepeatBehavior="Forever"/>
+                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                        <DoubleAnimation Storyboard.TargetName="Sweep" Duration="0:0:0.9" From="-0.35" To="0.65"
+                                                         Storyboard.TargetProperty="(Border.OpacityMask).(GradientBrush.GradientStops)[0].(GradientStop.Offset)">
+                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                        <DoubleAnimation Storyboard.TargetName="Sweep" Duration="0:0:0.9" From="0" To="1"
+                                                         Storyboard.TargetProperty="(Border.OpacityMask).(GradientBrush.GradientStops)[1].(GradientStop.Offset)">
+                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                        <DoubleAnimation Storyboard.TargetName="Sweep" Duration="0:0:0.9" From="0.35" To="1.35"
+                                                         Storyboard.TargetProperty="(Border.OpacityMask).(GradientBrush.GradientStops)[2].(GradientStop.Offset)">
+                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
                                     </Storyboard>
                                 </BeginStoryboard>
                             </DataTrigger.EnterActions>
@@ -467,6 +494,16 @@
                         <DataTrigger Binding="{Binding DelegateState}" Value="unlocked">
                             <Setter TargetName="Dot" Property="Text" Value="&#9675;"/>
                             <Setter TargetName="Dot" Property="ToolTip" Value="unlocked: you can type into it"/>
+                        </DataTrigger>
+                        <!-- line 3 only where it matters: this window's sessions, the selected row, the hovered one -->
+                        <DataTrigger Binding="{Binding Here}" Value="True">
+                            <Setter TargetName="Detail" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                            <Setter TargetName="Detail" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                            <Setter TargetName="Detail" Property="Visibility" Value="Visible"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Row}" Value="{x:Null}">
                             <Setter TargetName="Figures" Property="Visibility" Value="Collapsed"/>

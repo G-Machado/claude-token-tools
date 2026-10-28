@@ -21,6 +21,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- RemoteServer.cs: Kestrel for the LAN page (HttpListener off localhost needs an admin urlacl) -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <EmbeddedResource Include="Remote\index.html" LogicalName="remote.index.html" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MdXaml" Version="1.27.0" />
   </ItemGroup>
 

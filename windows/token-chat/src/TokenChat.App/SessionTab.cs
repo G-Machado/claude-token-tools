@@ -297,12 +297,18 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         }
     }
 
-    /// <summary>The footer's effort menu: /effort for this session only (settings.json untouched), sent the way a poke is.
-    /// Local, so no request and no tokens; the footer label follows on the next reply.</summary>
-    public void SetEffort(string level)
+    /// <summary>The footer's effort menu: apply_flag_settings for this session only (settings.json untouched), mid-turn
+    /// included - the turn's next request runs on it. No prompt, no tokens; the footer label follows on the next reply.</summary>
+    public async void SetEffort(string level)
     {
-        if (Poke("/effort " + level) == "busy")
-            Transcript.AddNote(NoteKind.Info, $"Effort unchanged: a turn is open. Pick {level} again once it ends.");
+        if (_exitNoted || _disposed || _session is not { } s) { Transcript.AddNote(NoteKind.Warning, "effort: claude has exited"); return; }
+        try
+        {
+            await s.SetEffortAsync(level == "auto" ? null : level);
+            Transcript.AddNote(NoteKind.Info, $"effort -> {level}" + (s.AtCleanPoint ? "" : " (from the next request of this turn)"));
+        }
+        catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "effort change failed", ex.Message); }
+        UpdateStatus();
     }
 
     async Task PokeNowAsync(ClaudeSession s, string text)

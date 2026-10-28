@@ -120,6 +120,27 @@ public partial class SidebarView : UserControl
         if (item.Group.Length > 0) menu.Items.Add(Entry("back to its folder", () => model.Move(item.Sid, null)));
     }
 
+    void OnDefaultsMenu(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource != sender || sender is not MenuItem { Tag: string kind } menu || Model is not { } model) return;
+        var d = model.Defaults;
+        var isModel = kind == "model";
+        var current = isModel ? d.Model : d.Effort;
+        menu.Items.Clear();
+        foreach (var pick in (string?[])[null, .. isModel ? SessionDefaults.Models : SessionDefaults.Efforts])
+        {
+            var to = pick;
+            var m = Entry(to ?? "account default", () =>
+            {
+                if (isModel) model.SetDefaults(to, d.Effort);
+                else model.SetDefaults(d.Model, to);
+                Say($"new sessions: {kind} {to ?? "account default"}");
+            });
+            m.IsChecked = to == current;
+            menu.Items.Add(m);
+        }
+    }
+
     static MenuItem Entry(string header, Action act)
     {
         var m = new MenuItem { Header = header };

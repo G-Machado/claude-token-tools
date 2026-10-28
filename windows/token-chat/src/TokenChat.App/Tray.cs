@@ -13,11 +13,23 @@ sealed class Tray : IDisposable
     readonly Window _window;
     readonly Alerts _alerts = new();
 
-    public Tray(Window window)
+    readonly ToolStripMenuItem _remote = new("Remote access: off");
+
+    public Tray(Window window, RemoteServer remote)
     {
         _window = window;
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open TokenChat", null, (_, _) => Bring());
+        // the page on the LAN: a click turns it on and shows where and the code; on, a click turns it off
+        _remote.Click += async (_, _) =>
+        {
+            if (remote.IsOn) { await remote.StopAsync(); _remote.Text = "Remote access: off"; return; }
+            try { await remote.StartAsync(); }
+            catch (Exception ex) { System.Windows.MessageBox.Show($"Remote access failed to start: {ex.Message}", "TokenChat"); return; }
+            ShowRemote(remote);
+        };
+        remote.CodeChanged += () => { if (remote.IsOn) ShowRemote(remote, quiet: true); };
+        menu.Items.Add(_remote);
         menu.Items.Add("Quit", null, (_, _) => _window.Close());
         _icon = new NotifyIcon
         {
@@ -41,6 +53,15 @@ sealed class Tray : IDisposable
         var text = said.Count == 1 ? said[0].Text : string.Join("\n", said.Select(s => s.Title));
         _icon.ShowBalloonTip(10_000, title, text, ToolTipIcon.Warning);
     });
+
+    void ShowRemote(RemoteServer remote, bool quiet = false)
+    {
+        _remote.Text = $"Remote access: on · code {remote.Code} (click to stop)";
+        if (quiet) return;
+        var urls = RemoteServer.Urls();
+        System.Windows.MessageBox.Show($"Open on the Quest or phone:\n\n{string.Join("\n", urls)}\n\nPairing code: {remote.Code}\n\n" +
+                        "Paired devices remember it. The code stays in the tray menu.", "TokenChat remote access");
+    }
 
     void Bring()
     {

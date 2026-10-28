@@ -119,6 +119,14 @@ public sealed class ClaudeSession : IAsyncDisposable
         PermissionMode = mode;
     }
 
+    /// <summary>Changes effort in the running process, mid-turn included: the next API request uses it. Session only,
+    /// settings.json untouched; null is the account default.</summary>
+    public async Task SetEffortAsync(string? level, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(id => Outbound.SetEffort(id, level), ct);
+        if (!r.Success) throw new ClaudeProtocolException("apply_flag_settings failed: " + r.Error);
+    }
+
     /// <summary>updatedPermissions as from <see cref="PermissionRules.ForSession"/>; a setMode among them moves <see cref="PermissionMode"/>.</summary>
     public async Task AllowAsync(PermissionRequest p, JsonObject? updatedInput = null, JsonArray? updatedPermissions = null,
         CancellationToken ct = default)
