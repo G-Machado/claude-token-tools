@@ -19,6 +19,27 @@ const f = ti.file_path;
 if (p.tool_name !== 'Read' || !f || ti.offset != null || ti.limit != null) process.exit(0);
 if (/\.(png|jpe?g|gif|webp|bmp|ico|pdf|ipynb)$/i.test(f)) process.exit(0);
 
+// Master read-guard (2026-11-11). A master integrates from its lanes' summaries,
+// never from their raw output: session 9bde5243 read six lane files of 14-34 KB
+// into a 187k window and paid for them on every cycle after. In master mode
+// (token-master/<sid>.json exists) a whole Read of anything under _build/ over
+// MASTER_KB is refused outright - no retry pass - with the two cheap routes
+// named: the lane's `## Summary` table, or a ranged Read of one section.
+// TOKEN_MASTER_READ_KB=0 turns it off.
+const MASTER_KB = +(process.env.TOKEN_MASTER_READ_KB ?? 8);
+const CLDIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+if (MASTER_KB && p.session_id && /[\\/]_build[\\/]/.test(f) &&
+    fs.existsSync(path.join(CLDIR, 'token-master', p.session_id + '.json'))) {
+  let kb = 0; try { kb = fs.statSync(f).size / 1024; } catch {}
+  if (kb > MASTER_KB) {
+    process.stderr.write(
+      `[read-guard] master mode: ${path.basename(f)} is ${Math.round(kb)} KB of lane output (bar ${MASTER_KB} KB).\n` +
+      `A master integrates from summaries: Grep '^## Summary' -A 45 in that file, or Read one section with offset/limit.\n` +
+      `The lane owns the detail; if its Summary is missing, send it back for one (commands/delegate.md).\n`);
+    process.exit(2);
+  }
+}
+
 let lines;
 try {
   const st = fs.statSync(f);

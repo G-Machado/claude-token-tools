@@ -29,7 +29,9 @@ public static class ClaudeLauncher
     /// <summary>Overrides the claude.exe location.</summary>
     public const string ExeVariable = "TOKEN_CHAT_CLAUDE_EXE";
 
-    public static readonly IReadOnlyList<string> LiteTools = ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "AskUserQuestion"];
+    /// <summary>The lean tool set. Skill and TodoWrite joined it 2026-11-11 so a delegate opened lean (token-unpark-new.ps1
+    /// -Mode delegate) can still invoke the project's skills and keep a plan; MCP schemas stay out (--strict-mcp-config).</summary>
+    public static readonly IReadOnlyList<string> LiteTools = ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Skill", "TodoWrite"];
 
     /// <summary>The shift+tab cycle. bypassPermissions and dontAsk are left out on purpose.</summary>
     public static readonly IReadOnlyList<string> PermissionModes = ["auto", "manual", "acceptEdits", "plan"];

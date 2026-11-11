@@ -512,7 +512,7 @@ measure_constants() {
 # one, and about a second with this. The zeros are exactly what both functions
 # set when there is no history to read, so nothing downstream sees a new state.
 case " $* " in
-  *" --poke-due "*|*" --renew-due "*|*" --renew "*|*" --extend "*|*" --block "*|*" --unblock "*|*" --name "*)
+  *" --poke-due "*|*" --renew-due "*|*" --renew "*|*" --extend "*|*" --block "*|*" --unblock "*|*" --name "*|*" --last "*)
     TS_NOSTATS=1 ;;
 esac
 # --parked --json wants none of it either, and it is the one mode where the
@@ -933,6 +933,9 @@ for a in "$@"; do
   # --block takes the id and then an optional reason, the same two-argument
   # shape --name uses. The reason is one argument, so a caller passing several
   # words has to quote them; that is the widget's job and it does.
+  if [ "${want_last:-0}" = 1 ]; then want_last=0
+    case "$a" in --*) LASTQ=0 ;; *) LASTSID="$a"; continue ;; esac
+  fi
   if [ "$want_blk" = 1 ]; then want_blk=2
     case "$a" in --*) want_blk=0; BLKQ=0 ;; *) BLKSID="$a"; continue ;; esac
   elif [ "$want_blk" = 2 ]; then want_blk=0
@@ -973,6 +976,10 @@ for a in "$@"; do
     --renew) want_renew=1; RENEWQ=1 ;;
     --block) want_blk=1; BLKQ=1 ;;
     --unblock) want_blk=1; BLKQ=2 ;;
+    # --last <sid>: the session's last assistant text and last tool call, three
+    # lines (token-last.js). The cheap way for a master to see what a delegate is
+    # doing without reading its transcript or waiting for its report.
+    --last) want_last=1; LASTQ=1 ;;
     --blocks) BLKQ=3 ;;
     --renew-due) RENEWQ=2 ;;
     --poke-due) RENEWQ=3 ;;
@@ -5920,11 +5927,20 @@ set_block() {  # set_block <sid> [reason]
   printf 'blocked %s: %s\n' "${sid:0:8}" "$why"
 }
 
-clear_block() {  # clear_block <sid>
-  local sid="$1" f
+clear_block() {  # clear_block <sid> [figure]
+  local sid="$1" fig="${2:-}" f lift
   [ -n "$sid" ] || { printf 'token-sessions: --unblock needs a session id\n' >&2; return 2; }
   f=$(block_file "$sid")
   if [ -f "$f" ]; then
+    # A cold block with a current checkpoint (token-block.sh, 2026-11-11) carries
+    # the weighted cost of lifting it on line 2; the lift needs that figure typed
+    # back, so the cost is read before it is paid. Numbers only: "373k", "373".
+    lift=$(sed -n '2s/^lift=//p' "$f" 2>/dev/null)
+    if [ -n "$lift" ] && [ "${fig%k}" != "${lift%k}" ]; then
+      printf 'not lifted: %s is cold with a current checkpoint - lifting rewrites ~%s weighted.\n' "${sid:0:8}" "$lift" >&2
+      printf 'The cheap path is /clear, then /unpark <topic>. To pay the rewrite anyway: --unblock %s %s\n' "${sid:0:8}" "$lift" >&2
+      return 3
+    fi
     rm -f "$f" 2>/dev/null
     # Emptied, the directory goes too - that failed stat is the hook's whole
     # fast path, and leaving an empty directory behind quietly taxes every
@@ -6487,6 +6503,23 @@ poke_due() {  # poke_due [dry]
       printf '  skipped: %dk is under the %sk floor - rebuilding it costs less than holding it\n' \
         $(( ctx / 1000 )) "$EXT_MIN_CTX"; continue
     fi
+    # The renew bar (2026-11-11). Past TOKEN_RENEW_MAX_CTX a renewal keeps a
+    # window that is dearer to hold than to rebuild: session 9bde5243 spent two
+    # marks at 226k and 237k and then paid a 373k-weighted rewrite anyway. Heat
+    # is not computed in this scan (TS_NOSTATS), so the context bar stands in
+    # for it: at 150k the heat has been >= 1.0 in every measured session. Only
+    # the renewal is skipped - a park still runs (the checkpoint is the point) -
+    # and the block arms with the unpark line, so the next prompt is told to
+    # /clear and /unpark rather than to rewrite. TOKEN_RENEW_MAX_CTX=0 = off.
+    if { [ "$mode" = renew ] || [ "$mode" = final ]; } && [ "${TOKEN_RENEW_MAX_CTX:-150000}" -gt 0 ] 2>/dev/null &&
+       [ "$ctx" -ge "${TOKEN_RENEW_MAX_CTX:-150000}" ] && park_fresh "$sid"; then
+      printf '  skipped: %dk is past the %dk renew bar - letting it lapse; unpark it in a fresh window instead\n' \
+        $(( ctx / 1000 )) $(( ${TOKEN_RENEW_MAX_CTX:-150000} / 1000 ))
+      if [ ! -f "$(block_file "$sid")" ]; then
+        set_block "$sid" "past the renew bar at $(( ctx / 1000 ))k with a current checkpoint - lapsing on purpose: /clear, then /unpark it" | sed 's/^/  /'
+      fi
+      continue
+    fi
     # Only the renewal is pointless near midnight. A checkpoint written at 23:50
     # is worth exactly as much as one written at noon - more, if anything, since
     # the prefix is about to break whatever anyone does.
@@ -6973,8 +7006,12 @@ if [ "$RENEWQ" = 1 ]; then
 fi
 if [ "$RENEWQ" = 2 ]; then renew_due "$RENEWDRY"; exit $?; fi
 if [ "$RENEWQ" = 3 ]; then poke_due "$RENEWDRY"; exit $?; fi
+if [ "${LASTQ:-0}" = 1 ]; then
+  [ -n "${LASTSID:-}" ] || { printf 'token-sessions: --last needs a session id\n' >&2; exit 2; }
+  node "$CL/token-last.js" "$LASTSID"; exit $?
+fi
 if [ "$BLKQ" = 1 ]; then set_block "$BLKSID" "$BLKWHY"; exit $?; fi
-if [ "$BLKQ" = 2 ]; then clear_block "$BLKSID"; exit $?; fi
+if [ "$BLKQ" = 2 ]; then clear_block "$BLKSID" "$BLKWHY"; exit $?; fi
 if [ "$BLKQ" = 3 ]; then
   if [ -d "$BLOCKD" ] && [ -n "$(ls -A "$BLOCKD" 2>/dev/null)" ]; then
     for _f in "$BLOCKD"/*; do

@@ -58,6 +58,10 @@ if (has('--line')) {
   console.log(`[widget${stale}] ctx ${k(me.context)} (cut ${C.cut_no}k) heat ${me.hot}x verdict ${me.verdict}` +
     ` | cache ${cache}${ttlw}${hit} marks ${marks}${me.parked ? ' parked' : ''}${me.blocked ? ' BLOCKED' : ''}` +
     ` | spent $${me.cost.usd.toFixed(2)} (read ${me.cost.pct_read}%)` +
+    // Past the renew bar (token-sessions.sh TOKEN_RENEW_MAX_CTX, 150k) the sweep lets this window lapse
+    // on purpose, so the line says so while there is still time to /park: the cheap path is /unpark.
+    (me.context >= +(process.env.TOKEN_RENEW_MAX_CTX ?? 150000) && me.cache_left_min > 0 && me.cache_left_min <= 15
+      ? ` | lapsing, unpark instead (${k(me.context)} is past the renew bar)` : '') +
     (oth ? ` | lapsing soon: ${oth}` : ''));
   // Say-it-once cut instruction (hygiene rule 1, made mechanical): the first prompt that
   // lands in a new 50k band while the window is past the cut gets an ACTION line;

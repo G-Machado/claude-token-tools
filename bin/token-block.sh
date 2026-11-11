@@ -116,8 +116,25 @@ if [ "$COLDK" -gt 0 ] 2>/dev/null && [ ! -f "$BD/$sid" ] && [ -f "$HOME/.claude/
     if [ "$(cat "$COLDD/$sid" 2>/dev/null)" != "$cts" ]; then
       mkdir -p "$BD" "$COLDD" 2>/dev/null
       printf '%s' "$cts" > "$COLDD/$sid" 2>/dev/null
-      printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted, where /clear + resume costs ~143k\n' \
-        "$chrs" $(( cctx / 1000 )) $(( cctx * 2 / 1000 )) > "$BD/$sid" 2>/dev/null
+      # Clear by default (2026-11-11). Session 9bde5243 lifted a cold block on a
+      # 187k window with "continue": ~373k weighted, against ~136k for /clear +
+      # /unpark. When a checkpoint exists for this window and nothing human has
+      # been typed since it was written, the block names the unpark line and the
+      # lift needs the weighted figure typed back (--unblock <sid> <figure>): the
+      # cost has to be read before it is paid. Line 2 of the marker carries it.
+      ctopic=""; cfresh=""
+      ck=$(grep -l -m1 "session=$sid" "$HOME/.claude/checkpoints/"*.md 2>/dev/null | head -1)
+      if [ -n "$ck" ]; then
+        ctopic=$(head -1 "$ck" | sed -n 's/.*topic=\([^ ]*\).*/\1/p')
+        { [ ! -f "$HD/$sid" ] || [ "$ck" -nt "$HD/$sid" ]; } && cfresh=1
+      fi
+      if [ -n "$ctopic" ] && [ -n "$cfresh" ]; then
+        printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted; checkpoint %s is current: /clear, then /unpark %s in the fresh window (~143k)\nlift=%dk\n' \
+          "$chrs" $(( cctx / 1000 )) $(( cctx * 2 / 1000 )) "$ctopic" "$ctopic" $(( cctx * 2 / 1000 )) > "$BD/$sid" 2>/dev/null
+      else
+        printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted, where /clear + resume costs ~143k\n' \
+          "$chrs" $(( cctx / 1000 )) $(( cctx * 2 / 1000 )) > "$BD/$sid" 2>/dev/null
+      fi
     fi
   fi
 fi
@@ -179,7 +196,7 @@ prompt=$(printf '%s' "$payload" | awk '
 # A cold block exists to stop the 2x rewrite, and /clear and /exit send nothing
 # to the API - they are the advice itself, so they pass. (The marks block stays
 # total; see above.)
-case "$why" in "the cache expired"*)
+case "$why" in "the cache expired"*|"past the renew bar"*)
   case "$prompt" in /clear|/clear\ *|/exit|/exit\ *|/quit) exit 0 ;; esac ;;
 "the window is past"*)
   case "$prompt" in /clear|/clear\ *|/exit|/exit\ *|/quit|/park|/park\ *|/compact|/compact\ *) exit 0 ;; esac ;;
@@ -204,9 +221,16 @@ if [ -n "$prompt" ]; then
   fi
 fi
 
+lift=$(sed -n '2s/^lift=//p' "$BD/$sid" 2>/dev/null)
 case "$why" in
-  "the cache expired"*) state="a lapsed window only gets dearer to keep; if the work matters,
-lift the block and send once - the rewrite is paid once, then it is warm again." ;;
+  "the cache expired"*)
+    if [ -n "$lift" ]; then
+      state="clearing is the default: the checkpoint carries the work. Lifting costs the ~$lift weighted
+named above, so the lift needs that figure typed back: token-sessions.sh --unblock ${sid%%-*} $lift"
+    else
+      state="a lapsed window only gets dearer to keep; if the work matters,
+lift the block and send once - the rewrite is paid once, then it is warm again."
+    fi ;;
   "the window is past"*) state="/park then /clear (new topic) or /compact (same topic) - both pass this block.
 If this cycle really must run here, lift it once; the next cycle past the bar is refused again." ;;
   "handed off"*) state="it is read-only now; the work carries on in the window

@@ -7,18 +7,37 @@ starting point and re-derive your own with `token-cycles.sh --stats`.
 
 ## Cost model
 
-When trading off, treat these as expensive in this order:
+Reordered 2026-11-11 after the tech-review post-mortem (session 9bde5243: $12.8, a 373k-weighted
+gap rewrite, six concurrent delegates, two renewals at 226k+). Weights are the user's; the
+ordering is what a trade-off consults.
 
-1. **Rework** — work thrown away because an assumption turned out wrong.
-2. **Tokens.**
-3. **The user's real-world effort** — a playtest, a headset session, a build, a manual test run.
+| rank | what it costs | weight |
+|---|---|---|
+| 1 | **Tokens** — weighted input-equivalents, window size first | 10 |
+| 2 | **Correctness of claims** — a finding or Done line the user can act on without re-checking | 8 |
+| 3 | **Content** — how much of the ask was delivered | 7 |
+| 4 | **Hand-off-ability** — can a fresh window carry on from the checkpoint alone | 6 |
+| 5 | **Rework** — work thrown away because an assumption turned out wrong | 5 |
+| 6 | **User attention** — a playtest, a headset session, a build, a question card | 4 |
+| 7 | **Time to finish** | 3 |
 
-The user is the developer; doing the work is the job. Their time is the *cheapest* way to buy
-certainty — a 30-second Editor focus beats 15k tokens of inference about whether something
-compiles. Ask for the check, the playtest, the headset session, or the clarifying question
-rather than spending tokens to avoid asking.
+**Irreversibility is a hard floor, not a rank**: a commit, push, delete, overwrite or cswap is
+verified first whatever the token saving; the ordering above never buys it off.
 
-Never trade a token saving for rework. That ordering is unchanged.
+What the order changes in practice: a window past 150k is let lapse and unparked rather than
+renewed (tokens 10 › time 3); a master integrates from lane summaries and never reads a lane's
+raw output (tokens 10 › content 7 — the content is in the summary, the raw file is the lane's);
+a bundled ask is split into arcs with a checkpoint between them (hand-off-ability 6 › time 3);
+a claim the lane did not verify is labelled, not promoted (correctness 8 › content 7).
+
+**KPIs** (graded per session by `token-sessions.sh --stats`, see the grades there):
+master window ≤ 100k at every integration point; delegate window ≤ 150k; gap rewrites = 0;
+$ per confirmed finding (a finding the user acted on, or re-verified and kept).
+
+The user is the developer; their time is still the *cheapest* way to buy certainty — a
+30-second Editor focus beats 15k tokens of inference about whether something compiles. Ask for
+the check rather than spending tokens to avoid asking. Rework moved down because a measured
+rewrite of a 187k window cost more than any re-derivation this workflow has produced.
 
 ## Verification is cheap — and asking is the cheapest kind
 

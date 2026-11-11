@@ -5,6 +5,13 @@ const unity = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-'));
 fs.mkdirSync(path.join(unity, 'ProjectSettings')); fs.writeFileSync(path.join(unity, 'ProjectSettings', 'ProjectVersion.txt'), 'x');
 const plain = os.tmpdir();
 const bash = (command, cwd = plain) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 'test' });
+// a master session (token-master/master.json under the test HOME) and two lane files under _build/
+const mbash = (command) => ({ tool_name: 'Bash', tool_input: { command }, cwd: plain, session_id: 'master' });
+fs.mkdirSync(path.join(unity, '.claude', 'token-master'), { recursive: true });
+fs.writeFileSync(path.join(unity, '.claude', 'token-master', 'master.json'), '{"sid":"master","master":true}');
+const lanes = fs.mkdtempSync(path.join(os.tmpdir(), 'lanes-')); fs.mkdirSync(path.join(lanes, '_build'));
+const big = path.join(lanes, '_build', 'review-big.md').replace(/\\/g, '/'), small = path.join(lanes, '_build', 'review-small.md').replace(/\\/g, '/');
+fs.writeFileSync(big, '# lane\n'.repeat(2000)); fs.writeFileSync(small, '# lane\n## Summary\n| id | severity | title | where |\n');
 const cases = [
   [bash('git commit -m "fix" -- a.cs b.cs'), null],
   [bash('git commit -m "fix a; b | c" -- a.cs'), null],
@@ -36,10 +43,16 @@ const cases = [
   [{ tool_name: 'Edit', tool_input: { file_path: 'C:/p/Assets/Scenes/Main.unity' } }, 'ask'],
   [{ tool_name: 'Write', tool_input: { file_path: 'C:/p/Assets/X.prefab' } }, 'ask'],
   [{ tool_name: 'Edit', tool_input: { file_path: 'C:/p/Assets/X.cs' } }, null],
+  // master read-guard (Bash side): token-master/<sid>.json marks the master; _build/ files over 8 KB are denied to cat/sed/head, not to grep
+  [mbash(`cat ${big}`), 'deny'],
+  [mbash(`sed -n 1,40p "${big}"`), 'deny'],
+  [mbash(`grep -n '^## ' ${big}`), null],
+  [mbash(`cat ${small}`), null],
+  [bash(`cat ${big}`), null],                 // not a master: passes
 ];
 let fail = 0;
 for (const [p, want] of cases) {
-  const out = execFileSync('node', [guard], { input: JSON.stringify(p), env: { ...process.env, USERPROFILE: unity, HOME: unity } }).toString();
+  const out = execFileSync('node', [guard], { input: JSON.stringify(p), env: { ...process.env, USERPROFILE: unity, HOME: unity, CLAUDE_CONFIG_DIR: '' } }).toString();
   const got = out ? JSON.parse(out).hookSpecificOutput.permissionDecision : null;
   const ok = got === want; if (!ok) fail++;
   console.log(ok ? '  ok  ' : '  FAIL', String(got).padEnd(5), (p.tool_input.command || p.tool_input.file_path));

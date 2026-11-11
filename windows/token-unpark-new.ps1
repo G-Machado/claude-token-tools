@@ -23,7 +23,11 @@ if (-not (Test-Path $Cwd)) { Log "no dir $Cwd - abort"; Write-Output "no dir $Cw
 # (Open-Unpark): a running instance takes it as a new tab. The terminal is only
 # the fallback for a machine with no TokenChat build to find.
 . (Join-Path $cl 'token-open.ps1')
-$why = Open-Unpark $Cwd "/unpark $Topic --$Mode" $Model $Effort $OldSid
+# Delegates open lean (2026-11-11): TokenChat's Lite profile - core tools plus Skill, no MCP
+# schemas - because a delegate's cold floor was measured at 54-72k and the schemas and tool
+# list are the part of it a brief never uses. TOKEN_DELEGATE_LEAN=0 opens them full.
+$lean = ($Mode -eq 'delegate') -and ($env:TOKEN_DELEGATE_LEAN -ne '0')
+$why = Open-Unpark $Cwd "/unpark $Topic --$Mode" $Model $Effort $OldSid $lean
 if ($null -eq $why) {
   $where = if ($OldSid) { 'the old session''s TokenChat tab' } else { 'a new TokenChat tab' }
 } else {

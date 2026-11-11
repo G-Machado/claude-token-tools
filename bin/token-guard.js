@@ -65,6 +65,32 @@ function judge(p) {
   const f = inp.file_path || inp.notebook_path;
   if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(tool) && typeof f === 'string' && /\.(unity|prefab|asset)$/i.test(f))
     return ['unity-yaml', 'ask', 'Hand-editing Unity YAML: run `unity status` first - never while an Editor holds the project.'];
+  const m = c && masterCat(c, p);
+  if (m) return m;
+  return null;
+}
+
+// Master read-guard, Bash side (2026-11-11; the Read side is token-readguard.js). In master mode a
+// cat / sed -n / head / tail / less of a lane file under _build/ over TOKEN_MASTER_READ_KB (8) is
+// denied: the master integrates from the lane's `## Summary`, not its raw output. grep passes - it is
+// the cheap rung. Paths are taken as typed, quotes stripped, resolved against the hook's cwd.
+function masterCat(c, p) {
+  const KB = +(process.env.TOKEN_MASTER_READ_KB ?? 8);
+  if (!KB || !p.session_id) return null;
+  const cl = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  if (!fs.existsSync(path.join(cl, 'token-master', p.session_id + '.json'))) return null;
+  const seg = /[^;&|()\n`]+/g; let s;
+  while ((s = seg.exec(blank(c)))) {
+    const raw = c.slice(s.index, s.index + s[0].length);
+    if (!/^\s*(?:\w+=\S*\s+)*(cat|sed|head|tail|less|more)\s/.test(raw)) continue;
+    for (const tok of raw.match(/(?:"[^"]*"|'[^']*'|\S+)/g) || []) {
+      const t = tok.replace(/^["']|["']$/g, '').replace(/^~/, os.homedir());
+      if (!/[\\/]_build[\\/]/.test(t)) continue;
+      let kb = 0; try { kb = fs.statSync(path.resolve(p.cwd || process.cwd(), t)).size / 1024; } catch { continue; }
+      if (kb > KB)
+        return ['master-cat', 'deny', `master mode: ${path.basename(t)} is ${Math.round(kb)} KB of lane output (bar ${KB} KB). Integrate from its \`## Summary\` (grep -A 45 '^## Summary'), or one section by line range; the lane owns the detail.`];
+    }
+  }
   return null;
 }
 
