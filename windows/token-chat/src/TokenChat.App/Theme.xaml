@@ -576,4 +576,9 @@
             </Style>
         </Style.Resources>
     </Style>
+    <!-- figures (counts, ctx, model pill): app-level so StaticResource in any view's item templates finds it -->
+    <Style x:Key="Fig" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="Consolas"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
 </ResourceDictionary>

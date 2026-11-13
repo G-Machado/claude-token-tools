@@ -19,3 +19,4 @@ checkpoints/
 # token-chat build output
 windows/token-chat/**/bin/
 windows/token-chat/**/obj/
+windows/kit-launcher/start-claude.exe

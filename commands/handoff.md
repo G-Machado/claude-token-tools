@@ -11,6 +11,9 @@ Hand this work to a fresh window: checkpoint it, open a new TokenChat tab alread
 
 Glue over pieces that already exist - do not reimplement any of them.
 
+A master with a delegate working renews by `/compact` instead (commands/master.md item 6): same
+sid, nothing to move. A handover is fine with none working; `/clear` on a master orphans its delegates.
+
 ## 1. Park
 
 Read `$HOME/.claude/commands/park.md` now (not from memory: it is the one source, and it changes)

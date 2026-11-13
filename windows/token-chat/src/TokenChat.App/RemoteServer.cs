@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using TokenChat.Core;
 using TokenChat.Core.Remote;
 using TokenChat.Core.Transcript;
 
@@ -59,7 +60,16 @@ sealed class RemoteServer(ObservableCollection<SessionTab> tabs, Dispatcher ui)
         var app = b.Build();
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
         app.MapGet("/", () => Results.Content(Page(), "text/html; charset=utf-8"));
+        app.MapGet("/theme.css", async () => Results.Content(await ui.InvokeAsync(ThemeCss), "text/css; charset=utf-8"));
         app.MapPost("/pair", (Func<HttpContext, Task<IResult>>)Pair);
+        // the Editor tab's scene image, behind the same pairing cookie as the socket
+        app.MapGet("/editor/{id:int}.png", (HttpContext ctx, int id) =>
+        {
+            if (!Paired(ctx)) return Results.StatusCode(401);
+            if (UnityEditorLink.ById(id) is not { } l || !File.Exists(l.PngPath)) return Results.NotFound();
+            try { return Results.File(File.ReadAllBytes(l.PngPath), "image/png"); }
+            catch (IOException) { return Results.StatusCode(503); }   // mid-swap: the page asks again on the next version
+        });
         app.Map("/ws", Socket);
         await app.StartAsync();
         _app = app;
@@ -83,10 +93,40 @@ sealed class RemoteServer(ObservableCollection<SessionTab> tabs, Dispatcher ui)
         catch (IOException) { return []; }
     }
 
+    /// <summary>Run from the clone (bin\Debug\net10.0-windows under the project), the page is read from the source file
+    /// on every load, so an edit to Remote\index.html shows on a browser reload with no restart; else the embedded copy.</summary>
+    static readonly string? PageSource = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Remote", "index.html")) is var p && File.Exists(p) ? p : null;
+
     static string Page()
     {
+        if (PageSource is { } src) try { return File.ReadAllText(src); } catch (IOException) { }
         using var s = typeof(RemoteServer).Assembly.GetManifestResourceStream("remote.index.html")!;
         return new StreamReader(s).ReadToEnd();
+    }
+
+    /// <summary>The app's own brushes and fonts (Theme.xaml, as loaded) as CSS variables, <c>--Card</c>, <c>--Ui</c>...,
+    /// so the page takes every colour from the same place the window does and cannot drift from it.</summary>
+    static string ThemeCss()
+    {
+        var css = new StringBuilder(":root {\n");
+        void Walk(System.Windows.ResourceDictionary d)
+        {
+            foreach (var m in d.MergedDictionaries) Walk(m);
+            foreach (var key in d.Keys)
+                if (key is string k && d[k] is { } v)
+                    switch (v)
+                    {
+                        case SolidColorBrush b:
+                            var c = b.Color;
+                            css.Append(FormattableString.Invariant($"  --{k}: rgba({c.R},{c.G},{c.B},{c.A / 255.0:0.###});\n"));
+                            break;
+                        case FontFamily f:
+                            css.Append($"  --{k}: \"{f.Source}\", system-ui, sans-serif;\n");
+                            break;
+                    }
+        }
+        Walk(System.Windows.Application.Current.Resources);
+        return css.Append("}\n").ToString();
     }
 
     bool Paired(HttpContext ctx) => ctx.Request.Cookies.TryGetValue(Cookie, out var t) && t is not null && _tokens.Contains(t);
@@ -155,6 +195,25 @@ sealed class RemoteServer(ObservableCollection<SessionTab> tabs, Dispatcher ui)
     /// its projection gave them.</summary>
     async Task ActAsync(Client c, JsonObject op)
     {
+        // the Editor tab names a project, not a tab
+        switch ((string?)op["op"])
+        {
+            case "editor-open" when UnityEval.ProjectRoot((string?)op["root"]) is { } root:
+                c.ShowEditor(UnityEditorLink.For(root));
+                return;
+            case "editor-close":
+                c.ShowEditor(null);
+                return;
+            case "editor-pick" when c.Editor is { } l && (int?)op["node"] is { } node:
+                _ = l.PickAsync(node);
+                return;
+            case "editor-scene" when c.Editor is { } l && (string?)op["path"] is { } path:
+                _ = l.OpenSceneAsync(path);
+                return;
+            case "editor-refresh":
+                _ = c.Editor?.RefreshAsync();
+                return;
+        }
         var tab = _tabIds.FirstOrDefault(p => p.Value == (int?)op["tab"]).Key;
         if (tab is null || !tabs.Contains(tab)) return;
         var item = op["id"] is { } id ? c.View?.Find((int)id) : null;
@@ -163,6 +222,7 @@ sealed class RemoteServer(ObservableCollection<SessionTab> tabs, Dispatcher ui)
             switch ((string?)op["op"])
             {
                 case "select":
+                    c.ShowEditor(null);
                     c.Show(tab, TabId(tab));
                     break;
                 case "send" when (string?)op["text"] is { Length: > 0 } text:
@@ -202,12 +262,65 @@ sealed class RemoteServer(ObservableCollection<SessionTab> tabs, Dispatcher ui)
             if (tabsChanged) c.Send(list);
             if (c.Tab is { } t && !tabs.Contains(t)) c.Show(null, 0);
             if (c.View?.Flush() is { } patch) c.Send(patch);
+            if (c.EditorPatch() is { } ed) c.Send(ed);
         }
+    }
+
+    /// <summary>The window's sidebar, set once it exists: the page draws the same rows from it.</summary>
+    public Sidebar? Side { get; set; }
+
+    static string? Hex(Brush? b) => b is SolidColorBrush s
+        ? (s.Color.A == 255 ? $"#{s.Color.R:X2}{s.Color.G:X2}{s.Color.B:X2}" : $"#{s.Color.R:X2}{s.Color.G:X2}{s.Color.B:X2}{s.Color.A:X2}")
+        : null;
+
+    /// <summary>The sidebar's rows as SidebarView draws them: group headers, then each session with the widget's figures.
+    /// Rows of this window carry the page's tab id, so a click selects that tab.</summary>
+    JsonArray SideRows()
+    {
+        var list = new JsonArray();
+        if (Side is null) return list;
+        const double spendWidth = 66;   // the spend bar's width in SidebarView, which the tick margins are laid against
+        foreach (var it in Side.Items)
+        {
+            if (it.IsHeader)
+            {
+                list.Add(new JsonObject { ["h"] = true, ["name"] = it.Name, ["color"] = Hex(it.ProjectBrush), ["count"] = it.Count,
+                                          ["folded"] = it.Folded, ["state"] = it.State });
+                continue;
+            }
+            var o = new JsonObject
+            {
+                ["tab"] = it.Tab is { } t ? TabId(t) : null, ["here"] = it.Here, ["name"] = it.Name, ["arrow"] = it.Arrow,
+                ["project"] = it.Project, ["color"] = Hex(it.ProjectBrush), ["state"] = it.State, ["depth"] = it.Depth,
+                ["master"] = it.IsMaster, ["masterSummary"] = it.MasterSummary, ["delegate"] = it.DelegateState,
+                ["reported"] = it.Reported, ["children"] = it.HasChildren ? it.ChildLabel : null, ["unity"] = it.UnityRoot,
+            };
+            if (it.Row is { } r)
+                o["row"] = new JsonObject
+                {
+                    ["mark"] = r.Mark, ["markC"] = Hex(r.MarkBrush), ["ctx"] = r.Ctx, ["ctxC"] = Hex(r.CtxBrush),
+                    ["clock"] = r.Clock, ["clockC"] = Hex(r.ClockBrush), ["cold"] = r.Cold,
+                    ["spark"] = new JsonArray([.. r.Spark.Select(b => (JsonNode)new JsonArray(b.Width, b.Height, Hex(b.Fill)))]),
+                    ["growth"] = r.Growth, ["growthC"] = Hex(r.GrowthBrush), ["heat"] = r.Heat, ["heatC"] = Hex(r.HeatBrush),
+                    ["cycles"] = r.Cycles, ["pokes"] = r.Pokes, ["parked"] = r.Parked, ["parkedC"] = Hex(r.ParkedBrush),
+                    ["marksLeft"] = r.MarksLeft, ["marksSpent"] = r.MarksSpent, ["blocked"] = r.Blocked, ["hasState"] = r.HasState,
+                    ["model"] = r.Model, ["effort"] = r.Effort, ["effortC"] = Hex(r.EffortBrush),
+                    ["spend"] = r.Spend, ["spendC"] = Hex(r.SpendBrush), ["spendFill"] = r.SpendFill,
+                    ["ticks"] = new JsonArray(
+                        new JsonArray(FooterRow.TickOkAt.Left / spendWidth, r.TickOk),
+                        new JsonArray(FooterRow.TickWatchAt.Left / spendWidth, r.TickWatch),
+                        new JsonArray(FooterRow.TickHeavyAt.Left / spendWidth, r.TickHeavy)),
+                    ["grades"] = new JsonArray([.. r.Grades.Select(g => (JsonNode)new JsonArray(g.Letter, Hex(g.Fill)))]),
+                };
+            list.Add(o);
+        }
+        return list;
     }
 
     JsonObject TabList() => new()
     {
         ["type"] = "tabs",
+        ["side"] = SideRows(),
         ["tabs"] = new JsonArray([.. tabs.Select(t => (JsonNode)new JsonObject
         {
             ["id"] = TabId(t), ["title"] = t.AutoTitle ?? t.Title, ["project"] = t.ProjectKey,
@@ -239,8 +352,36 @@ sealed class RemoteServer(ObservableCollection<SessionTab> tabs, Dispatcher ui)
 
         public void Send(JsonObject msg) => _out.Writer.TryWrite(msg.ToJsonString());
 
+        /// <summary>The Editor this page shows, if any; it watches the link while open.</summary>
+        public UnityEditorLink? Editor { get; private set; }
+        int _edStatus, _edImage, _edScene, _edInspect;
+
+        public void ShowEditor(UnityEditorLink? link)
+        {
+            if (Editor == link) return;
+            Editor?.Unwatch(this);
+            Editor = link;
+            _edStatus = _edImage = _edScene = _edInspect = -1;
+            link?.Watch(this);
+        }
+
+        /// <summary>The parts of the Editor that moved since the last send; the hierarchy only when its nodes changed.</summary>
+        public JsonObject? EditorPatch()
+        {
+            if (Editor is not { } l) return null;
+            var m = new JsonObject { ["type"] = "editor", ["root"] = l.Root, ["name"] = l.Name };
+            var any = false;
+            if (l.StatusVersion != _edStatus) { _edStatus = l.StatusVersion; m["status"] = l.Status; m["busy"] = l.Busy; any = true; }
+            if (l.ImageVersion != _edImage && l.ImageVersion > 0) { _edImage = l.ImageVersion; m["img"] = $"/editor/{l.Id}.png?v={l.ImageVersion}"; any = true; }
+            if (l.SceneVersion != _edScene && l.Scene is { } sc) { _edScene = l.SceneVersion; m["nodes"] = sc["nodes"]?.DeepClone(); m["picked"] = l.Picked;
+                m["scenes"] = l.NeedsScene ? sc["scenes"]?.DeepClone() : null; any = true; }
+            if (l.InspectVersion != _edInspect && l.Inspected is { } ins) { _edInspect = l.InspectVersion; m["insp"] = ins.DeepClone(); any = true; }
+            return any ? m : null;
+        }
+
         public void Close()
         {
+            ShowEditor(null);
             View?.Dispose();
             View = null;
             _out.Writer.TryComplete();

@@ -74,6 +74,10 @@ public partial class SidebarView : UserControl
     void OnAnalytics(object sender, RoutedEventArgs e) => ShowAnalytics?.Invoke();
     void OnCloseRow(object sender, RoutedEventArgs e) { if (ItemOf(sender)?.Tab is { } tab) CloseSession?.Invoke(tab); }
 
+    /// <summary>A Unity session's glyph: MainWindow swaps the chat for that project's Editor view.</summary>
+    public event Action<string>? OpenEditor;
+    void OnEditorRow(object sender, RoutedEventArgs e) { if (ItemOf(sender)?.UnityRoot is { } root) OpenEditor?.Invoke(root); }
+
     /// <summary>/park as a poke: the composer's text and attachments stay, and a session mid-turn says so.</summary>
     void OnPark(object sender, RoutedEventArgs e)
     {

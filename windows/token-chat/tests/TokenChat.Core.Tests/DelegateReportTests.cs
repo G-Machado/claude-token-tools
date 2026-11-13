@@ -34,4 +34,31 @@ public class DelegateReportTests
         Assert.Equal(("abc", "t"), (r.For, r.Topic));
         Assert.Equal(["one"], r.Done);
     }
+
+    [Fact]
+    public void A_clean_report_goes_to_the_master_inline()
+    {
+        var r = DelegateReport.Parse("r.md", """
+            <!-- report: for=abc sid=d1 topic=t branch=delegate/t worktree=C:\w status=done stop=met -->
+            **Done**
+            - [x] `a.cs:1` — one
+            - [x] `b.cs:2` — two
+
+            **Merge**: `git merge delegate/t`, then `git worktree remove C:\w`
+            """)!;
+        Assert.True(r.Clean);
+        Assert.Equal(@"`git merge delegate/t`, then `git worktree remove C:\w`", r.Merge);
+        Assert.StartsWith("[delegate t done, stop criteria met] Done: `a.cs:1` — one; `b.cs:2` — two. Merge: `git merge", r.Brief());
+    }
+
+    [Fact]
+    public void A_blocked_or_old_report_is_read_in_full()
+    {
+        var blocked = DelegateReport.Parse("r.md", "<!-- report: for=abc topic=t status=blocked stop=unmet -->\n## Done\n- one\n## Merge\n- `git merge delegate/t`")!;
+        Assert.Equal("`git merge delegate/t`", blocked.Merge);
+        Assert.StartsWith("Read the delegate report at r.md (status=blocked, stop=unmet)", blocked.Brief());
+        var old = DelegateReport.Parse("r.md", "<!-- report: for=abc topic=t -->\n## Done\n- one")!;
+        Assert.False(old.Clean);
+        Assert.StartsWith("Read the delegate report", old.Brief());
+    }
 }

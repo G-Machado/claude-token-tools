@@ -92,7 +92,7 @@ ending the session). `--stats` separates them; judge a cycle on growth against i
 the raw re-cache number.
 
 Raw tokens are not one currency, so never add them together. Relative to an uncached input token:
-cache read **0.1×**, input **1×**, cache write **2×** (1-hour TTL), output **5×** — a 50× spread
+cache read **0.1×** (Opus 5 and older; **0.05×** Opus 5.5, **0.025×** Fable 5.x — `pricing-reference.md`), input **1×**, cache write **2×** (1-hour TTL), output **5×** — a 50× spread (100× on Opus 5.5)
 between the cheapest and dearest term. Measured over the **700 cycles** that log reads
 (2026-09-05 → 09-29): cache reads **52%**, cache writes **24%**, output **24%**; a transcript scan
 of 10,370 requests agrees (53 / 24 / 23). (The earlier "writes 49%, output 34%, reads 17%" came
@@ -123,8 +123,8 @@ mechanism, and thresholds: `~/.claude/token-cycles.sh`, failures in `token-alert
 
 ### Never park a large session across a gap
 
-The prompt cache lives **one hour**. Reading from it costs 0.1×; writing to it costs 2× — a
-**20× swing on identical content**. When the cache expires, the entire window is rewritten at
+The prompt cache lives **one hour**. Reading from it costs 0.1× (0.05× Opus 5.5, 0.025× Fable 5.x); writing to it costs 2× — a
+**20× swing on identical content** (40× on Opus 5.5, 80× on Fable). When the cache expires, the entire window is rewritten at
 the write rate.
 
 So resuming a big session after a long gap is the *worst* of the three options — worse than
@@ -174,14 +174,17 @@ call:
 
 | on returning | cache warm (`NNm`) | cache `COLD` |
 |---|---|---|
-| **you parked** | carry on; the ~23k park was insurance you did not need | above **~68k**: `/clear` **before typing**, resume from the checkpoint (~136k, against `context x 2` to carry). Below it, carry on |
+| **you parked** | carry on; the ~23k park was insurance you did not need | above **~97k** (was ~68k; see note below): `/clear` **before typing**, resume from the checkpoint (~196k, against `context x 2` to carry). Below it, carry on |
 | **you didn't park** | carry on; nothing was lost | above **~97k**: `/clear` before typing and re-derive (~34k, so ~194k all-in). Below it, carry on |
 
 Three thresholds, three different questions — do not collapse them. **~80k** is asked *before*
 you leave: is parking worth it at all (park+clear ~159k vs carrying one gap at `context x 2`).
-**~68k** and **~97k** are asked *after* a gap, when the park cost is already sunk and the only
-question left is clear-vs-carry: `(63k floor + re-derivation) x 2` against `context x 2`, and
-re-derivation is ~5k with a checkpoint or ~34k without.
+**~97k** (both rows) is asked *after* a gap, when the park cost is already sunk and the only
+question left is clear-vs-carry: `(63k floor + re-derivation) x 2` against `context x 2`.
+The parked row used to say ~68k on "re-derivation ~5k with a checkpoint". That counted only the
+unpark cycle; measured to the first edit it is 33.6k growth with a checkpoint (n=75, 2026-10-04),
+about the same as ~34k without one (n=29), so both rows now sit at ~97k (2026-11-12). The
+checkpoint's value after a gap is correctness of the resumed task, not fewer tokens.
 
 All three exist because of the floor, and none of them can go lower than it: **you cannot clear
 your way below ~63k.** With a window smaller than a fresh start, clearing makes it bigger.
@@ -288,11 +291,11 @@ A new session restarts at the **cold floor** (median **63k** measured: system pr
 skill listings, this file, memory) and then re-derives what it needs to resume (~34k). Restarting
 resets to about **97k**, not to zero.
 
-Both sides must be priced, not counted. What carrying context costs is **cache reads** (0.1×, once
+Both sides must be priced, not counted. What carrying context costs is **cache reads** (R = 0.1× here; 0.05× Opus 5.5, 0.025× Fable 5.x; once
 per request); what a restart costs is a fresh **cache write** of the floor (2×) plus re-derivation:
 
 ```
-carry / cycle  =  (context − floor − rederive) × requests_per_cycle × 0.1
+carry / cycle  =  (context − floor − rederive) × requests_per_cycle × R
 restart        =  (floor + rederive) × 2
 
 restart is worth it when   N_remaining  >  restart / carry
@@ -303,6 +306,13 @@ N > 8.2. 300k → N > 4.2. At this repo's ~6.6 cycles/session the break-even con
 ~157k when a `/park` checkpoint exists, because that cuts re-derivation from ~34k to ~5k. That is
 why the bands sit at **157k parked / 224k unparked**. The earlier 100k/140k came from adding raw tokens on
 both sides and were 2–3× too low.
+
+**Dated (2026-11-12): the N values and bands above were derived at R = 0.1×.** On Opus 5.5
+(R = 0.05×) every N doubles (120k → N > 74, 200k → 16, 300k → 8); on Fable (0.025×) it
+quadruples. Use `token-cycles.sh --stats`, which prices reads at 0.05×: ~158k at 6.4
+cycles/session — and that counts re-derivation as the 7.3k unpark cycle only, not the 33.6k
+growth + 14.5k output measured to the first edit (memory `unpark-reorientation`), so the true bar
+is higher still.
 
 **Apply this whenever recommending a session cut, and state the numbers.** Never suggest "start a
 fresh session" without checking that context is far enough above the floor for it to pay. Below

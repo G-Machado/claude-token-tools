@@ -4,65 +4,218 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>TokenChat</title>
+<!-- every colour and font comes from the app's own Theme.xaml, served live as --Card, --Ui, ... (RemoteServer.ThemeCss) -->
+<link rel="stylesheet" href="/theme.css">
 <style>
-  :root { --bg:#1e1f22; --panel:#2b2d31; --line:#3a3c42; --text:#e6e6e6; --dim:#9a9ca3; --faint:#6b6e75;
-          --blue:#5aa0ff; --green:#5fc27a; --yellow:#e5c45a; --orange:#e8964a; --red:#e86a6a; }
+  /* the window's sizes (WPF px at 125%) scaled by --zoom for a headset or a phone */
+  :root { --zoom:1.25; --side:calc(310px * var(--zoom)); }
   * { box-sizing:border-box; }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
-               font:16px/1.45 system-ui, "Segoe UI", sans-serif; }
-  body { display:flex; flex-direction:column; }
-  button { font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line);
-           border-radius:8px; padding:10px 14px; min-height:44px; cursor:pointer; }
-  button.primary { border-color:var(--blue); color:var(--blue); }
-  button.on { background:#2f4a6e; border-color:var(--blue); }
+  html, body { margin:0; height:100%; background:var(--Card); color:var(--Text);
+               font:calc(12.5px * var(--zoom))/1.45 var(--Ui); }
+  body { display:grid; grid-template-columns:var(--side) 1fr; grid-template-rows:1fr auto; }
+  button { font:inherit; font-size:.9em; color:var(--Dim); background:var(--Sel); border:1px solid var(--Line);
+           border-radius:6px; padding:.35em .9em; min-height:2.6em; cursor:pointer; }
+  button:hover { color:var(--Text); border-color:var(--Thumb); }
+  button.primary { border-color:var(--Blue); color:var(--Blue); }
+  button.danger { color:var(--Red); }
   button:disabled { opacity:.4; }
-  #tabs { display:flex; gap:6px; overflow-x:auto; padding:8px; border-bottom:1px solid var(--line); flex:none; }
-  #tabs button { white-space:nowrap; display:flex; align-items:center; gap:8px; }
-  #tabs button.sel { border-color:var(--text); }
-  .dot { width:10px; height:10px; border-radius:50%; flex:none; }
-  .wait { color:var(--yellow); }
-  #log { flex:1; overflow-y:auto; padding:10px 12px 20px; }
-  .row { margin:10px 0; }
-  .user { background:var(--panel); border-radius:10px; padding:10px 12px; white-space:pre-wrap; }
+  .mono { font-family:var(--Mono); }
+  .faint { color:var(--Faint); } .dim { color:var(--Dim); }
+  .err { color:var(--Red); } .big { color:var(--Orange); }
+
+  /* sidebar: sessions grouped by project, as SidebarView */
+  #side { grid-row:1 / 3; background:var(--Inset); border-right:1px solid var(--Line); overflow-y:auto; padding:.6em .5em; }
+  #side .head { color:var(--Faint); font-size:.85em; padding:.2em .4em .6em; display:flex; justify-content:space-between; }
+  /* sizes in --u (one WPF px): the row template of SidebarView.xaml, line for line */
+  :root { --u:calc(1px * var(--zoom)); }
+  #side { padding:calc(4 * var(--u)) 0; overflow-x:hidden; }
+  .fig { font-family:var(--Mono); white-space:nowrap; }
+  .gh { display:flex; align-items:center; margin:calc(8 * var(--u)) calc(6 * var(--u)) var(--u); padding:calc(2 * var(--u)) calc(10 * var(--u)) calc(3 * var(--u)) calc(6 * var(--u));
+        border-radius:calc(5 * var(--u)); border:1px solid transparent; }
+  .gh.waiting { background:var(--YellowTint); border-color:var(--Yellow); }
+  .gh .chev { font-size:calc(10 * var(--u)); width:calc(12 * var(--u)); color:var(--Faint); }
+  .gh .dot { width:calc(6 * var(--u)); height:calc(6 * var(--u)); border-radius:50%; margin-right:calc(6 * var(--u)); flex:none; }
+  .gh .n { flex:1; font-size:calc(10.5 * var(--u)); font-weight:600; color:var(--Dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .gh .c { font-size:calc(10 * var(--u)); color:var(--Faint); }
+  .sr { display:flex; margin:var(--u) calc(6 * var(--u)); padding:calc(6 * var(--u)) calc(10 * var(--u)) calc(7 * var(--u)) calc(9 * var(--u));
+        border-radius:calc(5 * var(--u)); border:1px solid transparent; }
+  .sr.here { cursor:pointer; }
+  .sr:hover { background:rgba(255,255,255,.02); }
+  .sr.waiting { background:var(--YellowTint); border-color:var(--Yellow); }
+  .sr.sel { background:var(--Sel); }
+  .sr .edge { width:calc(3 * var(--u)); border-radius:calc(1.5 * var(--u)); margin:var(--u) 0; flex:none; }
+  .sr.working .edge { opacity:.3; animation:sweep 1.6s ease-in-out infinite alternate; }
+  @keyframes sweep { from { opacity:.3; } to { opacity:1; } }
+  .sr .body { flex:1; min-width:0; margin-left:calc(8 * var(--u)); }
+  .l1, .l2, .l3 { display:flex; align-items:center; }
+  .l2 { margin-top:calc(4 * var(--u)); } .l3 { margin:calc(5 * var(--u)) 0 0 calc(16 * var(--u)); }
+  .l1 .st { font-size:calc(9 * var(--u)); width:calc(9 * var(--u)); margin-right:calc(7 * var(--u)); text-align:center; color:var(--Faint); }
+  .sr.idle .st { color:var(--Green); } .sr.working .st { color:var(--Blue); } .sr.exited .st { color:var(--Red); }
+  .sr.waiting .st { color:var(--Yellow); font-size:calc(12 * var(--u)); animation:blink .45s ease-in-out infinite alternate; }
+  @keyframes blink { to { opacity:.25; } }
+  .l1 .nm { flex:1; min-width:0; display:flex; align-items:baseline; }
+  .l1 .nm .t { font-size:calc(12 * var(--u)); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .l1 .nm .ar { font-size:calc(11 * var(--u)); color:var(--Faint); }
+  .l1 .nm .p { font-size:calc(10.5 * var(--u)); color:var(--Faint); margin-left:calc(6 * var(--u)); max-width:calc(110 * var(--u));
+               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:none; }
+  .l1 .ctx { font-size:calc(11 * var(--u)); margin-left:calc(8 * var(--u)); }
+  .l1 .clk { font-size:calc(11 * var(--u)); min-width:calc(34 * var(--u)); text-align:right; }
+  .l1 .clk.cold { font-weight:bold; }
+  .l1 .ms { font-size:calc(10 * var(--u)); color:var(--Faint); margin-left:calc(6 * var(--u)); white-space:nowrap; }
+  .pill { background:var(--Inset); border-radius:calc(4 * var(--u)); padding:var(--u) calc(6 * var(--u)) calc(2 * var(--u));
+          margin-left:calc(8 * var(--u)); display:inline-flex; align-items:center; }
+  .pill.solid { color:var(--Card); font:bold calc(9 * var(--u)) var(--Mono); }
+  .l2 .left { flex:1; display:flex; align-items:center; min-width:0; }
+  .l2 .mk { font-size:calc(9 * var(--u)); width:calc(16 * var(--u)); flex:none; }
+  .spark { display:flex; align-items:flex-end; height:calc(13 * var(--u)); }
+  .spark i { display:block; border-radius:var(--u); margin-right:calc(2 * var(--u)); }
+  .l2 .f { font-size:calc(9.5 * var(--u)); margin-right:calc(8 * var(--u)); }
+  .l2 .gr { margin-left:calc(2 * var(--u)); }
+  .l2 .ht { font-weight:600; }
+  .l2 .pk { font-size:calc(9 * var(--u)); font-weight:bold; margin-left:calc(6 * var(--u)); }
+  .l2 .pill { margin-left:calc(6 * var(--u)); font-size:calc(10.5 * var(--u)); }
+  .l2 .pill .b { color:var(--Red); font-weight:bold; font-size:calc(11 * var(--u)); margin-left:calc(5 * var(--u)); }
+  .l3 .mdl { flex:1; min-width:0; font-size:calc(9.5 * var(--u)); color:var(--Faint); overflow:hidden; text-overflow:ellipsis; }
+  .bar { position:relative; width:calc(66 * var(--u)); height:calc(5 * var(--u)); margin:0 calc(6 * var(--u)) 0 calc(8 * var(--u));
+         background:var(--Track); border-radius:calc(2.5 * var(--u)); flex:none; }
+  .bar .fill { position:absolute; inset:0; border-radius:calc(2.5 * var(--u)); transform-origin:left center; }
+  .bar .tick { position:absolute; top:calc(-2 * var(--u)); bottom:calc(-2 * var(--u)); width:1px; }
+  .l3 .sp { font-size:calc(9.5 * var(--u)); color:var(--Dim); min-width:calc(34 * var(--u)); margin-right:calc(8 * var(--u)); }
+  .l3 .g { font:600 calc(10 * var(--u)) var(--Mono); margin-left:calc(3 * var(--u)); }
+  .wait { color:var(--Yellow); }
+
+  /* transcript, as SessionView */
+  #main { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  #top { display:none; align-items:center; gap:.6em; padding:.4em .6em; border-bottom:1px solid var(--Line); }
+  #top .title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #log { flex:1; overflow-y:auto; padding:1em 1.6em 2em; }
+  .row { margin:.55em 0; }
+  .user { display:flex; flex-direction:column; align-items:flex-end; }
+  .user .bubble { background:var(--Sel); border:1px solid var(--Line); border-radius:8px; padding:.55em .9em;
+                  white-space:pre-wrap; max-width:80%; }
+  .user .files { font-size:.8em; color:var(--Faint); margin-top:.2em; }
   .text { overflow-wrap:anywhere; }
-  .text pre, .result { background:#17181a; border-radius:6px; padding:8px; overflow-x:auto; white-space:pre; font:13px/1.4 Consolas, monospace; }
-  .text code { background:#17181a; border-radius:4px; padding:0 4px; font-family:Consolas, monospace; }
-  .text h1, .text h2, .text h3 { font-size:1.05em; margin:12px 0 4px; }
-  .text p { margin:6px 0; }
-  details { border-left:2px solid var(--line); padding-left:10px; color:var(--dim); }
-  summary { cursor:pointer; padding:6px 0; min-height:32px; }
-  .thinking { color:var(--faint); font-style:italic; white-space:pre-wrap; }
-  .err { color:var(--red); } .big { color:var(--orange); } .faint { color:var(--faint); }
-  .note { color:var(--dim); font-size:14px; } .note.Error { color:var(--red); } .note.Warning { color:var(--orange); }
-  .turn { color:var(--faint); font-size:13px; border-top:1px solid var(--line); padding-top:6px; }
-  .card { border:1px solid var(--yellow); border-left-width:4px; border-radius:8px; padding:10px 12px; }
-  .card .title { font-weight:600; margin-bottom:6px; }
-  .card .acts { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
-  .card input { width:100%; font:inherit; padding:10px; margin-top:6px; background:var(--bg); color:var(--text);
-                border:1px solid var(--line); border-radius:8px; }
-  .opt small { display:block; color:var(--dim); font-size:13px; }
-  .diff { font:13px/1.35 Consolas, monospace; white-space:pre; overflow-x:auto; background:#17181a; padding:6px; border-radius:6px; }
-  .Added { color:var(--green); } .Removed { color:var(--red); } .Gap { color:var(--faint); }
+  .text pre { background:var(--Inset); border:1px solid var(--Line); border-radius:4px; padding:.6em .8em; overflow-x:auto;
+              white-space:pre; font:calc(10.5px * var(--zoom))/1.45 var(--Mono); }
+  .text code { font-family:var(--Mono); font-size:.92em; background:var(--Inset); border-radius:3px; padding:0 .3em; }
+  .text h3 { font-size:1em; margin:.9em 0 .3em; }
+  .text p { margin:.45em 0; }
+  .text .li { position:relative; margin:.2em 0; }
+  .text .li .bul { position:absolute; left:-1.1em; color:var(--Dim); }
+  .text b { color:var(--Text); }
+  details > summary { list-style:none; cursor:pointer; padding:.15em 0; min-height:1.9em; display:flex; align-items:baseline; gap:.45em; }
+  details > summary::-webkit-details-marker { display:none; }
+  details > summary::before { content:"\25B8"; color:var(--Faint); font-family:var(--Sym); font-size:.75em; width:.8em; flex:none; }
+  details[open] > summary::before { content:"\25BE"; }
+  details > :not(summary) { margin-left:1.25em; }
+  .tool .verb { font-weight:600; }
+  .tool .subj { font-family:var(--Mono); font-size:.92em; }
+  .tool .meta { color:var(--Faint); font-size:.85em; }
+  .tool .run { color:var(--Blue); font-size:.85em; }
+  .result { background:var(--Inset); border:1px solid var(--Line); border-radius:4px; padding:.5em .7em; margin:.3em 0;
+            overflow-x:auto; white-space:pre; font:calc(10.5px * var(--zoom))/1.4 var(--Mono); color:var(--Dim); max-height:24em; overflow-y:auto; }
+  .thinking { color:var(--Faint); font-style:italic; white-space:pre-wrap; }
+  .note { color:var(--Dim); font-size:.9em; } .note.Error { color:var(--Red); } .note.Warning { color:var(--Orange); }
+  .turn { color:var(--Faint); font:calc(10px * var(--zoom))/1.5 var(--Mono); border-top:1px solid var(--Line); padding-top:.5em; margin-top:.9em; }
   .renewal { opacity:.5; }
-  #bar { flex:none; display:flex; gap:8px; padding:8px; border-top:1px solid var(--line); align-items:flex-end; }
-  #input { flex:1; font:inherit; color:var(--text); background:var(--panel); border:1px solid var(--line);
-           border-radius:10px; padding:10px; min-height:44px; max-height:40vh; resize:none; }
-  #status { flex:none; color:var(--dim); font-size:13px; padding:2px 12px; }
+
+  /* question, permission and notice cards: yellow edge on a yellow tint, as the window's card */
+  .card { border:1px solid var(--Line); border-left:3px solid var(--Yellow); background:var(--YellowTint);
+          border-radius:6px; padding:.7em .9em; }
+  .card .title { font-weight:600; margin:.2em 0 .5em; }
+  .card .hdr { display:inline-block; background:var(--YellowTint); color:var(--Yellow); border-radius:4px;
+               padding:0 .45em; font-size:.8em; margin-right:.4em; }
+  .card .acts { display:flex; flex-wrap:wrap; gap:.5em; margin-top:.6em; }
+  .card input { width:100%; font:inherit; padding:.5em .7em; margin-top:.5em; background:var(--Inset); color:var(--Text);
+                border:1px solid var(--Line); border-radius:6px; }
+  .opt { text-align:left; color:var(--Text); background:var(--Inset); border-radius:999px; padding:.35em 1em; }
+  .opt.on { background:var(--BlueTint); border-color:var(--Blue); }
+  .opt .rec { background:var(--BlueTint); color:var(--Blue); border-radius:4px; padding:0 .4em; font-size:.75em; margin-left:.5em; }
+  .opt small { display:block; color:var(--Dim); font-size:.82em; }
+  .done { border-left-color:var(--Faint); background:transparent; color:var(--Dim); }
+  .diff { font:calc(10.5px * var(--zoom))/1.4 var(--Mono); white-space:pre; overflow-x:auto; background:var(--Inset);
+          padding:.4em; border-radius:4px; margin-top:.4em; }
+  .diff .Added { background:var(--DiffAdd); } .diff .Removed { background:var(--DiffDel); } .diff .Gap { color:var(--Faint); }
+
+  /* composer and status line */
+  #bar { margin:.4em 1.6em .5em; background:var(--Inset); border:1px solid var(--Line); border-radius:8px; padding:.5em; }
+  #bar:focus-within { border-color:var(--Thumb); }
+  #input { display:block; width:100%; font:inherit; color:var(--Text); background:transparent; border:0; outline:0;
+           padding:.3em .4em; min-height:2.6em; max-height:40vh; resize:none; }
+  #bar .acts { display:flex; justify-content:flex-end; gap:.5em; }
+  #status .sw { color:var(--Faint); } #status .sw.idle { color:var(--Green); } #status .sw.working { color:var(--Blue); }
+  #status .sw.waiting { color:var(--Yellow); } #status .sw.exited { color:var(--Red); }
+  #send:disabled { border-color:var(--Line); color:var(--Faint); }
+  #jump { position:absolute; right:2.2em; bottom:.6em; border-radius:999px; padding:.2em .9em; min-height:2.2em;
+          background:var(--Sel); color:var(--Blue); border-color:var(--Blue); box-shadow:0 2px 8px rgba(0,0,0,.4); }
+  #logwrap { flex:1; position:relative; min-height:0; display:flex; }
+  #logwrap #log { flex:1; }
+  #status { grid-column:2; color:var(--Faint); font:calc(10px * var(--zoom))/1.5 var(--Mono); padding:.25em 1.6em .4em;
+            border-top:1px solid var(--Line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* the Editor tab: a Unity project's scene image, hierarchy and read-only inspector, in place of the chat */
+  .l1 .ed { margin-left:calc(6 * var(--u)); color:var(--Faint); cursor:pointer; font-size:calc(11 * var(--u)); }
+  .l1 .ed:hover { color:var(--Blue); }
+  #editor { display:none; flex:1; min-height:0; flex-direction:column; }
+  body.editor #editor { display:flex; } body.editor #logwrap, body.editor #bar { display:none; }
+  #editor .ehead { display:flex; align-items:center; gap:.8em; padding:.5em 1.6em; border-bottom:1px solid var(--Line); background:var(--Card); }
+  #editor .ehead .nm { font-weight:600; }
+  #editor .ehead .st { flex:1; min-width:0; color:var(--Faint); font-size:calc(11 * var(--u)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #editor .ebody { flex:1; min-height:0; display:grid; grid-template-columns:calc(280 * var(--u)) 1fr; }
+  #etree { overflow-y:auto; border-right:1px solid var(--Line); padding:.3em 0; background:var(--Inset); }
+  #etree .en { padding:.12em .8em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; font-size:calc(12 * var(--u)); }
+  #etree .en.off { color:var(--Faint); } #etree .en:hover { background:var(--Card); } #etree .en.sel { background:var(--Sel); }
+  #etree .en .g { color:var(--Faint); font-size:calc(10 * var(--u)); display:inline-block; width:1.2em; }
+  #eright { overflow-y:auto; padding:.8em 1.2em; }
+  #eimg { display:block; width:100%; max-height:55vh; object-fit:contain; background:var(--Card); border:1px solid var(--Line); border-radius:6px; }
+  #eimg:not([src]) { display:none; }
+  #escenes .scn { display:block; margin:.3em 0; text-align:left; } #escenes .sub { margin-top:.8em; }
+  #einsp .it { font-weight:600; margin-top:.8em; } #einsp .sub { color:var(--Faint); font-size:calc(11 * var(--u)); margin-bottom:.4em; }
+  .comp { background:var(--Card); border:1px solid var(--Line); border-radius:6px; padding:.5em .8em; margin:.5em 0; }
+  .comp .ct { font-weight:600; margin-bottom:.3em; } .comp.off .ct { color:var(--Dim); }
+  .comp .pr { display:grid; grid-template-columns:minmax(8em, 40%) 1fr; gap:.8em; font-size:calc(11.5 * var(--u)); }
+  .comp .pr .k { color:var(--Dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .comp .pr .v { font-family:var(--Mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* narrow screens: the sidebar becomes a drawer behind a button */
+  @media (max-width: 800px) {
+    :root { --zoom:1.3; }
+    body { grid-template-columns:1fr; }
+    #side { position:fixed; inset:0 25% 0 0; z-index:2; display:none; box-shadow:0 0 0 100vmax rgba(0,0,0,.5); }
+    body.drawer #side { display:block; }
+    #top { display:flex; }
+    #log { padding:.8em .8em 1.5em; }
+    #bar { margin:.4em .6em .5em; }
+    #status { grid-column:1; padding:.25em .8em .4em; }
+    #editor .ehead { padding:.5em .8em; }
+    #editor .ebody { display:flex; flex-direction:column-reverse; overflow-y:auto; }
+    #etree { overflow:visible; border-right:0; border-top:1px solid var(--Line); }
+    #eright { overflow:visible; padding:.6em .8em; }
+  }
+
   #pair { display:none; margin:auto; text-align:center; }
-  #pair input { font-size:28px; width:8ch; text-align:center; letter-spacing:4px; padding:8px; margin:12px;
-                background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; }
+  #pair input { font-size:1.8em; width:8ch; text-align:center; letter-spacing:.25em; padding:.3em; margin:.6em;
+                background:var(--Inset); color:var(--Text); border:1px solid var(--Line); border-radius:6px; }
+  body.pairing { display:flex; }
   body.pairing > :not(#pair) { display:none; } body.pairing #pair { display:block; }
 </style>
 </head>
 <body>
-<div id="tabs"></div>
-<div id="log"></div>
+<nav id="side"><div class="head"><span>sessions</span><span id="count"></span></div><div id="tabs"></div></nav>
+<main id="main">
+  <div id="top"><button id="menu">&#9776;</button><span class="title" id="toptitle"></span></div>
+  <div id="logwrap"><div id="log"></div><button id="jump" hidden>latest ↓</button></div>
+  <section id="editor">
+    <div class="ehead"><span class="nm" id="ename"></span><span class="st" id="estatus"></span>
+      <button id="erefresh" title="refresh now">&#8635;</button><button id="eclose" title="back to the chat">&#10005;</button></div>
+    <div class="ebody"><div id="etree"></div><div id="eright"><img id="eimg" alt="scene"><div id="escenes"></div><div id="einsp"></div></div></div>
+  </section>
+  <div id="bar">
+    <textarea id="input" rows="1" placeholder="Message"></textarea>
+    <div class="acts"><button id="stop" class="danger">stop</button><button id="send" class="primary">send</button></div>
+  </div>
+</main>
 <div id="status"></div>
-<div id="bar">
-  <textarea id="input" rows="1" placeholder="Message"></textarea>
-  <button id="stop">Stop</button>
-  <button id="send" class="primary">Send</button>
-</div>
 <form id="pair">
   <div>Enter the code from TokenChat's tray menu</div>
   <input name="code" inputmode="numeric" autocomplete="off" maxlength="6"><br>
@@ -72,7 +225,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const log = $('#log'), input = $('#input');
-let ws, tabs = [], tab = +localStorage.tab || 0, rows = new Map(), order = [], opened = false;
+let ws, tabs = [], side = [], tab = +localStorage.tab || 0, rows = new Map(), order = [], opened = false;
 const open = new Set();           // details kept open across re-renders: "<id>/<n>"
 const picks = new Map();          // question row id -> { questionText: Set(labels) | other text }
 
@@ -86,7 +239,7 @@ function el(tag, attrs, ...kids) {
 }
 const esc = s => s.replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 
-// Enough markdown for replies: fences, headings, inline code, bold, links as text.
+// Enough markdown for replies: fences, headings, lists, inline code, bold.
 function md(src) {
   const out = []; let fence = null, para = [];
   const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
@@ -96,6 +249,11 @@ function md(src) {
       if (fence === null) { flush(); fence = []; } else { out.push('<pre>' + esc(fence.join('\n')) + '</pre>'); fence = null; }
     } else if (fence !== null) fence.push(line);
     else if (/^#{1,6} /.test(line)) { flush(); out.push('<h3>' + inline(line.replace(/^#+ /, '')) + '</h3>'); }
+    else if (/^\s*([-*]|\d+\.) /.test(line)) {
+      flush();
+      const m = line.match(/^(\s*)([-*]|\d+\.) (.*)$/), ordered = /\d/.test(m[2]);
+      out.push(`<div class="li" style="margin-left:${1.1 + m[1].length * .5}em"><span class="bul">${ordered ? m[2] : '•'}</span>${inline(m[3])}</div>`);
+    }
     else if (!line.trim()) flush();
     else para.push(line);
   }
@@ -114,24 +272,26 @@ function fold(id, n, summary, ...body) {
 function send(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ tab, ...op })); }
 
 function tool(r, n) {
-  const head = [r.verb, ' ', r.subject, r.outcome ? ' · ' + r.outcome : '', r.tokens ? ' · ' + r.tokens : '',
-                r.running ? ' · running…' : '', r.interrupted ? ' · stopped' : ''].join('');
-  const s = el('span', { class: r.error ? 'err' : r.big ? 'big' : null }, head);
-  return fold(r.id, n, s, r.command ? el('div', { class: 'result' }, r.command) : null,
+  const meta = [r.outcome, r.tokens, r.interrupted ? 'stopped' : null].filter(Boolean).join(' · ');
+  const head = el('span', { class: 'tool' + (r.error ? ' err' : r.big ? ' big' : '') },
+    el('span', { class: 'verb' }, r.verb), ' ', el('span', { class: 'subj' }, r.subject),
+    meta ? el('span', { class: 'meta' }, '  ', meta) : null, r.running ? el('span', { class: 'run' }, '  running…') : null);
+  return fold(r.id, n, head, r.command ? el('div', { class: 'result' }, r.command) : null,
               r.result ? el('div', { class: 'result' }, r.result) : null);
 }
 
 function question(r) {
   const mine = picks.get(r.id) || new Map(); picks.set(r.id, mine);
-  if (r.state !== 'Pending') return el('div', { class: 'card' }, el('div', { class: 'faint' }, r.outcome || r.state));
+  if (r.state !== 'Pending') return el('div', { class: 'card done' }, r.outcome || r.state);
   const box = el('div', { class: 'card' }, r.relay ? el('div', { class: 'faint' }, r.relay) : null);
   for (const q of r.questions) {
     const chosen = mine.get(q.text) || new Set(); mine.set(q.text, chosen);
-    box.append(el('div', { class: 'title' }, q.header ? q.header + ': ' : '', q.text));
+    box.append(el('div', { class: 'title' }, q.header ? el('span', { class: 'hdr' }, q.header) : null, q.text));
     const acts = el('div', { class: 'acts' });
     for (const o of q.options) {
-      const b = el('button', { class: 'opt' + (chosen.has(o.label) ? ' on' : '') + (o.recommended ? ' primary' : '') },
-                   o.label, o.description ? el('small', null, o.description) : null);
+      const b = el('button', { class: 'opt' + (chosen.has(o.label) ? ' on' : '') },
+                   o.label, o.recommended ? el('span', { class: 'rec' }, 'recommended') : null,
+                   o.description ? el('small', null, o.description) : null);
       b.onclick = () => {
         if (!q.multi) chosen.clear();
         chosen.has(o.label) ? chosen.delete(o.label) : chosen.add(o.label);
@@ -144,8 +304,8 @@ function question(r) {
     other.oninput = () => mine.set('other:' + q.text, other.value);
     box.append(acts, other);
   }
-  const ok = el('button', { class: 'primary' }, 'Submit'); ok.onclick = () => submit(r);
-  const no = el('button', null, 'Decline'); no.onclick = () => send({ op: 'decline', id: r.id });
+  const ok = el('button', { class: 'primary' }, 'submit'); ok.onclick = () => submit(r);
+  const no = el('button', null, 'decline'); no.onclick = () => send({ op: 'decline', id: r.id });
   box.append(el('div', { class: 'acts' }, ok, no));
   return box;
 }
@@ -162,18 +322,19 @@ function submit(r) {
 }
 
 function permission(r) {
-  const box = el('div', { class: 'card' }, el('div', { class: 'title' }, r.tool), el('div', null, r.summary));
+  const box = el('div', { class: 'card' + (r.state !== 'Pending' ? ' done' : '') },
+                 el('div', { class: 'title' }, r.tool), el('div', null, r.summary));
   if (r.diff) box.append(el('div', { class: 'diff' }, r.diff.map(([k, t]) => el('div', { class: k }, t))));
   if (r.diffNote) box.append(el('div', { class: 'faint' }, r.diffNote));
   if (r.state !== 'Pending') { box.append(el('div', { class: 'faint' }, r.state)); return box; }
   const b = (label, decision, cls) => { const x = el('button', { class: cls }, label); x.onclick = () => send({ op: 'permission', id: r.id, decision }); return x; };
-  box.append(el('div', { class: 'acts' }, b('Allow', 'Allowed', 'primary'),
-    r.sessionLabel ? b(r.sessionLabel, 'AllowedForSession') : null, b('Deny', 'Denied')));
+  box.append(el('div', { class: 'acts' }, b('allow', 'Allowed', 'primary'),
+    r.sessionLabel ? b(r.sessionLabel, 'AllowedForSession') : null, b('deny', 'Denied', 'danger')));
   return box;
 }
 
 function card(r) {
-  const box = el('div', { class: 'card' }, el('div', { class: 'title' }, r.title), el('div', null, r.text));
+  const box = el('div', { class: 'card' + (r.outcome ? ' done' : '') }, el('div', { class: 'title' }, r.title), el('div', null, r.text));
   if (r.outcome) box.append(el('div', { class: 'faint' }, r.outcome));
   else box.append(el('div', { class: 'acts' }, r.actions.map(a => {
     const x = el('button', { class: a.primary ? 'primary' : null }, a.label);
@@ -184,12 +345,13 @@ function card(r) {
 
 function body(r, n = 0) {
   switch (r.k) {
-    case 'user': return el('div', { class: 'user' }, r.text, r.files.length ? el('div', { class: 'faint' }, r.files.join(' · ')) : null);
+    case 'user': return el('div', { class: 'user' }, el('div', { class: 'bubble' }, r.text),
+                           r.files.length ? el('div', { class: 'files' }, r.files.join(' · ')) : null);
     case 'text': { const d = el('div', { class: 'text' }); d.innerHTML = md(r.text); return d; }
     case 'thinking': return fold(r.id, n, el('span', { class: 'faint' }, r.streaming ? 'thinking…' : 'thought'), el('div', { class: 'thinking' }, r.text));
     case 'tool': return tool(r, n);
     case 'group': return fold(r.id, n, el('span', { class: r.failed ? 'err' : r.big ? 'big' : null },
-                                [r.title, r.aside, r.tokens, r.state].filter(Boolean).join(' · ')),
+                                r.title, el('span', { class: 'faint' }, [' ', r.aside, r.tokens, r.state].filter(Boolean).join('  '))),
                               r.children.map((c, i) => body(c, i + 1)));
     case 'permission': return permission(r);
     case 'question': return question(r);
@@ -215,19 +377,153 @@ function layout() {
 
 function status(s) { $('#status').textContent = s; }
 
+const fig = (cls, text, color) => text ? el('span', { class: 'fig ' + cls, style: color ? 'color:' + color : null }, text) : null;
+const pill = (text, bg) => el('span', { class: 'pill solid', style: 'background:' + bg }, text);
+
+// one sidebar row, as SidebarView's ItemTemplate: edge, then three lines
+function sideRow(s) {
+  const r = s.row, sel = s.tab === tab;
+  const showDetail = r && (s.here || sel);
+  const dot = s.delegate === 'asking' ? '◆' : s.delegate === 'done' ? '✓' : s.delegate === 'unlocked' ? '○' : '●';
+  const l1 = el('div', { class: 'l1' },
+    el('span', { class: 'st' }, dot),
+    el('span', { class: 'nm' }, s.arrow ? el('span', { class: 'ar' }, s.arrow) : null, el('span', { class: 't' }, s.name),
+       s.project ? el('span', { class: 'p' }, s.project) : null),
+    s.master ? pill('M', 'var(--Blue)') : null, s.master && s.masterSummary ? el('span', { class: 'ms' }, s.masterSummary) : null,
+    s.children ? el('span', { class: 'ms' }, s.children) : null,
+    s.unity ? el('span', { class: 'ed', title: 'Unity Editor: scene, hierarchy, inspector',
+                           on: { click: e => { e.stopPropagation(); openEditor(s.unity); } } }, '▣') : null,
+    s.reported ? pill('REPORT', 'var(--Green)') : null,
+    s.state === 'waiting' ? pill('ANSWER', 'var(--Yellow)') : null,
+    r ? fig('ctx', r.ctx, r.ctxC) : null,
+    r ? el('span', { class: 'fig clk' + (r.cold ? ' cold' : ''), style: 'color:' + r.clockC }, r.clock) : null);
+  const lines = [l1];
+  if (r) {
+    lines.push(el('div', { class: 'l2' },
+      el('span', { class: 'left' },
+        el('span', { class: 'fig mk', style: 'color:' + r.markC }, r.mark),
+        r.spark.length ? el('span', { class: 'spark' }, r.spark.map(([w, h, c]) =>
+          el('i', { style: `width:calc(${w} * var(--u));height:calc(${h} * var(--u));background:${c}` }))) : fig('f', '-', 'var(--Faint)'),
+        fig('f gr', r.growth, r.growthC), fig('f ht', r.heat, r.heatC),
+        el('span', { class: 'fig f' }, el('span', { class: 'dim' }, r.cycles), el('span', { class: 'faint' }, ' cyc'),
+           r.pokes ? el('span', { style: 'color:var(--Blue)' }, r.pokes) : null)),
+      r.parked ? fig('pk', 'PARKED', r.parkedC) : null,
+      r.hasState ? el('span', { class: 'pill fig' }, el('span', { style: 'color:var(--Blue)' }, r.marksLeft),
+                      el('span', { class: 'faint' }, r.marksSpent), r.blocked ? el('span', { class: 'b' }, 'B') : null) : null));
+    if (showDetail) lines.push(el('div', { class: 'l3' },
+      el('span', { class: 'fig mdl' }, r.model, el('span', { style: 'color:' + r.effortC }, r.effort)),
+      el('span', { class: 'bar' }, el('span', { class: 'fill', style: `background:${r.spendC};transform:scaleX(${r.spendFill})` }),
+         ...r.ticks.map(([at, op], i) => el('span', { class: 'tick', style: `left:${at * 100}%;opacity:${op};background:var(--${['Yellow', 'Orange', 'Red'][i]})` }))),
+      fig('sp', r.spend), ...r.grades.map(([l, c]) => el('span', { class: 'g', style: 'color:' + c }, l))));
+  }
+  const row = el('div', { class: ['sr', s.state, s.here ? 'here' : '', sel ? 'sel' : ''].join(' '),
+                          style: s.depth ? `margin-left:calc(${6 + s.depth * 14} * var(--u))` : null },
+    el('span', { class: 'edge', style: 'background:' + (s.color || 'var(--Faint)') }), el('div', { class: 'body' }, lines));
+  if (s.tab) row.onclick = () => { select(s.tab); document.body.classList.remove('drawer'); };
+  return row;
+}
+
+// groups folded on this device (the window's own folds arrive already applied in the feed)
+const folded = new Set(JSON.parse(localStorage.folded || '[]'));
+function drawSide(rows) {
+  const out = []; let hide = false;
+  for (const s of rows) {
+    if (s.h) {
+      const shut = s.folded || folded.has(s.name);
+      hide = folded.has(s.name);
+      // folded here: still yellow while a session inside waits on you
+      const waiting = s.state === 'waiting' || (hide && rowsAfter(rows, s).some(r => r.state === 'waiting'));
+      const h = el('div', { class: 'gh' + (waiting ? ' waiting' : ''), style: 'cursor:pointer' },
+        el('span', { class: 'chev' }, shut ? '▸' : '▾'),
+        el('span', { class: 'dot', style: 'background:' + (s.color || 'var(--Faint)') }), el('span', { class: 'n' }, s.name),
+        el('span', { class: 'c' }, s.count));
+      h.onclick = () => { folded.has(s.name) ? folded.delete(s.name) : folded.add(s.name);
+                          localStorage.folded = JSON.stringify([...folded]); drawTabs(); };
+      out.push(h);
+    } else if (!hide || s.tab === tab) out.push(sideRow(s));
+  }
+  $('#tabs').replaceChildren(...out);
+}
+function rowsAfter(rows, head) {
+  const i = rows.indexOf(head), j = rows.findIndex((r, k) => k > i && r.h);
+  return rows.slice(i + 1, j < 0 ? rows.length : j);
+}
+
 function drawTabs() {
   if (!tabs.some(t => t.id === tab) && tabs.length) select(tabs[0].id);
-  $('#tabs').replaceChildren(...tabs.map(t => {
-    const b = el('button', { class: t.id === tab ? 'sel' : null }, el('span', { class: 'dot', style: 'background:' + (t.color || '#888') }),
-                 t.title, t.waiting ? el('span', { class: 'wait' }, '●') : null);
-    b.onclick = () => select(t.id);
-    return b;
-  }));
+  // an app without the sidebar feed: the open tabs, grouped by folder, in the same rows
+  const rows = side.length ? side : [...Map.groupBy(tabs, t => t.project || '').entries()].flatMap(([p, list]) => [
+    { h: true, name: p.split(/[\\/]/).pop(), color: list[0].color, count: list.length },
+    ...list.map(t => ({ tab: t.id, here: true, name: t.title, color: t.color, state: t.waiting ? 'waiting' : t.state }))]);
+  drawSide(rows);
+  drawHeader();
+}
+
+function drawHeader() {
+  $('#count').textContent = tabs.length || '';
   const t = tabs.find(t => t.id === tab);
-  status(t ? [t.project, t.state, t.status].filter(Boolean).join(' · ') : 'no sessions open');
+  $('#toptitle').textContent = t ? t.title : '';
+  // the window's footer line: the status string alone, its state word coloured as the sidebar dot
+  const st = $('#status');
+  st.replaceChildren(...(t ? [el('span', { class: 'sw ' + (t.waiting ? 'waiting' : t.state) }, '● '), t.status || t.state]
+                           : ['no sessions open']));
+  const busy = t && (t.state === 'working' || t.state === 'starting');
+  $('#stop').hidden = !busy;
+  $('#send').textContent = busy ? 'queue' : 'send';
+  // the browser tab shows how many sessions wait on you, so the Quest's tab strip does too
+  const waiting = tabs.filter(t => t.waiting).length;
+  document.title = (waiting ? `(${waiting}) ` : '') + (t ? t.title + ' · ' : '') + 'TokenChat';
+}
+
+// the Editor tab: one project at a time; the server watches it while open and sends only what moved
+let editor = null;
+function openEditor(root) {
+  editor = { root, picked: 0 };
+  document.body.classList.add('editor'); document.body.classList.remove('drawer');
+  $('#ename').textContent = root.split(/[\\/]/).pop(); $('#estatus').textContent = 'connecting…';
+  $('#eimg').removeAttribute('src'); $('#etree').replaceChildren(); $('#escenes').replaceChildren(); $('#einsp').replaceChildren();
+  send({ op: 'editor-open', root });
+}
+function closeEditor() {
+  if (!editor) return;
+  editor = null; document.body.classList.remove('editor');
+  send({ op: 'editor-close' });
+}
+function drawEditor(m) {
+  if (m.status !== undefined) $('#estatus').textContent = (m.busy ? 'reading… ' : '') + m.status;
+  if (m.img) $('#eimg').src = m.img;
+  if (m.nodes) {
+    if (!m.picked && editor.picked) $('#einsp').replaceChildren();   // another scene: the pick is gone
+    editor.picked = m.picked || 0;
+    // untitled or empty scene: the project's scenes, a click opens one in the Editor (nothing is saved)
+    $('#escenes').replaceChildren(...(m.scenes ? [el('div', { class: 'sub' }, 'No scene with objects is open. Open one in the Editor (nothing is saved):'),
+      ...m.scenes.map(p => el('button', { class: 'scn', on: { click: () => { $('#estatus').textContent = 'opening ' + p + '…'; send({ op: 'editor-scene', path: p }); } } }, p))] : []));
+    $('#etree').replaceChildren(...m.nodes.map(x => {
+      const n = el('div', { class: 'en' + (x.a ? '' : ' off') + (x.id === editor.picked ? ' sel' : ''),
+                            style: `padding-left:calc(${10 + x.d * 14} * var(--u))` },
+                   el('span', { class: 'g' }, x.c ? '▾' : ''), x.n);
+      n.onclick = () => {
+        editor.picked = x.id;
+        for (const s of $('#etree').querySelectorAll('.sel')) s.classList.remove('sel');
+        n.classList.add('sel');
+        $('#einsp').replaceChildren(el('div', { class: 'sub' }, 'reading ' + x.n + '…'));
+        send({ op: 'editor-pick', node: x.id });
+      };
+      return n;
+    }));
+  }
+  if (m.insp) {
+    const i = m.insp;
+    $('#einsp').replaceChildren(...(i.error ? [el('div', { class: 'sub' }, i.error)] : [
+      el('div', { class: 'it' }, i.n), el('div', { class: 'sub' }, `tag ${i.tag} · layer ${i.layer}` + (i.a ? '' : ' · inactive')),
+      ...i.comps.map(c => el('div', { class: 'comp' + (c.en === 0 ? ' off' : '') },
+        el('div', { class: 'ct' }, c.t, c.en === 0 ? el('span', { class: 'faint' }, '  (off)') : null),
+        ...c.p.map(p => el('div', { class: 'pr' }, el('span', { class: 'k', title: p.n }, p.n), el('span', { class: 'v', title: p.v }, p.v)))))]));
+  }
 }
 
 function select(id) {
+  closeEditor();
   tab = id; localStorage.tab = id;
   rows.clear(); order = []; log.replaceChildren();
   send({ op: 'select' });
@@ -235,8 +531,9 @@ function select(id) {
 }
 
 function onMessage(m) {
-  if (m.type === 'tabs') { tabs = m.tabs; drawTabs(); return; }
+  if (m.type === 'tabs') { tabs = m.tabs; side = m.side || []; drawTabs(); return; }
   if (m.type === 'error') { status(m.text); return; }
+  if (m.type === 'editor') { if (editor && m.root === editor.root) drawEditor(m); return; }
   if (m.type === 'snapshot' && m.tab !== tab) return;
   const near = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   if (m.type === 'snapshot') { rows.clear(); order = m.items.map(r => r.id); }
@@ -244,12 +541,14 @@ function onMessage(m) {
   if (m.order) order = m.order;
   layout();
   if (near || m.type === 'snapshot') log.scrollTop = log.scrollHeight;
+  else if (m.items?.length) $('#jump').hidden = false;
 }
 
 function connect() {
   opened = false;
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-  ws.onopen = () => { opened = true; document.body.classList.remove('pairing'); send({ op: 'select' }); };
+  ws.onopen = () => { opened = true; document.body.classList.remove('pairing'); send({ op: 'select' });
+                    if (editor) openEditor(editor.root); };
   ws.onmessage = e => onMessage(JSON.parse(e.data));
   ws.onclose = () => {
     if (!opened) { document.body.classList.add('pairing'); $('#pair input').focus(); return; }
@@ -262,8 +561,16 @@ $('#pair').onsubmit = async e => {
   const r = await fetch('/pair', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
   if (r.ok) connect(); else $('#pairmsg').textContent = r.status === 429 ? 'too many tries, wait a minute' : 'wrong code';
 };
-$('#send').onclick = () => { const t = input.value.trim(); if (!t) return; send({ op: 'send', text: t }); input.value = ''; grow(); };
+$('#menu').onclick = () => document.body.classList.toggle('drawer');
+$('#side').onclick = e => { if (e.target === $('#side')) document.body.classList.remove('drawer'); };
+$('#send').onclick = () => { const t = input.value.trim(); if (!t) return; send({ op: 'send', text: t }); input.value = ''; grow(); canSend(); };
 $('#stop').onclick = () => send({ op: 'stop' });
+$('#erefresh').onclick = () => send({ op: 'editor-refresh' });
+$('#eclose').onclick = closeEditor;
+$('#jump').onclick = () => { log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' }); };
+log.addEventListener('scroll', () => { if (log.scrollHeight - log.scrollTop - log.clientHeight < 80) $('#jump').hidden = true; });
+const canSend = () => { $('#send').disabled = !input.value.trim(); };
+input.addEventListener('input', canSend); canSend();
 const grow = () => { input.style.height = 'auto'; input.style.height = input.scrollHeight + 'px'; };
 input.addEventListener('input', grow);
 input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer:fine)').matches) { e.preventDefault(); $('#send').click(); } });

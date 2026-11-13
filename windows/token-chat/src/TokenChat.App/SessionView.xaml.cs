@@ -46,9 +46,15 @@ public partial class SessionView : UserControl
             Input.Text = back?.Draft ?? "";
             Input.CaretIndex = Math.Min(back?.DraftCaret ?? 0, Input.Text.Length);
         };
+        // a restart's manifest reads the drafts; the shown tab's is still only in the composer
+        SaveDrafts += () => { if (DataContext is SessionTab t) (t.Draft, t.DraftCaret) = (Input.Text, Input.CaretIndex); };
         PreviewMouseDown += OnMouse4;
         PreviewMouseUp += OnMouse4;
     }
+
+    /// <summary>The composer's text into the shown tab's Draft, which otherwise happens on a tab switch only.</summary>
+    internal static event Action? SaveDrafts;
+    internal static void SaveAllDrafts() => SaveDrafts?.Invoke();
 
     SessionTab? Tab => DataContext as SessionTab;
 

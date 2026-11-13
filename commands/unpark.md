@@ -48,7 +48,8 @@ session, another developer, or the user's own hands.
   stands, then run the Next steps in order up to its `Stop after:` point, and report there.
 - **`--handoff` from a master** (`node "$HOME/.claude/token-master.js" status --sid <the header's
   session=>` says `master`): first run `node "$HOME/.claude/token-master.js" handover <that sid>`.
-  This window is the master now, live if the old one was, and its delegates answer to it.
+  This window is the master now, live if the old one was, and its delegates answer to it (handover
+  keeps the whole lineage and rewrites `master=` in their briefs; `status` shows each link, `BROKEN` if not).
   Follow `commands/master.md` from here.
 - **`--handoff` with anything waiting on the user, or a check failed:** report in three lines and
   stop, with the waiting items as the `▶` block.
@@ -57,22 +58,31 @@ session, another developer, or the user's own hands.
   - Touch only what its Scope names; commit only on this branch, in this worktree, never push.
   - Header has `master=`: an open question goes to the master as an AskUserQuestion card (one
     question, options first). Wait for its answer, which arrives as the card's answer, and carry
-    on. Never ask what the brief or Decided already settles.
+    on. Never ask what the brief or Decided already settles: first run
+    `node "$HOME/.claude/token-master.js" decided --master <the header's master=>` (the master's
+    live Decided and every answer it has given), and ask only what that leaves open.
   - At `Stop after:` (or when blocked), write `$HOME/.claude/checkpoints/reports/<checkpoint file name>`
     (`mkdir -p` it; the subfolder keeps reports out of the Parked list) and stop. Its first line: `<!-- report: for=<delegate-of sid> sid=<this session id> topic=<slug>
-    branch=<branch> worktree=<cwd> -->` on one line (`echo $CLAUDE_CODE_SESSION_ID` gives this id;
-    the cost analysis joins on it), then a **Done** list (`file:line` — clause), **Basis** (verified vs
-    assumed), **Blocked** if any, and **Merge**: `git merge delegate/<slug>` from the parent tree,
-    then `git worktree remove <worktree>` and `git branch -d delegate/<slug>`.
+    branch=<branch> worktree=<cwd> status=<done|partial|blocked> stop=<met|unmet> -->` on one line
+    (`echo $CLAUDE_CODE_SESSION_ID` gives this id; the cost analysis joins on it), then a **Done**
+    list (`file:line` — clause), **Basis** (verified vs assumed), **Blocked** if any, and
+    **Merge**: `git merge delegate/<slug>` from the parent tree, then `git worktree remove
+    <worktree>` and `git branch -d delegate/<slug>` — all on that one `**Merge**:` line.
+    Last line: `**Cheapest next test**:` the one check that would settle what is still open,
+    with its cost (a grep, a 3-min APK diff, a 30-min build); the master's next round takes it.
+    `none` only when nothing is open.
+    `status=done stop=met` is a promise: the master merges from the header, Done and Merge alone,
+    so say it only when every `Stop after:` criterion is checked and nothing is assumed that
+    would change the merge.
   - Reply with one line: the report path. The parent picks it up from there.
   - **Header has `shared=1`** (a `/delegate --shared` delegate in the master's checkout): the
     branch is the master's, not `delegate/<topic>` (not a failed check). **No commits**; the
     report's Merge line is "review + commit by the master: `git commit -- <Scope paths>`".
     Before any write under `Assets/`, scene open/switch, play mode, build or test, run
-    `node "$HOME/.claude/token-master.js" lease take --slug <topic>`; exit 1 (held) means ask the
-    master on an AskUserQuestion card ("Editor lease for <step>?", options `go` / `wait`), wait
-    for `go`, take it, do the step, then `lease release`. Unity CLI reads need no lease. Touch only
-    the scenes and prefabs Scope names.
+    `node "$HOME/.claude/token-master.js" lease take --wait --slug <topic>`: it queues and returns
+    once the lease is yours; exit 3 means still queued, run the same command again. Never ask the
+    master for the lease. Do the step, then `lease release`. Unity CLI reads need no lease. Touch
+    only the scenes and prefabs Scope names.
 
 **Working from it.** Read the Map ranges only when a Next step needs them, as ranged reads; skip the
 `not here:` places and use Facts instead of reading. An `open:` line comes with its check: run that

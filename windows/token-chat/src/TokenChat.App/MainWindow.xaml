@@ -48,39 +48,56 @@
 
             <!-- the sidebar's analytics row: over the chat, which keeps its session for the next row click -->
             <local:AnalyticsView x:Name="Analytics" Grid.Column="2" Margin="0,35,0,0" Visibility="Collapsed"/>
+            <!-- a Unity session's Editor: scene image, hierarchy, inspector (the row's glyph) -->
+            <local:EditorView x:Name="Editor" Grid.Column="2" Margin="0,35,0,0" Visibility="Collapsed"/>
 
             <!-- no session open, or "+": recent folders over the content area, below the caption -->
             <local:StartView x:Name="Start" Grid.Column="2" Margin="0,35,0,0" Visibility="Collapsed"/>
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
                         Height="34" Margin="0,0,4,0">
+                <StackPanel.Resources>
+                    <Style x:Key="CapPill" TargetType="Button">
+                        <Setter Property="Cursor" Value="Hand"/>
+                        <Setter Property="Focusable" Value="False"/>
+                        <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+                        <Setter Property="Margin" Value="0,0,4,0"/>
+                        <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+                        <Setter Property="Background" Value="{StaticResource Inset}"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="B" CornerRadius="4" Padding="7,1,7,2" Background="{TemplateBinding Background}">
+                                        <TextBlock Text="{TemplateBinding Content}" FontSize="10.5" FontWeight="SemiBold" Foreground="{TemplateBinding Foreground}"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </StackPanel.Resources>
+                <!-- an update to pull (Updater): a click offers it; while waiting on busy tabs, restart now or cancel -->
+                <Button x:Name="UpdatePill" Content="{Binding Pill}" ToolTip="{Binding Tip}" Click="OnUpdatePill" VerticalAlignment="Center">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource CapPill}">
+                            <Setter Property="Foreground" Value="{StaticResource Yellow}"/>
+                            <Setter Property="Background" Value="{StaticResource Sel}"/>
+                            <Setter Property="Margin" Value="0,0,8,0"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Pill}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
                 <!-- master plan mode (commands/master.md): MASTER makes the session a master, LIVE keeps it warm for good;
                      the summary counts its delegates open here and their questions waiting -->
                 <StackPanel DataContext="{Binding Content, ElementName=Chat}" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
-                    <StackPanel.Resources>
-                        <Style x:Key="CapPill" TargetType="Button">
-                            <Setter Property="Cursor" Value="Hand"/>
-                            <Setter Property="Focusable" Value="False"/>
-                            <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
-                            <Setter Property="Margin" Value="0,0,4,0"/>
-                            <Setter Property="Foreground" Value="{StaticResource Faint}"/>
-                            <Setter Property="Background" Value="{StaticResource Inset}"/>
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="B" CornerRadius="4" Padding="7,1,7,2" Background="{TemplateBinding Background}">
-                                            <TextBlock Text="{TemplateBinding Content}" FontSize="10.5" FontWeight="SemiBold" Foreground="{TemplateBinding Foreground}"/>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="B" Property="Background" Value="{StaticResource Ghost}"/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </StackPanel.Resources>
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
                             <Style.Triggers>

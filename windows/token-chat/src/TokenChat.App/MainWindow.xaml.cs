@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     /// <summary>This window's sessions, in the sidebar's order: each after the last of its project.</summary>
     readonly ObservableCollection<SessionTab> _tabs = [];
     readonly Sidebar _sidebar;
+    readonly Updater _updater;
     // the session whose row the sidebar should select once its rebuild has the row (a new one is shown before that)
     SessionTab? _syncTo;
     bool _syncing;
@@ -21,9 +22,12 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         var remote = new RemoteServer(_tabs, Dispatcher);
-        var tray = new Tray(this, remote);
+        _updater = new Updater(this, _tabs, Snapshot);
+        UpdatePill.DataContext = _updater;
+        var tray = new Tray(this, remote, _updater);
         Closed += (_, _) => { tray.Dispose(); _ = remote.StopAsync(); };
         _sidebar = new Sidebar(_tabs);
+        remote.Side = _sidebar;
         _sidebar.Refreshed += SyncSidebar;
         Side.List.ItemsSource = _sidebar.Items;
         Side.Model = _sidebar;
@@ -41,6 +45,7 @@ public partial class MainWindow : Window
         };
         Side.NewSession += ShowStart;
         Side.ShowAnalytics += ShowAnalytics;
+        Side.OpenEditor += ShowEditor;
         Side.CloseSession += CloseSession;
         SessionTab.ShowRequested += t => { if (_tabs.Contains(t)) Select(t); };
         PreviewKeyDown += (_, e) =>
@@ -76,6 +81,7 @@ public partial class MainWindow : Window
         Chat.Content = tab;
         Start.Visibility = Visibility.Collapsed;
         Analytics.Visibility = Visibility.Collapsed;
+        Editor.Visibility = Visibility.Collapsed;
         Chat.Visibility = Visibility.Visible;
         Side.AnalyticsRow.IsChecked = false;
         _syncTo = tab;
@@ -87,8 +93,24 @@ public partial class MainWindow : Window
     {
         Side.AnalyticsRow.IsChecked = true;
         Analytics.Visibility = Visibility.Visible;
+        Editor.Visibility = Visibility.Collapsed;
         Chat.Visibility = Visibility.Collapsed; // the view has no ground of its own: the chat would show through
         Start.Visibility = Visibility.Collapsed;
+        _syncTo = null;
+        _syncing = true;
+        Side.List.SelectedItem = null;
+        _syncing = false;
+    }
+
+    /// <summary>A Unity row's glyph: that project's Editor in place of the chat; no row stays selected, like analytics.</summary>
+    void ShowEditor(string root)
+    {
+        Editor.Show(UnityEditorLink.For(root));
+        Editor.Visibility = Visibility.Visible;
+        Chat.Visibility = Visibility.Collapsed;
+        Analytics.Visibility = Visibility.Collapsed;
+        Start.Visibility = Visibility.Collapsed;
+        Side.AnalyticsRow.IsChecked = false;
         _syncTo = null;
         _syncing = true;
         Side.List.SelectedItem = null;
@@ -153,6 +175,11 @@ public partial class MainWindow : Window
             HandOver(prev, Create(dir, null, false, r.Model, r.Effort, r.Prompt));
             return null;
         }
+        if (r.Restore is { } manifest)
+        {
+            Restore(manifest);
+            return null;
+        }
         if (r.Preview is { } fixtures)
             foreach (var fixture in fixtures)
                 Show(new SessionTab(new LaunchOptions { WorkingDirectory = Path.GetDirectoryName(fixture)! },
@@ -186,7 +213,7 @@ public partial class MainWindow : Window
     void Open(string directory, string? resume, bool lite, string? model, string? effort, string? prompt) =>
         Show(Create(directory, resume, lite, model, effort, prompt));
 
-    SessionTab Create(string directory, string? resume, bool lite, string? model, string? effort, string? prompt)
+    SessionTab Create(string directory, string? resume, bool lite, string? model, string? effort, string? prompt, string? mode = null)
     {
         var tab = new SessionTab(new LaunchOptions
         {
@@ -196,6 +223,7 @@ public partial class MainWindow : Window
             Model = model ?? Model ?? (resume is null ? _sidebar.Defaults.Model : null),
             Effort = effort ?? (resume is null ? _sidebar.Defaults.Effort : null),
             ResumeSessionId = resume,
+            PermissionMode = mode ?? "auto",
         }, prompt);
         // a resumed session that took others over by /handoff gets their folds back, empty like its own history
         if (resume is not null)
@@ -254,6 +282,59 @@ public partial class MainWindow : Window
         _tabs.Insert(last < 0 ? _tabs.Count : last + 1, tab);
         Select(tab);
         _ = tab.StartAsync();
+    }
+
+    void OnUpdatePill(object sender, RoutedEventArgs e) => _updater.Offer();
+
+    /// <summary>Every tab as it is now, in the sidebar's order, for the relaunch to reopen; the composer's text included.</summary>
+    RestoreManifest Snapshot(string reason)
+    {
+        SessionView.SaveAllDrafts();
+        var tabs = _tabs.Where(t => !t.HandedOff && !t.IsReplay).ToList();
+        return new RestoreManifest(DateTimeOffset.Now,
+            tabs.Select(t => new RestoreTab(t.Options.WorkingDirectory, t.SessionId, t.Options.Profile == Profile.Lite,
+                t.CurrentModel, t.CurrentEffort, t.CurrentMode, string.IsNullOrWhiteSpace(t.Draft) ? null : t.Draft,
+                t.Topic, t.MasterSid, t.Locked)).ToList(),
+            Current is { } c ? Math.Max(0, tabs.IndexOf(c)) : 0, WindowState == WindowState.Maximized, reason);
+    }
+
+    /// <summary>A <see cref="RestoreManifest"/>'s tabs, in order: each resumed where it has a transcript, else a fresh
+    /// session in its folder, on the model, effort and mode it ran on, with its draft and master link. The manifest is
+    /// set aside once read, so a later launch does not reopen them twice.</summary>
+    void Restore(string path)
+    {
+        var m = RestoreManifest.Load(path);
+        RestoreManifest.MarkDone(path);
+        if (m is null) { MessageBox.Show(this, $"Could not read {path}; no sessions were reopened.", "token-chat"); return; }
+        if (m.Maximized) WindowState = WindowState.Maximized;
+        var opened = new List<SessionTab>();
+        var notes = new List<string>();
+        foreach (var t in m.Tabs)
+        {
+            if (t.Sid is { } open && _tabs.FirstOrDefault(x => string.Equals(x.SessionId, open, StringComparison.OrdinalIgnoreCase)) is { } here)
+            {
+                opened.Add(here);
+                continue;
+            }
+            if (!Directory.Exists(t.Cwd)) { notes.Add($"{t.Cwd}: the folder is gone, not reopened"); continue; }
+            var resume = t.Sid is { } sid && RestoreManifest.TranscriptExists(sid) ? sid : null;
+            if (resume is null && t.Sid is not null) notes.Add($"{Path.GetFileName(t.Cwd)}: had no first prompt yet, opened fresh");
+            var tab = Create(t.Cwd, resume, t.Lite, t.Model, t.Effort, null, t.Mode);
+            tab.Draft = t.Draft ?? "";
+            tab.DraftCaret = tab.Draft.Length;
+            if (resume is not null) tab.RestoreDelegate(t.Topic, t.MasterSid, t.Locked);
+            _tabs.Add(tab);
+            opened.Add(tab);
+            _ = tab.StartAsync();
+        }
+        if (opened.Count > 0) Select(opened[Math.Clamp(m.Current, 0, opened.Count - 1)]);
+        var said = $"{opened.Count} session{(opened.Count == 1 ? "" : "s")} reopened after the {m.Reason}";
+        var result = Updater.TakeResult();
+        Side.Say(result is { Ok: true } ok ? $"{ok.Text.Split('\n')[0]} · {said}" : said);
+        if (result is { Ok: false } bad) notes.Insert(0, bad.Text);
+        if (notes.Count > 0)
+            MessageBox.Show(this, string.Join("\n\n", notes), $"TokenChat {m.Reason}", MessageBoxButton.OK,
+                result is { Ok: false } ? MessageBoxImage.Warning : MessageBoxImage.Information);
     }
 
     void ShowStart() => Start.Show(RecentProjects.Load(RecentProjects.DefaultRoot), canCancel: _tabs.Count > 0);

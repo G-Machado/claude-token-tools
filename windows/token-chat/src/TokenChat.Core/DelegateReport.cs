@@ -3,9 +3,22 @@ using System.Text.RegularExpressions;
 namespace TokenChat.Core;
 
 /// <summary>The report a /delegate session writes to checkpoints/reports/ when it stops (commands/unpark.md, --delegate).
-/// Line 1 is <c>&lt;!-- report: for=&lt;parent sid&gt; sid=&lt;delegate sid&gt; topic= branch= worktree= --&gt;</c>.</summary>
-public sealed record DelegateReport(string Path, string For, string? Sid, string? Topic, string? Branch, string? Worktree, IReadOnlyList<string> Done)
+/// Line 1 is <c>&lt;!-- report: for=&lt;parent sid&gt; sid=&lt;delegate sid&gt; topic= branch= worktree= status= stop= --&gt;</c>,
+/// status done|partial|blocked and stop met|unmet.</summary>
+public sealed record DelegateReport(string Path, string For, string? Sid, string? Topic, string? Branch, string? Worktree, IReadOnlyList<string> Done,
+    string? Status = null, string? Stop = null, string? Merge = null, int DoneTotal = 0)
 {
+    /// <summary>Done with its stop criteria met: the master can merge from the header and the Done list alone.</summary>
+    public bool Clean => Status == "done" && Stop == "met";
+
+    /// <summary>What the master is sent: a clean report inline (Done + Merge), so it opens the file only when something
+    /// does not fit; any other report to read in full.</summary>
+    public string Brief() => Clean && Done.Count > 0 && Merge is not null
+        ? $"[delegate {Topic} done, stop criteria met] Done: {string.Join("; ", Done)}"
+          + (DoneTotal > Done.Count ? $" (+{DoneTotal - Done.Count} more)" : "")
+          + $". Merge: {Merge}. Report: {Path} - read it only if a Done line does not fit the plan."
+        : $"Read the delegate report at {Path} (status={Status ?? "?"}, stop={Stop ?? "?"}) and summarise it: what changed, what is verified, how to merge.";
+
     static readonly Regex Field = new(@"(\w+)=(\S+)", RegexOptions.Compiled);
 
     public static readonly string Dir = System.IO.Path.Combine(
@@ -19,21 +32,35 @@ public sealed record DelegateReport(string Path, string For, string? Sid, string
         var f = Field.Matches(lines[0]).ToDictionary(m => m.Groups[1].Value, m => m.Groups[2].Value.TrimEnd('-', '>'));
         if (!f.TryGetValue("for", out var parent) || parent.Length == 0) return null;
         var done = new List<string>();
-        var inDone = false;
+        var total = 0;
+        string? section = null, merge = null;
         foreach (var raw in lines.Skip(1))
         {
             var l = raw.Trim();
-            if (l.StartsWith('#') || (l.StartsWith("**") && l.EndsWith("**")))
+            if (MergeLine.Match(l) is { Success: true } m) // "**Merge**: `git merge ...`", or a Merge heading over it
             {
-                if (inDone) break;
-                inDone = l.Trim('#', '*', ' ').StartsWith("Done", StringComparison.OrdinalIgnoreCase);
+                section = "merge";
+                if (m.Groups[1].Value.Trim() is { Length: > 0 } rest) merge ??= rest;
                 continue;
             }
-            if (inDone && l.StartsWith("- ") && done.Count < 5) done.Add(l[2..].Replace("[x] ", "").Replace("[ ] ", ""));
+            if (l.StartsWith('#') || (l.StartsWith("**") && l.EndsWith("**")))
+            {
+                section = l.Trim('#', '*', ' ').StartsWith("Done", StringComparison.OrdinalIgnoreCase) ? "done" : null;
+                continue;
+            }
+            if (section == "done" && l.StartsWith("- "))
+            {
+                total++;
+                if (done.Count < 5) done.Add(l[2..].Replace("[x] ", "").Replace("[ ] ", ""));
+            }
+            if (section == "merge" && l.Length > 0) merge ??= l.TrimStart('-', ' ');
         }
         return new DelegateReport(path, parent, f.GetValueOrDefault("sid"), f.GetValueOrDefault("topic"),
-            f.GetValueOrDefault("branch"), f.GetValueOrDefault("worktree"), done);
+            f.GetValueOrDefault("branch"), f.GetValueOrDefault("worktree"), done,
+            f.GetValueOrDefault("status"), f.GetValueOrDefault("stop"), merge, total);
     }
+
+    static readonly Regex MergeLine = new(@"^(?:#+\s*|\*\*)Merge(?:\*\*)?:?(?:\*\*)?\s*(.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>Raw events for later fact-checking (open / report / card / read / dismiss), one TSV row each:
     /// time, event, topic, parent sid, delegate sid, extra. token-unpark-new.ps1 writes "open" to the same file.</summary>
@@ -69,11 +96,12 @@ public sealed record DelegateReport(string Path, string For, string? Sid, string
     }
 }
 
-/// <summary>One watcher on checkpoints/reports/ for every tab; Landed fires (on a pool thread) once per report path
-/// per process, after logging a "report" event.</summary>
+/// <summary>One watcher on checkpoints/reports/ for every tab; Landed fires (on a pool thread) once per report path and
+/// content per process, after logging a "report" event. Keyed on content, not path alone: a warm delegate run in rounds
+/// rewrites the same reports/&lt;proj&gt;.&lt;slug&gt;.md each round, and a path-only key woke the master on round 1 only.</summary>
 public static class DelegateReports
 {
-    static readonly HashSet<string> Seen = new(StringComparer.OrdinalIgnoreCase);
+    static readonly Dictionary<string, string> Seen = new(StringComparer.OrdinalIgnoreCase);
     static FileSystemWatcher? _watcher;
     static event Action<DelegateReport>? _landed;
 
@@ -111,7 +139,9 @@ public static class DelegateReports
         Action<DelegateReport>? h;
         lock (Seen)
         {
-            if (!Seen.Add(path)) return;
+            // Several change events per write carry the same text: only a new text for this path counts.
+            if (Seen.TryGetValue(path, out var last) && last == text) return;
+            Seen[path] = text;
             h = _landed;
         }
         DelegateReport.Log("report", r.Topic, r.For, r.Sid, r.Branch);

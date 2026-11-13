@@ -7,7 +7,8 @@ namespace TokenChat.Core;
 /// <summary>Master plan mode (commands/master.md): ~/.claude/token-master/&lt;sid&gt;.json, written by token-master.js and
 /// by the caption's pills. Live keeps the window warm for good: token-sessions.sh reads <c>"live": true</c> from the same
 /// file and never runs its marks out. A delegate names its master in its park header (master=).</summary>
-public sealed record MasterState(string Sid, bool Live, string? Plan, IReadOnlyList<string> Delegates, string? HandedFrom = null)
+public sealed record MasterState(string Sid, bool Live, string? Plan, IReadOnlyList<string> Delegates, string? HandedFrom = null,
+    IReadOnlyList<string>? Lineage = null)
 {
     public static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "token-master");
     public static readonly string AnswersDir = Path.Combine(Dir, "answers");
@@ -19,7 +20,37 @@ public sealed record MasterState(string Sid, bool Live, string? Plan, IReadOnlyL
     {
         if (Read(sid) is not { } o) return null;
         return new(sid, Json.Bool(o["live"]), Json.Str(o["plan"]),
-            (o["delegates"] as JsonArray ?? []).Select(d => Json.Str(d)).OfType<string>().ToList(), Json.Str(o["handedFrom"]));
+            (o["delegates"] as JsonArray ?? []).Select(d => Json.Str(d)).OfType<string>().ToList(), Json.Str(o["handedFrom"]),
+            (o["lineage"] as JsonArray ?? []).Select(d => Json.Str(d)).OfType<string>().ToList());
+    }
+
+    /// <summary>Every earlier sid of this master: the lineage token-master.js handover keeps, plus the one handedFrom of a
+    /// file written before it did.</summary>
+    public IEnumerable<string> Held => (Lineage ?? []).Concat(HandedFrom is null ? [] : [HandedFrom]).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>True for this master's own sid and for any sid it took over, however many handovers ago.</summary>
+    public bool Holds(string? sid) =>
+        sid is { Length: > 0 } && (string.Equals(sid, Sid, StringComparison.OrdinalIgnoreCase) || Held.Contains(sid, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>The master now holding a sid's plan (token-master.js resolve), read from the folder so it works with no tab
+    /// open and after a TokenChat restart; null when no master lists it.</summary>
+    public static MasterState? Resolve(string? sid) => Resolve(sid, All());
+
+    /// <summary>Its own file wins over a lineage entry, so a sid that is a master itself never resolves elsewhere.</summary>
+    public static MasterState? Resolve(string? sid, IEnumerable<MasterState> masters)
+    {
+        if (sid is not { Length: > 0 }) return null;
+        var list = masters.ToList();
+        return list.FirstOrDefault(m => string.Equals(m.Sid, sid, StringComparison.OrdinalIgnoreCase)) ?? list.FirstOrDefault(m => m.Holds(sid));
+    }
+
+    static IEnumerable<MasterState> All()
+    {
+        string[] files;
+        try { files = Directory.Exists(Dir) ? Directory.GetFiles(Dir, "*.json") : []; }
+        catch (IOException) { yield break; }
+        foreach (var f in files)
+            if (Load(Path.GetFileNameWithoutExtension(f)) is { } m) yield return m;
     }
 
     /// <summary>On creates the file (not live, no plan yet: /master on fills that in); off deletes it.</summary>
@@ -161,4 +192,66 @@ public static class MasterAnswers
         }
         return null;
     }
+}
+
+/// <summary>token-master/log/&lt;master sid&gt;.jsonl: every answered delegate question, one <c>{ at, slug, q, options, a, by }</c>
+/// row each. A repeat of a logged question is answered from here with no master turn; token-master.js decided prints it
+/// for delegates to read before they ask, and handover moves it to the new sid.</summary>
+public static class MasterLog
+{
+    public static readonly string Dir = Path.Combine(MasterState.Dir, "log");
+
+    public static string FileOf(string masterSid) => Path.Combine(Dir, masterSid + ".jsonl");
+
+    public static void Append(string masterSid, string? slug, IReadOnlyList<Question> questions, IReadOnlyDictionary<string, string> answers, string by)
+    {
+        var rows = new System.Text.StringBuilder();
+        foreach (var q in questions)
+            if (answers.TryGetValue(q.Text, out var a))
+                rows.Append(new JsonObject
+                {
+                    ["at"] = DateTime.UtcNow.ToString("o"), ["slug"] = slug, ["q"] = q.Text,
+                    ["options"] = new JsonArray([.. q.Options.Select(o => (JsonNode?)JsonValue.Create(o.Label))]), ["a"] = a, ["by"] = by,
+                }.ToJsonString()).Append('\n');
+        try
+        {
+            Directory.CreateDirectory(Dir);
+            File.AppendAllText(FileOf(masterSid), rows.ToString());
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>An answer for every question when each repeats a logged one word for word (case, spacing and punctuation
+    /// aside) with the same option labels, the newest row winning; null when any question is new.</summary>
+    public static Dictionary<string, string>? Lookup(string masterSid, IReadOnlyList<Question> questions)
+    {
+        if (questions.Count == 0) return null;
+        string[] lines;
+        try { lines = File.Exists(FileOf(masterSid)) ? File.ReadAllLines(FileOf(masterSid)) : []; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        var known = new Dictionary<string, string>();
+        foreach (var l in lines)
+        {
+            try
+            {
+                if (JsonNode.Parse(l) is not JsonObject o || Json.Str(o["q"]) is not { } q || Json.Str(o["a"]) is not { } a) continue;
+                known[Key(q, (o["options"] as JsonArray ?? []).Select(x => Json.Str(x) ?? ""))] = a;
+            }
+            catch (JsonException) { }
+        }
+        var answers = new Dictionary<string, string>();
+        foreach (var q in questions)
+        {
+            if (!known.TryGetValue(Key(q.Text, q.Options.Select(o => o.Label)), out var a)) return null;
+            answers[q.Text] = a;
+        }
+        return answers;
+    }
+
+    static string Key(string question, IEnumerable<string> options) =>
+        string.Join("\u0001", options.Select(Norm).Order().Prepend(Norm(question)));
+
+    static string Norm(string s) =>
+        string.Join(' ', new string([.. s.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : ' ')])
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries));
 }

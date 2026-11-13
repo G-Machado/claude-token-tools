@@ -15,7 +15,9 @@ sealed class Tray : IDisposable
 
     readonly ToolStripMenuItem _remote = new("Remote access: off");
 
-    public Tray(Window window, RemoteServer remote)
+    Action? _click;
+
+    public Tray(Window window, RemoteServer remote, Updater updater)
     {
         _window = window;
         var menu = new ContextMenuStrip();
@@ -30,6 +32,13 @@ sealed class Tray : IDisposable
         };
         remote.CodeChanged += () => { if (remote.IsOn) ShowRemote(remote, quiet: true); };
         menu.Items.Add(_remote);
+        menu.Items.Add("Check for updates", null, (_, _) => _ = updater.CheckAsync(manual: true));
+        menu.Items.Add("Restart TokenChat", null, (_, _) => updater.Restart());
+        updater.Notify += (title, text, click) =>
+        {
+            _click = click;
+            _icon!.ShowBalloonTip(15_000, title, text, ToolTipIcon.Info);
+        };
         menu.Items.Add("Quit", null, (_, _) => _window.Close());
         _icon = new NotifyIcon
         {
@@ -39,7 +48,13 @@ sealed class Tray : IDisposable
             Visible = true,
         };
         _icon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Bring(); };
-        _icon.BalloonTipClicked += (_, _) => Bring();
+        _icon.BalloonTipClicked += (_, _) =>
+        {
+            Bring();
+            var click = _click;
+            _click = null;
+            click?.Invoke();
+        };
         SessionTab.Feed.Value.Changed += OnFeed;
     }
 
@@ -51,6 +66,7 @@ sealed class Tray : IDisposable
         if (said.Count == 0) return;
         var title = said.Count == 1 ? said[0].Title : $"{said.Count} things need you";
         var text = said.Count == 1 ? said[0].Text : string.Join("\n", said.Select(s => s.Title));
+        _click = null;
         _icon.ShowBalloonTip(10_000, title, text, ToolTipIcon.Warning);
     });
 

@@ -65,6 +65,9 @@ const dir = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '
 const sf = path.join(dir, String(p.session_id || 'nosid'));
 try { if (fs.readFileSync(sf, 'utf8') === r.pid) process.exit(0); } catch {}
 try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(sf, r.pid); } catch {}
+// Fire log (2026-11-12): ts sid promptId output-at-fire. Joined against token-history.csv
+// (final cycle output) it gives the overshoot past the nudge - the guard's yield.
+try { fs.appendFileSync(dir + '.log', `${new Date().toISOString()} ${String(p.session_id || 'nosid').slice(0, 8)} ${r.pid} ${r.total}\n`); } catch {}
 
 const k = (r.total / 1000).toFixed(1);
 process.stdout.write(JSON.stringify({

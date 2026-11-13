@@ -60,7 +60,7 @@ This is the one manual step — `install.sh` prints it too. Merge into
           "command": "bash \"$HOME/.claude/token-cycles.sh\" --alert" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Read", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
+      { "matcher": "Read|Bash", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
           "command": "node \"$HOME/.claude/token-readguard.js\"" } ] }
     ],
     "SessionEnd": [

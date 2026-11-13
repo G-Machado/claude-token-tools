@@ -150,6 +150,30 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     /// <summary>The permission mode as the footer shows it.</summary>
     public string Mode { get => _mode; private set => Set(ref _mode, value); }
 
+    string? _effort;
+    /// <summary>What the session runs on now, for a restart to reopen it the same: the model from the latest init (a /model
+    /// moves it), the effort last set from the footer, the permission mode shift+tab or a setMode left it in.</summary>
+    public string? CurrentModel => _session?.Init?.Model ?? Options.Model;
+    public string? CurrentEffort => _effort ?? Options.Effort;
+    public string CurrentMode => _session?.PermissionMode ?? Options.PermissionMode;
+
+    /// <summary>A --preview replay: nothing to reopen.</summary>
+    public bool IsReplay => _replay is not null;
+
+    /// <summary>Something a restart would cut short: a turn running, a card waiting on an answer, or messages queued
+    /// for the turn's end.</summary>
+    public bool Busy => !_exitNoted && !_disposed && (State == "working" || Waiting || Queued.Count > 0);
+
+    /// <summary>A reopened tab's link to its master and its lock, which a --resume has no /unpark prompt to read from.</summary>
+    public void RestoreDelegate(string? topic, string? masterSid, bool locked)
+    {
+        if (topic is not null && Topic is null) Topic = topic;
+        if (masterSid is null) return;
+        MasterSid = masterSid;
+        Locked = locked;
+        UpdateDelegateState();
+    }
+
     public async Task StartAsync()
     {
         try
@@ -288,7 +312,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
             case "read" when card.Payload is { } report:
                 card.Outcome = "sent";
                 DelegateReport.Log("read", Path.GetFileNameWithoutExtension(report), SessionId, null);
-                await SendAsync($"Read the delegate report at {report} and summarise it: what changed, what is verified, how to merge.");
+                await SendAsync(BriefOf(report));
                 break;
             case "dismiss":
                 card.Outcome = "dismissed";
@@ -305,6 +329,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         try
         {
             await s.SetEffortAsync(level == "auto" ? null : level);
+            _effort = level == "auto" ? null : level;
             Transcript.AddNote(NoteKind.Info, $"effort -> {level}" + (s.AtCleanPoint ? "" : " (from the next request of this turn)"));
         }
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "effort change failed", ex.Message); }
@@ -376,8 +401,8 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
             var given = q.Answers();
             q.State = QuestionState.Answered;
             await from.Tab.AnswerRelayedAsync(from.Item, given, "you, in the master");
-            await RelayAsync($"[delegate {from.Tab.Topic}: the user answered its question directly: {Said(given)}] " +
-                             "No /answer needed; add it to Decided if later delegates need it.");
+            if (!_askInbox.Remove(q)) // already relayed: the master would otherwise /answer it too; the log has it either way
+                await RelayAsync($"[delegate {from.Tab.Topic}: the user answered its question directly: {Said(given)}] No /answer needed.");
             return;
         }
         if (_session is not { } s || !q.CanSubmit) return;
@@ -385,6 +410,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         q.State = QuestionState.Answered;
         try { await s.AnswerAsync(q.Request, answers); }
         catch (Exception ex) { Transcript.AddNote(NoteKind.Error, "answer failed", ex.Message); }
+        if (q.Relay is not null && LogSid is { } log) MasterLog.Append(log, Topic, q.Request.Questions, answers, "you, in the delegate");
         UpdateStatus();
     }
 
@@ -433,12 +459,16 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     /// <summary>The master's strip: the delegates open in this window, theirs or the window's it took over from.</summary>
     public IReadOnlyList<SessionTab> Delegates =>
         SessionId is { } sid ? Open.Where(t => t.MasterSid is { } m && (string.Equals(m, sid, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(m, HandedFrom, StringComparison.OrdinalIgnoreCase))).ToList() : [];
+            || _held.Contains(m, StringComparer.OrdinalIgnoreCase))).ToList() : [];
     public bool HasDelegates => _delegates.Count > 0;
     List<SessionTab> _delegates = [];
 
     /// <summary>The old window's sid when this master came in by handover (token-master.js handover writes handedFrom).</summary>
     public string? HandedFrom { get; private set; }
+    /// <summary>Every sid this master took over, not just the last (the lineage in its state file): a delegate briefed
+    /// against any of them still reaches it.</summary>
+    IReadOnlyList<string> _held = [];
+    internal IReadOnlyList<string> Held => _held;
 
     /// <summary>A delegate's master tab: the sid in its header, else the tab that took that master over, whose sid the
     /// delegate then keeps.</summary>
@@ -448,7 +478,8 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         {
             if (MasterSid is not { } m) return null;
             if (Open.FirstOrDefault(t => string.Equals(t.SessionId, m, StringComparison.OrdinalIgnoreCase)) is { } here) return here;
-            if (Open.FirstOrDefault(t => string.Equals(t.HandedFrom, m, StringComparison.OrdinalIgnoreCase)) is not { } heir) return null;
+            // The sid in the brief may be several handovers old: resolve it from disk (the lineage), then find that tab.
+            if (MasterState.Resolve(m) is not { } now || Open.FirstOrDefault(t => string.Equals(t.SessionId, now.Sid, StringComparison.OrdinalIgnoreCase)) is not { } heir) return null;
             MasterSid = heir.SessionId;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LockText)));
             return heir;
@@ -487,7 +518,15 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
     {
         if (d.ReportPath is not { } report) return;
         DelegateReport.Log("read", d.Topic, SessionId, d.SessionId);
-        await SendAsync($"Read the delegate report at {report} and summarise it: what changed, what is verified, how to merge.");
+        await SendAsync(BriefOf(report));
+    }
+
+    /// <summary>A clean report goes in as its header and Done list; anything else is read in full.</summary>
+    static string BriefOf(string report)
+    {
+        try { if (DelegateReport.Parse(report, File.ReadAllText(report)) is { } r) return r.Brief(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        return $"Read the delegate report at {report} and summarise it: what changed, what is verified, how to merge.";
     }
 
     /// <summary>The master's copies of its delegates' cards, each with the delegate tab and the card it stands for.</summary>
@@ -502,6 +541,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         IsMaster = st is not null;
         IsLive = st?.Live == true;
         HandedFrom = st?.HandedFrom;
+        _held = st?.Held.ToList() ?? [];
         var ds = st is null ? [] : Delegates.ToList();
         if (!ds.SequenceEqual(_delegates))
         {
@@ -543,6 +583,12 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         if (Transcript.PendingPrompts.OfType<QuestionItem>().LastOrDefault(q => q.Request.RequestId == requestId) is not { } item) return;
         if (Topic is { } slug)
             foreach (var stale in MasterAnswers.Pending().Where(a => a.Slug == slug)) stale.Consume(); // never answers a newer question
+        if (LogSid is { } log && MasterLog.Lookup(log, item.Request.Questions) is { } known)
+        {
+            _ = AnswerRelayedAsync(item, known, "the master's answer log");
+            MasterTab?.Transcript.AddNote(NoteKind.Info, $"delegate {Topic} asked a logged question; answered from the log", Said(known));
+            return;
+        }
         if (MasterTab is not { } master)
         {
             item.Relay = "master not open in TokenChat · answer here";
@@ -558,12 +604,33 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         var copy = new QuestionItem(item.Request) { Relay = $"delegate {from.Topic} asks" };
         _mirrors[copy] = (from, item);
         Transcript.Items.Add(copy);
-        var qs = string.Join(" ", item.Request.Questions.Select((q, i) =>
-            $"Q{i + 1}: {q.Text} Options: {string.Join(" / ", q.Options.Select(o => o.Label))}."));
-        _ = RelayAsync($"[delegate {from.Topic} asks] {qs} Answer from the plan doc and Decided with `/answer {from.Topic} <label or text>` " +
-                       "(several questions: \"a | b\"). Escalate to the user only if it changes direction, scope or a Decided item.");
+        if (_askInbox.Count == 0) _askSince = DateTime.UtcNow;
+        _askInbox.Add(copy);
         RefreshMaster(now: true);
     }
+
+    /// <summary>Asks not yet sent to the master's session: they go as one message once the first has waited
+    /// <see cref="AskBatch"/>, so asks landing together cost one turn (or one injection into the running turn), not one each.</summary>
+    readonly List<QuestionItem> _askInbox = [];
+    DateTime _askSince;
+    static readonly TimeSpan AskBatch = TimeSpan.FromSeconds(15);
+
+    /// <summary>From <see cref="Drain"/>: the batch, minus asks the user answered meanwhile.</summary>
+    void FlushAsks()
+    {
+        _askInbox.RemoveAll(c => c.State != QuestionState.Pending || !_mirrors.ContainsKey(c));
+        if (_askInbox.Count == 0 || !IsReady || DateTime.UtcNow - _askSince < AskBatch) return;
+        var asks = string.Join(" ", _askInbox.Select(c => $"{_mirrors[c].Tab.Topic}: " + string.Join(" ", c.Request.Questions.Select((q, i) =>
+            $"Q{i + 1}: {q.Text} Options: {string.Join(" / ", q.Options.Select(o => o.Label))}."))));
+        var one = _askInbox.Count == 1;
+        _askInbox.Clear();
+        _ = RelayAsync($"[{(one ? "a delegate asks" : "delegates ask")}] {asks} Answer each from the plan doc and Decided with " +
+                       "`/answer <slug> <label or text>` (several questions: \"a | b\"). Escalate to the user only if it changes direction, " +
+                       "scope or a Decided item.");
+    }
+
+    /// <summary>The answer log this delegate's questions go to: its master's, following a handover.</summary>
+    string? LogSid => MasterSid is null ? null : MasterTab?.SessionId ?? MasterState.Resolve(MasterSid)?.Sid ?? MasterSid;
 
     /// <summary>To this session as the app, not the user: its own turn at a clean point, else folded into the running one.</summary>
     async Task RelayAsync(string text)
@@ -606,6 +673,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
                 m._mirrors.Remove(copy);
                 m.RefreshMaster(now: true);
             }
+        if (!by.EndsWith("answer log", StringComparison.Ordinal) && LogSid is { } log) MasterLog.Append(log, Topic, item.Request.Questions, answers, by);
         DelegateReport.Log("answer", Topic, MasterSid, SessionId, by);
         UpdateStatus();
     }
@@ -682,7 +750,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
             UpdateDelegateState();
         }
         if (_disposed || SessionId is not { } sid || !(string.Equals(r.For, sid, StringComparison.OrdinalIgnoreCase)
-                || HandedFrom is { } old && string.Equals(r.For, old, StringComparison.OrdinalIgnoreCase))) return;
+                || _held.Contains(r.For, StringComparer.OrdinalIgnoreCase))) return;
         var done = r.Done.Count == 0 ? "No Done list in the report." : string.Join("\n", r.Done.Select(d => "· " + d));
         Transcript.Items.Add(new CardItem("delegate", "DELEGATE DONE",
             $"{r.Topic ?? Path.GetFileNameWithoutExtension(r.Path)} on {r.Branch ?? "its branch"}:\n{done}",
@@ -730,6 +798,7 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         }
         if (changed) UpdateStatus();
         if (Queued.Count > 0 && IsReady && _session is { AtCleanPoint: true } s) _ = SendNowAsync(s, TakeQueued()!);
+        else if (_askInbox.Count > 0) FlushAsks();
     }
 
     void Handle(ClaudeEvent e)
@@ -797,10 +866,26 @@ public sealed class SessionTab : INotifyPropertyChanged, IAsyncDisposable
         }
     }
 
+    /// <summary>A delegate that hits the 5-hour limit is switched to the spare account and told to write partial output
+    /// first (2026-11-11). Four delegates hit it together on 2026-11-10 and each waited for the user to cswap and resend
+    /// by hand; this is that procedure, once per tab. Only delegates: a person's own window keeps its own decision.</summary>
+    bool _limitSwapped;
+    void MaybeSwapOnLimit(ClaudeSession s)
+    {
+        if (_limitSwapped || MasterSid is null || !LimitSwap.IsRejected(s.RateLimit)) return;
+        _limitSwapped = true;
+        _ = Task.Run(async () =>
+        {
+            var said = await LimitSwap.SwitchAndResumeAsync(Feed.Value.Snapshot, SendAsync);
+            await _clock.Dispatcher.InvokeAsync(() => Transcript.AddNote(said.Error is null ? NoteKind.Info : NoteKind.Warning, said.Title, said.Detail));
+        });
+    }
+
     void UpdateStatus()
     {
         RefreshMaster();
         if (_session is not { } s) return;
+        MaybeSwapOnLimit(s);
         var u = s.Usage;
         State = _exitNoted ? "exited" : s.AtCleanPoint ? "idle" : "working";
         Waiting = !_exitNoted && Transcript.AwaitsAnswer;

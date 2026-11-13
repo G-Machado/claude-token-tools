@@ -48,7 +48,8 @@ for f in "$SRC"/bin/*.sh; do place "$f" "$DEST/$(basename "$f")"; done
 for f in "$SRC"/bin/*.js; do [ -e "$f" ] || continue; place "$f" "$DEST/$(basename "$f")"; done
 
 echo "windows -> $DEST"
-for f in "$SRC"/windows/*; do place "$f" "$DEST/$(basename "$f")"; done
+# files only: windows/token-chat is TokenChat's source tree, built and run in place
+for f in "$SRC"/windows/*; do [ -f "$f" ] || continue; place "$f" "$DEST/$(basename "$f")"; done
 
 echo "share   -> $DEST"
 for f in "$SRC"/share/*; do place "$f" "$DEST/$(basename "$f")"; done
@@ -92,6 +93,7 @@ One manual step left: the hooks and the status line.
 Merge this into ~/.claude/settings.json (keep any keys you already have):
 
   "permissions": {
+    "allow": [ "Read(~/.claude/checkpoints/**)", "Read(~/.claude/token-master/**)" ],
     "deny": [ "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.claude/.credentials.json)",
               "Read(**/.env)", "Read(**/.env.*)", "Read(**/*.pem)" ]
   },
@@ -116,7 +118,7 @@ Merge this into ~/.claude/settings.json (keep any keys you already have):
           "command": "node \"$HOME/.claude/token-cs-gate.js\"" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Read", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
+      { "matcher": "Read|Bash", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
           "command": "node \"$HOME/.claude/token-readguard.js\"" } ] },
       { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit", "hooks": [ { "type": "command", "shell": "bash", "timeout": 5,
           "command": "node \"$HOME/.claude/token-guard.js\"" } ] }

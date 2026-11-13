@@ -88,7 +88,7 @@ public class ProtocolTests
         var args = string.Join(" ", spec.Arguments);
         Assert.Contains("--input-format stream-json --output-format stream-json", args);
         Assert.Contains("--permission-prompt-tool stdio", args);
-        Assert.Contains("--tools Read,Edit,Write,Bash,Grep,Glob,AskUserQuestion --strict-mcp-config", args);
+        Assert.Contains("--tools Read,Edit,Write,Bash,Grep,Glob,AskUserQuestion,Skill,TodoWrite --strict-mcp-config", args);
         Assert.Contains("--model opus", args);
         Assert.Contains("--effort xhigh", args);
         Assert.Equal("1", spec.Environment["TOKEN_CHAT"]);

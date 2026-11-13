@@ -1,0 +1,133 @@
+<UserControl x:Class="TokenChat.App.EditorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- A Unity project's Editor, read-only: the scene as a camera sees it, the hierarchy (a click picks), the picked
+         object's components. Everything comes from UnityEditorLink; nothing here writes to the project. -->
+    <Grid Background="{StaticResource Inset}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="280"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition/>
+        </Grid.ColumnDefinitions>
+
+        <!-- header: project, the link's status line, refresh -->
+        <Border Grid.ColumnSpan="3" Padding="14,8,10,8" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Background="{StaticResource Card}">
+            <DockPanel>
+                <Button x:Name="RefreshButton" DockPanel.Dock="Right" Content="&#8635;" Style="{StaticResource Glyph}" FontSize="14"
+                        ToolTip="refresh now" Click="OnRefresh"/>
+                <TextBlock x:Name="Title" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="Status" FontSize="11" Foreground="{StaticResource Faint}" Margin="12,0,8,0" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+
+        <!-- hierarchy -->
+        <ListBox x:Name="Tree" Grid.Row="1" Background="Transparent" BorderThickness="0" Padding="0,4"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnPick"
+                 VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="Cursor" Value="Hand"/>
+                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListBoxItem">
+                                <Border x:Name="B" Background="Transparent" Padding="10,2,8,2">
+                                    <ContentPresenter/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="B" Property="Background" Value="{StaticResource Card}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="B" Property="Background" Value="{StaticResource Sel}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Margin="{Binding Indent}" FontSize="12" Foreground="{Binding Fore}" TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Name}">
+                        <Run Text="{Binding Glyph, Mode=OneWay}" Foreground="{StaticResource Faint}" FontSize="10"/><Run Text="{Binding Name, Mode=OneWay}"/>
+                    </TextBlock>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+        <Border Grid.Row="1" Grid.Column="1" Width="1" Background="{StaticResource Line}"/>
+
+        <!-- scene image above the inspector -->
+        <Grid Grid.Row="1" Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition/>
+            </Grid.RowDefinitions>
+            <Border Margin="14,12,14,8" CornerRadius="6" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    MaxHeight="420" ClipToBounds="True">
+                <Grid>
+                    <Image x:Name="Shot" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <TextBlock x:Name="ShotEmpty" Text="no image yet" Foreground="{StaticResource Faint}" FontSize="12" Margin="0,60"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="14,0,14,12">
+                <StackPanel>
+                    <!-- untitled or empty scene: the project's scenes, build scenes first; a click opens one, nothing is saved -->
+                    <StackPanel x:Name="ScenePick" Visibility="Collapsed" Margin="0,4,0,10">
+                        <TextBlock Text="No scene with objects is open. Open one in the Editor (nothing is saved):" FontSize="12"
+                                   Foreground="{StaticResource Dim}" Margin="0,0,0,6"/>
+                        <ItemsControl x:Name="SceneList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding}" Style="{StaticResource Quiet}" HorizontalAlignment="Left" Margin="0,0,0,4"
+                                            Click="OnScene"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                    <TextBlock x:Name="InspectTitle" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource Text}" Margin="0,4,0,2"
+                               Text="pick an object in the hierarchy"/>
+                    <TextBlock x:Name="InspectSub" FontSize="11" Foreground="{StaticResource Faint}" Margin="0,0,0,8"/>
+                    <ItemsControl x:Name="Comps">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,8" Padding="12,8" CornerRadius="6" Background="{StaticResource Card}"
+                                        BorderBrush="{StaticResource Line}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{Binding Fore}" Margin="0,0,0,4">
+                                            <Run Text="{Binding Title, Mode=OneWay}"/><Run Text="{Binding Off, Mode=OneWay}" Foreground="{StaticResource Faint}" FontWeight="Normal"/>
+                                        </TextBlock>
+                                        <ItemsControl ItemsSource="{Binding Props}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,1">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="200"/>
+                                                            <ColumnDefinition/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="{Binding Name}" FontSize="11.5" Foreground="{StaticResource Dim}"
+                                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="11.5" Foreground="{StaticResource Text}"
+                                                                   FontFamily="{StaticResource Mono}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Value}"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

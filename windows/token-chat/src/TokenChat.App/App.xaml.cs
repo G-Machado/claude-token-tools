@@ -22,6 +22,10 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // an update or restart that never relaunched (or died before reopening) still brings its tabs back, once
+        if (first && request is { Directory: null, Preview: null, Restore: null, Poke: null }
+            && RestoreManifest.Pending(RestoreManifest.DefaultPath, DateTimeOffset.Now) is { } pending)
+            request = request with { Restore = pending };
         DispatcherUnhandledException += OnUnhandled;
         LiftCodeColours();
         // A --prompt launch (the Parked tab's /unpark) carries that session's model: its own tab's, not the window's default.

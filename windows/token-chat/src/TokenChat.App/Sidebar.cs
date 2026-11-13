@@ -35,6 +35,10 @@ public sealed class SidebarItem(object key) : INotifyPropertyChanged
     public bool CanOpen => !Here && Session is not null;
     public string Cwd => Tab?.Options.WorkingDirectory ?? Str(Session, "cwd");
     public bool HasSid => Sid.Length > 0;
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> UnityRoots = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The Unity project the session works in, else null: its row carries the Editor tab's glyph.</summary>
+    public string? UnityRoot => Cwd is { Length: > 0 } c ? UnityRoots.GetOrAdd(c, UnityEval.ProjectRoot) : null;
+    public bool IsUnity => UnityRoot is not null;
     /// <summary>The named group the session was moved into, "" under its folder.</summary>
     public string Group { get; private set; } = "";
     /// <summary>A group's header row: Name is the group's, Count its sessions, Folded hides them.</summary>
@@ -261,7 +265,7 @@ public sealed class Sidebar
         {
             if (t.SessionId is not { } sid) continue;
             // a master that handed off: its delegates nest under the window that took over
-            if (t.HandedFrom is { } old && !string.Equals(old, sid, StringComparison.OrdinalIgnoreCase))
+            foreach (var old in t.Held.Where(h => !string.Equals(h, sid, StringComparison.OrdinalIgnoreCase)))
                 foreach (var k in Groups.Parents.Where(p => string.Equals(p.Value, old, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToList())
                 {
                     Groups.Parents[k] = sid;
@@ -277,7 +281,8 @@ public sealed class Sidebar
     }
 
     /// <summary>A parent sid, or the sid of the tab here that took it over by handover.</summary>
-    string Heir(string sid) => _tabs.FirstOrDefault(t => string.Equals(t.HandedFrom, sid, StringComparison.OrdinalIgnoreCase))?.SessionId ?? sid;
+    string Heir(string sid) => _tabs.FirstOrDefault(t => t.Held.Contains(sid, StringComparer.OrdinalIgnoreCase))?.SessionId
+        ?? MasterState.Resolve(sid)?.Sid ?? sid;
 
     string GroupOf(SessionTab t) => t.SessionId is { } sid && Groups.Members.TryGetValue(sid, out var name)
         ? SessionGroups.NamedId(name) : SessionGroups.ProjectId(t.Options.WorkingDirectory);

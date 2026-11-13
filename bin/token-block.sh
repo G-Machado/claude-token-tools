@@ -95,13 +95,15 @@ sid=$(printf '%s' "$payload" |
 # --- cold block (2026-09-23) --------------------------------------------------
 # A prompt into a window whose cache has lapsed rewrites the whole window at 2x
 # the moment it is sent - token-gap-warn.sh can only report that afterwards.
-# Above ~72k, /clear + resume is cheaper than that rewrite ((65k floor + ~7k
-# catch-up) x 2 vs context x 2), so refuse the prompt BEFORE it is sent, through
+# Above ~97k, /clear + resume is cheaper than that rewrite ((64k floor + ~34k
+# catch-up) x 2 vs context x 2). 2026-11-12: was 72k on a ~7k catch-up, but
+# re-orientation to the first edit measures ~34k with a checkpoint too (n=75),
+# and 24 of 34 blocks at the old bar were lifted anyway (memory guard-yield), so refuse the prompt BEFORE it is sent, through
 # the same block the auto-park uses: prompt to clipboard, widget `u` lifts it.
 # Lifting it is a decision, remembered per cycle: token-cold/<sid> holds the
 # history row it fired on, so an unblocked window is not re-blocked until a new
 # cycle has run. TOKEN_COLD_BLOCK=0 turns this off.
-COLDK="${TOKEN_COLD_BLOCK:-72000}"
+COLDK="${TOKEN_COLD_BLOCK:-97000}"
 COLDD="${TOKEN_COLD_DIR:-$HOME/.claude/token-cold}"
 if [ "$COLDK" -gt 0 ] 2>/dev/null && [ ! -f "$BD/$sid" ] && [ -f "$HOME/.claude/token-history.csv" ]; then
   cold=$(awk -F, -v key="${sid:0:8}" -v ttl="${TOKEN_GAP_TTL_MINUTES:-60}" -v minctx="$COLDK" \
@@ -129,10 +131,10 @@ if [ "$COLDK" -gt 0 ] 2>/dev/null && [ ! -f "$BD/$sid" ] && [ -f "$HOME/.claude/
         { [ ! -f "$HD/$sid" ] || [ "$ck" -nt "$HD/$sid" ]; } && cfresh=1
       fi
       if [ -n "$ctopic" ] && [ -n "$cfresh" ]; then
-        printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted; checkpoint %s is current: /clear, then /unpark %s in the fresh window (~143k)\nlift=%dk\n' \
+        printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted; checkpoint %s is current: /clear, then /unpark %s in the fresh window (~196k)\nlift=%dk\n' \
           "$chrs" $(( cctx / 1000 )) $(( cctx * 2 / 1000 )) "$ctopic" "$ctopic" $(( cctx * 2 / 1000 )) > "$BD/$sid" 2>/dev/null
       else
-        printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted, where /clear + resume costs ~143k\n' \
+        printf 'the cache expired (%sh idle) on a %dk window - sending would rewrite it at 2x, ~%dk weighted, where /clear + resume costs ~196k\n' \
           "$chrs" $(( cctx / 1000 )) $(( cctx * 2 / 1000 )) > "$BD/$sid" 2>/dev/null
       fi
     fi

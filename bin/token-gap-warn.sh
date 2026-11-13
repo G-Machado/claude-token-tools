@@ -76,6 +76,11 @@ fi
 # session into 2026-09-11. The first prompt of a cold block can race the marker
 # and still log once, which is the one real event.
 [ -f "$HOME/.claude/token-blocks/$sid" ] && exit 0
+# One log row per gap (2026-11-12): a cold-blocked prompt that is re-sent saw the
+# same last cycle and logged twice (12 of 13 duplicated sids). token-gap-warn.d/<sid>
+# holds the last-cycle ts already logged; the warning itself still prints.
+SEEND="$HOME/.claude/token-gap-warn.d"; mkdir -p "$SEEND" 2>/dev/null
+SEEN=$(cat "$SEEND/$sid" 2>/dev/null)
 key=$(printf '%s' "$sid" | cut -c1-8)
 
 # A checkpoint written by /park before the gap is what makes ending the session
@@ -100,7 +105,7 @@ fi
 awk -F, -v key="$key" -v gapmin="$GAP_MIN" -v ctxmin="$CTX_MIN" -v ctxnote="$CTX_NOTE" \
        -v ckpt="$CKPT"        -v nowts="$(date '+%Y %m %d %H %M %S')" \
        -v logf="$GAPLOG"      -v nowstr="$(date '+%Y-%m-%d %H:%M')" \
-       -v ttlmin="$TTL_MIN" '
+       -v ttlmin="$TTL_MIN" -v seen="$SEEN" -v seenf="$SEEND/$sid" '
   function tomin(s,   a) { gsub("-", " ", s); gsub(":", " ", s); return mktime(s " 00") / 60 }
   function kfmt(v) { return sprintf("%.0fk", v / 1000) }
   $2 == key { lastts = $1; lastctx = $6 + 0 }
@@ -117,19 +122,22 @@ awk -F, -v key="$key" -v gapmin="$GAP_MIN" -v ctxmin="$CTX_MIN" -v ctxnote="$CTX
     # Raw row per firing. Without this there is no way to tell a hook that fired
     # and was ignored from one that never fired at all - which is exactly the
     # question the 2026-08-24 review could not answer.
-    printf "%s,%s,%.0f,%d,%d,%d\n", nowstr, key, gap, lastctx, (ckpt == "" ? 0 : 1), expired >> logf
-    close(logf)
+    if (lastts != seen) {
+      printf "%s,%s,%.0f,%d,%d,%d\n", nowstr, key, gap, lastctx, (ckpt == "" ? 0 : 1), expired >> logf
+      close(logf)
+      printf "%s", lastts > seenf; close(seenf)
+    }
 
     if (expired)
       printf "[token-gap] This session was idle %.1fh with a %s context, so the prompt cache has expired and this request rewrites the whole window at the 2x write rate. That cost is already sunk - but 56%% of gaps here are followed by another one in the same session, so it tends to repeat.\n", gap / 60, kfmt(lastctx)
     else
-      printf "[token-gap] This session was idle %.0f minutes with a %s context - inside the %.0f-minute cache TTL, so the cache HELD. Nothing was rewritten, this request is charged at the 0.1x read rate, and submitting it has just refreshed the TTL for another %.0f minutes. Do NOT tell the user the cache lapsed, is about to lapse, or that their next message pays a 2x rewrite - none of that is true. This is a near miss worth one mention, because 56%% of gaps here are followed by another one: the warning shot, not the bill.\n", gap, kfmt(lastctx), ttlmin, ttlmin
+      printf "[token-gap] This session was idle %.0f minutes with a %s context - inside the %.0f-minute cache TTL, so the cache HELD. Nothing was rewritten, this request is charged at the cache-read rate (0.05x on Opus 5.5), and submitting it has just refreshed the TTL for another %.0f minutes. Do NOT tell the user the cache lapsed, is about to lapse, or that their next message pays a 2x rewrite - none of that is true. This is a near miss worth one mention, because 56%% of gaps here are followed by another one: the warning shot, not the bill.\n", gap, kfmt(lastctx), ttlmin, ttlmin
     if (ckpt == "")
-      printf "[token-gap] No /park checkpoint exists for this project. Suggest /park to the user before the next time they step away - it writes a resume note that cuts re-derivation from ~34k to ~5k, which is what makes ending the session the cheap option instead of the expensive one.\n"
+      printf "[token-gap] No /park checkpoint exists for this project. Suggest /park to the user before the next time they step away - it writes a resume note so a fresh session picks up the right task state. Re-orientation still costs ~34k, so the note buys correctness more than tokens.\n"
     if (ckpt != "" && lastctx < ctxmin)
       printf "[token-gap] A /park checkpoint exists at %s. Keep it current, and prefer /park then /clear over leaving this session open across the next gap.\n", ckpt
     if (ckpt != "" && lastctx >= ctxmin)
-      printf "[token-gap] A /park checkpoint exists at %s - if it still describes the current task, /clear is the cheap option: resuming from it costs ~136k weighted against ~%.0fk to carry this window through another gap.\n", ckpt, lastctx * 2 / 1000
+      printf "[token-gap] A /park checkpoint exists at %s - if it still describes the current task, /clear is the cheap option: resuming from it costs ~196k weighted ((64k floor + ~34k re-orientation) x 2) against ~%.0fk to carry this window through another gap.\n", ckpt, lastctx * 2 / 1000
     if (lastctx >= ctxmin) {
       if (expired)
         printf "[token-gap] Right after an expiry is the cheapest moment to compact: the full-price pass is happening anyway. Suggest /compact to the user to keep the task state, or /clear if the current task is finished. Mention it once, then carry on with the work either way - this is advice, not an instruction to stop.\n"
